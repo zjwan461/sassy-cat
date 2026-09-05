@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.venv/
+python_env/
+
+# Build outputs
+dist/
+dist_electron/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv
+python_env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Config (可选，如果需要忽略配置文件)
+# config.json

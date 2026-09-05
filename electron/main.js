@@ -1,0 +1,519 @@
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, shell } = require('electron');
+const path = require('path');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const PythonEnvChecker = require('./python-env-checker');
+
+let mainWindow;
+let setupWindow;
+let tray;
+let pythonProcess = null;
+let isRunning = false;
+let envChecker = null;
+let pythonPath = null;
+
+// 获取资源路径（开发/打包环境兼容）
+function getAssetPath(relativePath) {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, relativePath);
+  }
+  return path.join(__dirname, '..', relativePath);
+}
+
+// 读取项目配置（config.json）
+function loadAppConfig() {
+  const defaults = { name: 'Electron Python App', version: '1.0.0' };
+  try {
+    const configPath = getAssetPath('config.json');
+    if (fs.existsSync(configPath)) {
+      const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      return { ...defaults, ...(raw.app || {}) };
+    }
+  } catch (e) {
+    // 解析失败使用默认值
+  }
+  return defaults;
+}
+
+const appConfig = loadAppConfig();
+
+// 创建主窗口
+function createWindow() {
+  const { screen } = require('electron');
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
+  const windowWidth = Math.min(Math.floor(screenWidth * 0.7), 1200);
+  const windowHeight = Math.min(Math.floor(screenHeight * 0.75), 800);
+
+  mainWindow = new BrowserWindow({
+    width: windowWidth,
+    height: windowHeight,
+    minWidth: 800,
+    minHeight: 600,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
+    },
+    icon: getAssetPath('assets/icon.png'),
+    show: false,
+    title: appConfig.name
+  });
+
+  // 开发环境加载Vite开发服务器，生产环境加载打包后的文件
+  if (process.env.NODE_ENV === 'development') {
+    mainWindow.loadURL('http://localhost:5173');
+  } else {
+    mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+  }
+  
+  mainWindow.on('close', (event) => {
+    if (!app.isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow.webContents.send('status-update', { running: isRunning });
+  });
+}
+
+// 创建系统托盘
+function createTray() {
+  const iconPath = getAssetPath('assets/tray-icon.png');
+  
+  if (!fs.existsSync(iconPath)) {
+    console.warn('无法创建系统托盘，缺少图标文件');
+    return;
+  }
+
+  tray = new Tray(iconPath);
+
+  const contextMenu = Menu.buildFromTemplate([
+    { 
+      label: '显示主窗口', 
+      click: () => mainWindow.show() 
+    },
+    { 
+      label: isRunning ? '停止服务' : '启动服务',
+      click: () => {
+        if (isRunning) {
+          stopPythonService();
+        } else {
+          startPythonService();
+        }
+      }
+    },
+    { type: 'separator' },
+    { 
+      label: '退出', 
+      click: () => {
+        app.isQuitting = true;
+        if (isRunning) {
+          stopPythonService();
+        }
+        app.quit();
+      }
+    }
+  ]);
+
+  tray.setToolTip(appConfig.name);
+  tray.setContextMenu(contextMenu);
+  
+  tray.on('click', () => {
+    if (mainWindow.isVisible()) {
+      mainWindow.hide();
+    } else {
+      mainWindow.show();
+    }
+  });
+}
+
+// Python 协议行前缀（与 python/main.py 中 PROTOCOL_PREFIX 保持一致）
+const PROTOCOL_PREFIX = '__PROTOCOL__ ';
+// stdout 行缓冲
+let stdoutBuffer = '';
+// 最新监控数据缓存（供渲染进程挂载较晚时主动拉取，解决事件时序问题）
+let latestMetrics = null;
+let latestSysinfo = null;
+
+// 处理一行协议数据：解析 JSON 并转发到渲染进程
+function handleProtocolLine(line) {
+  if (!line.startsWith(PROTOCOL_PREFIX)) {
+    return false;
+  }
+  try {
+    const payload = JSON.parse(line.slice(PROTOCOL_PREFIX.length));
+    if (payload.type === 'metrics') {
+      latestMetrics = payload;
+    } else if (payload.type === 'sysinfo') {
+      latestSysinfo = payload.data;
+    }
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return true;
+    }
+    if (payload.type === 'metrics') {
+      mainWindow.webContents.send('metrics-update', payload);
+    } else if (payload.type === 'sysinfo') {
+      mainWindow.webContents.send('sysinfo-update', payload.data);
+    }
+  } catch (e) {
+    console.warn('协议行解析失败:', e.message);
+  }
+  return true;
+}
+
+// 启动Python服务
+function startPythonService() {
+  if (isRunning) {
+    return { success: false, message: '服务已在运行中' };
+  }
+
+  try {
+    let pyPath = pythonPath;
+    if (!pyPath) {
+      if (app.isPackaged) {
+        pyPath = path.join(process.resourcesPath, 'python_env', 'python.exe');
+      } else {
+        pyPath = 'python';
+      }
+    }
+
+    const pythonScriptPath = getAssetPath('python/main.py');
+    
+    pythonProcess = spawn(pyPath, [pythonScriptPath], {
+      cwd: getAssetPath('.'),
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    const handleOutput = (text) => {
+      // 按行拆分，尝试解析协议数据
+      stdoutBuffer += text;
+      const lines = stdoutBuffer.split(/\r?\n/);
+      // 最后一段可能不完整，留在缓冲区
+      stdoutBuffer = lines.pop() || '';
+
+      lines.forEach((line) => {
+        if (!line.trim()) return;
+        // 协议行不转发为日志
+        if (handleProtocolLine(line)) {
+          return;
+        }
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('log-output', line);
+        }
+        if (line.includes('服务启动成功')) {
+          isRunning = true;
+          updateTrayMenu();
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('status-update', { running: true });
+          }
+        }
+      });
+    };
+
+    pythonProcess.stdout.on('data', (data) => {
+      handleOutput(data.toString());
+    });
+    // 进程退出时冲刷残留缓冲
+    pythonProcess.on('close', () => {
+      if (stdoutBuffer.trim()) {
+        handleProtocolLine(stdoutBuffer.trim());
+        stdoutBuffer = '';
+      }
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+      handleOutput(data.toString());
+    });
+
+    pythonProcess.on('error', (err) => {
+      isRunning = false;
+      updateTrayMenu();
+      if (mainWindow) {
+        mainWindow.webContents.send('status-update', { running: false });
+        mainWindow.webContents.send('log-output', `[ERROR] 进程启动失败: ${err.message}`);
+      }
+    });
+
+    pythonProcess.on('exit', (code, signal) => {
+      isRunning = false;
+      pythonProcess = null;
+      updateTrayMenu();
+      if (mainWindow) {
+        mainWindow.webContents.send('status-update', { running: false });
+        mainWindow.webContents.send('log-output', `[INFO] 进程已退出 (code: ${code}, signal: ${signal})`);
+      }
+    });
+
+    return { success: true, message: '服务启动中...' };
+  } catch (error) {
+    return { success: false, message: `启动失败: ${error.message}` };
+  }
+}
+
+// 停止Python服务
+function stopPythonService() {
+  if (!isRunning || !pythonProcess) {
+    return { success: false, message: '服务未在运行' };
+  }
+
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', pythonProcess.pid, '/f', '/t']);
+    } else {
+      pythonProcess.kill('SIGTERM');
+    }
+    
+    isRunning = false;
+    pythonProcess = null;
+    updateTrayMenu();
+    
+    if (mainWindow) {
+      mainWindow.webContents.send('status-update', { running: false });
+      mainWindow.webContents.send('log-output', '[INFO] 服务已停止');
+    }
+    
+    return { success: true, message: '服务已停止' };
+  } catch (error) {
+    return { success: false, message: `停止失败: ${error.message}` };
+  }
+}
+
+function updateTrayMenu() {
+  if (tray) {
+    const contextMenu = Menu.buildFromTemplate([
+      { 
+        label: '显示主窗口', 
+        click: () => mainWindow.show() 
+      },
+      { 
+        label: isRunning ? '停止服务' : '启动服务',
+        click: () => {
+          if (isRunning) {
+            stopPythonService();
+          } else {
+            startPythonService();
+          }
+        }
+      },
+      { type: 'separator' },
+      { 
+        label: '退出', 
+        click: () => {
+          app.isQuitting = true;
+          if (isRunning) {
+            stopPythonService();
+          }
+          app.quit();
+        }
+      }
+    ]);
+    tray.setContextMenu(contextMenu);
+  }
+}
+
+// IPC处理程序
+ipcMain.handle('start-service', () => {
+  return startPythonService();
+});
+
+ipcMain.handle('stop-service', () => {
+  return stopPythonService();
+});
+
+ipcMain.handle('get-status', () => {
+  return { running: isRunning };
+});
+
+// 主动拉取最新监控数据/系统信息（缓存）
+ipcMain.handle('get-metrics', () => {
+  return latestMetrics;
+});
+
+ipcMain.handle('get-sysinfo', () => {
+  return latestSysinfo;
+});
+
+// 用系统默认浏览器打开外部链接（仅允许 http/https）
+ipcMain.handle('open-external', async (event, url) => {
+  if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+    await shell.openExternal(url);
+    return { success: true };
+  }
+  return { success: false, message: '无效的链接地址' };
+});
+
+// 环境检查失败时，用户主动退出程序
+ipcMain.handle('quit-app', () => {
+  app.isQuitting = true;
+  app.quit();
+  return { success: true };
+});
+
+// 创建环境检查窗口
+function createSetupWindow() {
+  const { screen } = require('electron');
+  const primaryDisplay = screen.getPrimaryDisplay();
+
+  setupWindow = new BrowserWindow({
+    width: 580,
+    height: 680,
+    resizable: false,
+    frame: false,
+    transparent: true,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    },
+    icon: getAssetPath('assets/icon.png'),
+    title: '环境检查'
+  });
+  // 开发环境加载Vite开发服务器的setup页面（多页应用需带 .html 后缀）
+  if (process.env.NODE_ENV === 'development') {
+    setupWindow.loadURL('http://localhost:5173/setup.html');
+  } else {
+    setupWindow.loadFile(path.join(__dirname, '..', 'dist', 'setup.html'));
+  }
+  setupWindow.center();
+
+  // 渲染进程错误日志，便于排查页面加载问题
+  setupWindow.webContents.on('console-message', (event, level, message) => {
+    if (level >= 2) {
+      console.log('[SetupRenderer]', message);
+    }
+  });
+  setupWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    console.log('[SetupWindow] 页面加载失败:', errorCode, errorDescription);
+  });
+}
+
+// 运行环境检查
+function runEnvCheck() {
+  return new Promise((resolve) => {
+    envChecker = new PythonEnvChecker(app, getAssetPath);
+
+    // 转发事件到setup窗口
+    envChecker.on('step', (stepName) => {
+      if (setupWindow && !setupWindow.isDestroyed()) {
+        setupWindow.webContents.send('env-check-step', { step: stepName });
+      }
+    });
+
+    envChecker.on('step-done', (stepName) => {
+      if (setupWindow && !setupWindow.isDestroyed()) {
+        setupWindow.webContents.send('env-check-step-done', { step: stepName });
+      }
+    });
+
+    envChecker.on('log', (message) => {
+      if (setupWindow && !setupWindow.isDestroyed()) {
+        setupWindow.webContents.send('env-check-log', { message });
+      }
+    });
+
+    envChecker.on('progress', (message) => {
+      if (setupWindow && !setupWindow.isDestroyed()) {
+        setupWindow.webContents.send('env-check-progress', { message });
+      }
+    });
+
+    envChecker.on('complete', (result) => {
+      if (setupWindow && !setupWindow.isDestroyed()) {
+        setupWindow.webContents.send('env-check-complete', result);
+      }
+    });
+
+    envChecker.on('error', (message) => {
+      if (setupWindow && !setupWindow.isDestroyed()) {
+        setupWindow.webContents.send('env-check-error', { message });
+      }
+    });
+
+    // IPC: 重试
+    ipcMain.removeAllListeners('env-check-retry');
+    ipcMain.on('env-check-retry', async () => {
+      const result = await envChecker.checkAndSetup();
+      resolve(result);
+    });
+
+    // IPC: setup页面准备关闭
+    ipcMain.removeAllListeners('setup-ready-to-close');
+    ipcMain.on('setup-ready-to-close', () => {
+      if (setupWindow && !setupWindow.isDestroyed()) {
+        setupWindow.close();
+        setupWindow = null;
+      }
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.show();
+      }
+
+      createTray();
+    });
+
+    // 等待渲染进程通知"已准备好"后再开始检查
+    // 使用 on 而非 once，确保即使 setup-ready 提前发送也能捕获
+    let checkStarted = false;
+    ipcMain.on('setup-ready', () => {
+      if (checkStarted) return;
+      checkStarted = true;
+      setTimeout(() => {
+        envChecker.checkAndSetup().then(resolve);
+      }, 200);
+    });
+  });
+}
+// 应用生命周期
+app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null);
+
+  // 先创建并显示环境检查窗口
+  createSetupWindow();
+
+  // 运行环境检查
+  const result = await runEnvCheck();
+
+  if (result.success) {
+    pythonPath = result.pythonPath;
+    // 环境检查通过后，创建主窗口
+    createWindow();
+    // 显示主窗口
+    if (mainWindow) {
+      mainWindow.show();
+    }
+    // 自动启动监控采集服务（供仪表盘展示真实数据）
+    startPythonService();
+  } else {
+    if (setupWindow && !setupWindow.isDestroyed()) {
+      // 窗口已经显示错误信息，等待用户操作
+    } else {
+      dialog.showErrorBox('环境配置失败', `Python 环境配置失败:\n${result.error}\n\n应用程序无法启动。`);
+      app.quit();
+    }
+  }
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0 && pythonPath) {
+      createWindow();
+    }
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    if (isRunning) {
+      stopPythonService();
+    }
+    app.quit();
+  }
+});
+
+app.on('before-quit', async () => {
+  app.isQuitting = true;
+  if (isRunning) {
+    stopPythonService();
+  }
+});

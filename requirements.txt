@@ -1,0 +1,6 @@
+# Python 依赖列表
+# 在此添加你的 Python 依赖包
+psutil==5.9.8
+pynvml==11.5.3
+wmi==1.5.1
+pywin32==306 ; sys_platform == 'win32'

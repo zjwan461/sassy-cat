@@ -1,0 +1,16 @@
+{
+  "app": {
+    "name": "臭屁猫",
+    "description": "结合AI Agent能力的桌宠",
+    "introduction": "基于 Electron + Vue 3 + Python 构建的桌宠",
+    "version": "1.0.0",
+    "logo": "🤖"
+  },
+  "links": [
+    { "label": "项目主页", "url": "https://gitee.com/zjwan461/electron-app-demo" },
+    { "label": "使用文档", "url": "https://gitee.com/zjwan461/electron-app-demo/blob/master/README.md" },
+    { "label": "更新日志", "url": "https://gitee.com/zjwan461/electron-app-demo/releases" },
+    { "label": "反馈问题", "url": "https://gitee.com/zjwan461/electron-app-demo/issues" }
+  ],
+  "pythonVersion": "3.11.9"
+}
