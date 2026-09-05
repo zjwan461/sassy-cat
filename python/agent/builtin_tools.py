@@ -40,12 +40,15 @@ def internet_search(
 # 项目根目录（builtin_tools.py 位于 python/agent/ 下，向上两级）
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+# 工作目录（规范化为绝对路径）
+work_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../..", "runtime"))
+
 # 候选 Python 解释器路径，按优先级排列：.venv 在前，python_env 在后
 PYTHON_CANDIDATES = [
     PROJECT_ROOT / ".venv" / "Scripts" / "python.exe",  # Windows 虚拟环境
-    PROJECT_ROOT / ".venv" / "bin" / "python",          # POSIX 虚拟环境
-    PROJECT_ROOT / "python_env" / "python.exe",         # Windows 嵌入式 Python
-    PROJECT_ROOT / "python_env" / "bin" / "python",     # POSIX 嵌入式 Python
+    PROJECT_ROOT / ".venv" / "bin" / "python",  # POSIX 虚拟环境
+    PROJECT_ROOT / "python_env" / "python.exe",  # Windows 嵌入式 Python
+    PROJECT_ROOT / "python_env" / "bin" / "python",  # POSIX 嵌入式 Python
 ]
 
 
@@ -86,24 +89,59 @@ def run_python(code: str):
     return "\n".join(output)
 
 
+def _convert_virtual_path(segment: str) -> str:
+    """将单个虚拟路径片段转换为真实路径。
+
+    如果片段以 / 开头且后面跟着的是目录名（不是 - 开头的参数），
+    则认为是 FilesystemBackend 的虚拟路径，转换为基于 work_dir 的真实路径。
+
+    例如：
+    - `/skills/weather-skill/scripts/fetch_weather.py`
+      → `work_dir\\skills\\weather-skill\\scripts\\fetch_weather.py`（Windows）
+    - `-v` → `-v`（不变，因为是参数）
+    - `echo` → `echo`（不变）
+    """
+    if not segment.startswith("/"):
+        return segment
+    # 去掉前导 /，得到相对路径
+    relative_path = segment.lstrip("/")
+    # 如果去掉 / 后为空，直接返回原片段
+    if not relative_path:
+        return segment
+    # 拼接真实绝对路径
+    real_path = os.path.join(work_dir, relative_path)
+    # Windows 下将 / 替换为 \\
+    if os.name == "nt":
+        real_path = real_path.replace("/", "\\")
+    return real_path
+
+
 @tool
-def run_command(command: str):
-    """执行系统命令，返回执行结果。"""
+def run_command(command: list[str]):
+    """执行系统命令，返回执行结果。
+
+    参数为命令片段数组，例如：["python", "/skills/test.py", "--arg", "value"]
+    支持虚拟路径自动转换：数组中以 / 开头的路径片段会自动转换为真实路径。
+    """
+    # 遍历每个片段，将虚拟路径转换为真实路径
+    real_command = [_convert_virtual_path(seg) for seg in command]
+    # 拼接为字符串用于 shell 执行（支持 dir、echo 等 shell 内置命令）
+    command_str = subprocess.list2cmdline(real_command)
     try:
         result = subprocess.run(
-            command,
+            command_str,
             shell=True,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
             timeout=60,
-            cwd=str(PROJECT_ROOT),
+            cwd=work_dir,
         )
     except subprocess.TimeoutExpired:
-        return f"执行超时（超过 60 秒），命令：{command}"
+        return f"执行超时（超过 60 秒），命令：{command_str}"
     except Exception as e:
-        return f"执行失败：{e}，命令：{command}"
+        return f"执行失败：{e}，命令：{command_str}"
 
     output = [f"退出码：{result.returncode}"]
     if result.stdout:
