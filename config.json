@@ -7,10 +7,10 @@
     "logo": "🤖"
   },
   "links": [
-    { "label": "项目主页", "url": "https://gitee.com/zjwan461/electron-app-demo" },
-    { "label": "使用文档", "url": "https://gitee.com/zjwan461/electron-app-demo/blob/master/README.md" },
-    { "label": "更新日志", "url": "https://gitee.com/zjwan461/electron-app-demo/releases" },
-    { "label": "反馈问题", "url": "https://gitee.com/zjwan461/electron-app-demo/issues" }
+    { "label": "项目主页", "url": "https://gitee.com/zjwan461/sassy-cat" },
+    { "label": "使用文档", "url": "https://gitee.com/zjwan461/sassy-cat/blob/master/README.md" },
+    { "label": "更新日志", "url": "https://gitee.com/zjwan461/sassy-cat/releases" },
+    { "label": "反馈问题", "url": "https://gitee.com/zjwan461/sassy-cat/issues" }
   ],
   "pythonVersion": "3.11.9"
 }
