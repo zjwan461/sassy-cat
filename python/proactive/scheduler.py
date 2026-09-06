@@ -108,4 +108,4 @@ async def run_forever(stop_event):
         except Exception:
             logger.exception("proactive wait 异常")
             pass
-        print("[pro] after wait", flush=True)
+        # print("[pro] after wait", flush=True)

@@ -177,39 +177,42 @@ def collect():
         nvml_names = {g['name'] for g in gpus}
         remaining = [n for n in names if n not in nvml_names]
 
-        utils, mems = ({}, {})
-        if HAS_PDH:
-            utils, mems = _collect_pdh()
-        if not utils and not mems:
-            utils, mems = _collect_powershell()
+        # 仅当存在 NVML 未覆盖的卡时才走 PDH/PowerShell 补采，
+        # 避免 NVML 正常时误追加 name='GPU' 的幽灵记录（vendor 会被判为 Other）。
+        if remaining:
+            utils, mems = ({}, {})
+            if HAS_PDH:
+                utils, mems = _collect_pdh()
+            if not utils and not mems:
+                utils, mems = _collect_powershell()
 
-        if utils or mems:
-            luids = sorted(set(list(utils.keys()) + list(mems.keys())))
-            # 一块物理显卡常对应多个 LUID（每驱动进程上下文一个）。
-            # 非 NVML 卡数量 <= 1 时（绝大多数单卡场景），合并所有 LUID 数据。
-            if len(remaining) <= 1:
-                util = min(100.0, round(sum(utils.values()), 1))
-                mem_bytes = max(mems.values()) if mems else None
-                name = remaining[0] if remaining else 'GPU'
-                gpus.append({
-                    'name': name,
-                    'vendor': shell.classify_vendor(name),
-                    'percent': util,
-                    'memTotalGB': static.get('gpuMemGB', {}).get(name),
-                    'memUsedGB': round(mem_bytes / 1024 ** 3, 1) if mem_bytes else None,
-                    'source': 'pdh' if HAS_PDH else 'powershell'
-                })
-            else:
-                # 多卡：按 LUID 负载从高到低与卡名从高到低近似对应
-                ordered = sorted(luids, key=lambda l: utils.get(l, 0.0), reverse=True)
-                for idx, luid in enumerate(ordered[:len(remaining)]):
-                    name = remaining[idx]
+            if utils or mems:
+                luids = sorted(set(list(utils.keys()) + list(mems.keys())))
+                # 一块物理显卡常对应多个 LUID（每驱动进程上下文一个）。
+                # 非 NVML 卡数量 <= 1 时（绝大多数单卡场景），合并所有 LUID 数据。
+                if len(remaining) <= 1:
+                    util = min(100.0, round(sum(utils.values()), 1))
+                    mem_bytes = max(mems.values()) if mems else None
+                    name = remaining[0]
                     gpus.append({
                         'name': name,
                         'vendor': shell.classify_vendor(name),
-                        'percent': min(100.0, round(utils.get(luid, 0.0), 1)),
+                        'percent': util,
                         'memTotalGB': static.get('gpuMemGB', {}).get(name),
-                        'memUsedGB': round(mems[luid] / 1024 ** 3, 1) if mems.get(luid) else None,
+                        'memUsedGB': round(mem_bytes / 1024 ** 3, 1) if mem_bytes else None,
                         'source': 'pdh' if HAS_PDH else 'powershell'
                     })
+                else:
+                    # 多卡：按 LUID 负载从高到低与卡名从高到低近似对应
+                    ordered = sorted(luids, key=lambda l: utils.get(l, 0.0), reverse=True)
+                    for idx, luid in enumerate(ordered[:len(remaining)]):
+                        name = remaining[idx]
+                        gpus.append({
+                            'name': name,
+                            'vendor': shell.classify_vendor(name),
+                            'percent': min(100.0, round(utils.get(luid, 0.0), 1)),
+                            'memTotalGB': static.get('gpuMemGB', {}).get(name),
+                            'memUsedGB': round(mems[luid] / 1024 ** 3, 1) if mems.get(luid) else None,
+                            'source': 'pdh' if HAS_PDH else 'powershell'
+                        })
     return gpus
