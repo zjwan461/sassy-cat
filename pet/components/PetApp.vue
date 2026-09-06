@@ -1,9 +1,21 @@
 <template>
   <div class="pet-root">
     <!-- 气泡 / 快捷输入 -->
-    <div v-if="bubbleText || inputOpen" class="bubble-wrap">
-      <div v-if="bubbleText && !inputOpen" class="bubble" @click="openInput">
-        {{ bubbleText }}
+    <div v-if="bubbleText || inputOpen" ref="bubbleWrapRef" class="bubble-wrap">
+      <div
+        v-if="bubbleText && !inputOpen"
+        class="bubble"
+        :class="{ expanded: bubbleExpanded }"
+        @mouseenter="onBubbleEnter"
+        @mouseleave="onBubbleLeave"
+      >
+        <div ref="bubbleTextRef" class="bubble-text" :class="{ clamped: !bubbleExpanded }">{{ bubbleText }}</div>
+        <div v-if="bubbleActionsVisible" class="bubble-actions">
+          <button v-if="!bubbleExpanded && bubbleOverflows" class="bbtn" @click.stop="expandBubble">▾ 展开</button>
+          <button v-if="bubbleExpanded" class="bbtn" @click.stop="collapseBubble">▴ 收起</button>
+          <button v-if="bubbleTruncated || bubbleExpanded" class="bbtn" @click.stop="openFullChat">💬 完整对话</button>
+          <button v-if="bubbleExpanded" class="bbtn bbtn-x" title="关闭" @click.stop="hideBubble">✕</button>
+        </div>
       </div>
       <div v-if="inputOpen" class="quick-input">
         <input
@@ -61,7 +73,12 @@ import { useAgentSocket, setClient } from '../../src/composables/useAgentSocket'
 const { state: sock, connect, send, on, setPort } = useAgentSocket()
 setClient('pet')
 
-const PET_BASE_H = 150, EXPANDED_H = 220
+const PET_BASE_H = 150, PET_BASE_W = 220
+const EXPANDED_H = 220, BUBBLE_W = 300
+// 气泡几何：bubble-wrap 距窗口底边 118px，窗口高度 = 118 + 气泡实测高度 + 8 顶部留白
+const BUBBLE_BOTTOM = 118, BUBBLE_TOP_PAD = 8
+// 气泡文本硬上限：超出截断并引导去主窗口看完整对话
+const BUBBLE_MAX_CHARS = 600
 const QUICK_PHRASES = [
   '哼，找本喵干嘛😾', '摸头要付费的！', '喵呜～（其实很开心）',
   '有事启奏，无事退朝。', '本喵今天心情不错，准你撸一下。'
@@ -69,15 +86,24 @@ const QUICK_PHRASES = [
 
 const state = ref('idle') // idle|walk|drag|react|think|talk|sleep|remind
 const bubbleText = ref('')
+const bubbleExpanded = ref(false)
+const bubbleOverflows = ref(false)
+const bubbleTruncated = ref(false)
+const bubbleHovered = ref(false)
 const inputOpen = ref(false)
 const quickDraft = ref('')
 const facingLeft = ref(false)
 const frameIdx = ref(0)
 const spriteRef = ref(null)
 const quickInputRef = ref(null)
+const bubbleWrapRef = ref(null)
+const bubbleTextRef = ref(null)
+
+const bubbleActionsVisible = computed(() =>
+  !!bubbleText.value && (bubbleOverflows.value || bubbleTruncated.value || bubbleExpanded.value)
+)
 
 let timers = {}
-let bubbleTimer = null
 let dragging = false
 
 // ---------- 帧驱动 ----------
@@ -151,16 +177,16 @@ function onMenuAction({ action }) {
 
 async function openInput() {
   inputOpen.value = true
-  bubbleText.value = ''
-  window.petAPI && window.petAPI.resize(EXPANDED_H)
+  hideBubble()
   await nextTick()
+  syncWindow()
   quickInputRef.value && quickInputRef.value.focus()
 }
 
 function closeInput() {
   inputOpen.value = false
   quickDraft.value = ''
-  window.petAPI && window.petAPI.resize(PET_BASE_H)
+  syncWindow()
 }
 
 function sendQuick() {
@@ -171,6 +197,82 @@ function sendQuick() {
   setState('think')
 }
 
+// ---------- 气泡窗口自适应 ----------
+// 气泡内容变化时，把桌宠窗口向上/向两侧扩到刚好容纳气泡（主进程负责底边锚定与屏幕钳制）
+let syncPending = false
+function syncWindow() {
+  if (!window.petAPI) return
+  let h = PET_BASE_H, w = PET_BASE_W
+  if (inputOpen.value) {
+    h = EXPANDED_H; w = BUBBLE_W
+  } else if (bubbleText.value) {
+    const bh = bubbleWrapRef.value ? bubbleWrapRef.value.offsetHeight : 48
+    h = Math.max(PET_BASE_H, BUBBLE_BOTTOM + bh + BUBBLE_TOP_PAD)
+    w = BUBBLE_W
+  }
+  window.petAPI.resize({ height: h, width: w })
+}
+function scheduleSync() {
+  if (syncPending) return
+  syncPending = true
+  requestAnimationFrame(async () => {
+    syncPending = false
+    await nextTick()
+    measureOverflow()
+    syncWindow()
+  })
+}
+function measureOverflow() {
+  const el = bubbleTextRef.value
+  if (!el) { bubbleOverflows.value = false; return }
+  bubbleOverflows.value = el.scrollHeight > el.clientHeight + 2
+}
+
+// ---------- 气泡显示/自动隐藏（悬停与阅读模式暂停倒计时） ----------
+let bubbleTimer = null
+let bubbleHideAt = 0
+function startBubbleTimer() {
+  clearTimeout(bubbleTimer)
+  const d = bubbleHideAt - Date.now()
+  if (d <= 0) { hideBubble(); return }
+  bubbleTimer = setTimeout(hideBubble, d)
+}
+function pauseBubbleTimer() { clearTimeout(bubbleTimer); bubbleTimer = null }
+function resumeBubbleTimer(minMs = 2500) {
+  if (!bubbleText.value) return
+  if (bubbleHideAt <= Date.now()) bubbleHideAt = Date.now() + minMs
+  startBubbleTimer()
+}
+function hideBubble() {
+  clearTimeout(bubbleTimer); bubbleTimer = null
+  bubbleText.value = ''
+  bubbleExpanded.value = false
+  bubbleOverflows.value = false
+  bubbleTruncated.value = false
+  scheduleSync()
+}
+
+function showBubble(text, ms = 5000) {
+  let t = String(text || '')
+  bubbleTruncated.value = t.length > BUBBLE_MAX_CHARS
+  if (bubbleTruncated.value) t = t.slice(0, BUBBLE_MAX_CHARS) + '…'
+  bubbleText.value = t
+  bubbleExpanded.value = false
+  clearTimeout(bubbleTimer)
+  bubbleHideAt = Date.now() + ms
+  startBubbleTimer()
+  scheduleSync()
+}
+
+function onBubbleEnter() { bubbleHovered.value = true; pauseBubbleTimer() }
+function onBubbleLeave() {
+  bubbleHovered.value = false
+  if (!bubbleExpanded.value) resumeBubbleTimer()
+}
+function expandBubble() { bubbleExpanded.value = true; pauseBubbleTimer(); scheduleSync() }
+function collapseBubble() { bubbleExpanded.value = false; resumeBubbleTimer(4000); scheduleSync() }
+function openFullChat() { window.petAPI && window.petAPI.showChat() }
+
 // ---------- 气泡打字机 ----------
 let streamBuf = ''
 let streamTarget = ''
@@ -180,18 +282,13 @@ function typewriteStart() {
   clearInterval(typer)
   typer = setInterval(() => {
     if (streamBuf.length < streamTarget.length) {
-      streamBuf = streamTarget.slice(0, streamBuf.length + 2)
+      streamBuf = streamTarget.slice(0, Math.min(streamBuf.length + 2, BUBBLE_MAX_CHARS))
       bubbleText.value = streamBuf
+      scheduleSync()
     }
   }, 40)
 }
 function typewriteStop() { clearInterval(typer); typer = null }
-
-function showBubble(text, ms = 5000) {
-  bubbleText.value = text
-  clearTimeout(bubbleTimer)
-  bubbleTimer = setTimeout(() => { bubbleText.value = '' }, ms)
-}
 
 // ---------- 拖动（增量移动，主进程节流） ----------
 let dragMoved = false
@@ -226,10 +323,19 @@ function onDocMouseMove(e) {
   if (!window.petAPI) return
   const el = spriteRef.value
   if (!el) return
-  const r = el.getBoundingClientRect()
   const pad = 14
-  const inside = e.clientX >= r.left - pad && e.clientX <= r.right + pad &&
-                 e.clientY >= r.top - pad && e.clientY <= r.bottom + pad
+  const r = el.getBoundingClientRect()
+  let inside = e.clientX >= r.left - pad && e.clientX <= r.right + pad &&
+               e.clientY >= r.top - pad && e.clientY <= r.bottom + pad
+  // 气泡区域同样需要命中（悬停暂停倒计时、展开后可滚动/点按钮）
+  if (!inside) {
+    const bw = bubbleWrapRef.value
+    if (bw && (bubbleText.value || inputOpen.value)) {
+      const b = bw.getBoundingClientRect()
+      inside = e.clientX >= b.left && e.clientX <= b.right &&
+               e.clientY >= b.top && e.clientY <= b.bottom
+    }
+  }
   const need = inside || inputOpen.value
   if (need !== hoverInside) {
     hoverInside = need
@@ -263,8 +369,11 @@ onMounted(() => {
     if (p.text && p.text.length >= streamTarget.length) streamTarget = p.text
     setTimeout(() => {
       typewriteStop()
-      const text = streamTarget.length > 80 ? streamTarget.slice(0, 80) + '…' : streamTarget
-      if (text) showBubble(text, 9000)
+      if (streamTarget) {
+        // 阅读时长随文本长度自适应（90ms/字，9s ~ 25s），超长截断由 showBubble 内部处理
+        const ms = Math.min(25000, Math.max(9000, streamTarget.length * 90))
+        showBubble(streamTarget, ms)
+      }
       setState('idle'); scheduleNext()
     }, 1400)
   })
@@ -309,17 +418,30 @@ onBeforeUnmount(() => {
 .float-q { animation: floatq 1.2s ease-in-out infinite; }
 @keyframes floatq { 0%,100% { opacity: .5 } 50% { opacity: 1 } }
 
-.bubble-wrap { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); width: 212px; z-index: 10; }
+.bubble-wrap { position: absolute; bottom: 118px; left: 50%; transform: translateX(-50%); width: 280px; z-index: 10; }
 .bubble {
   background: #fff; color: #1e293b; border-radius: 12px; padding: 9px 13px;
-  font-size: 13px; line-height: 1.5; position: relative; cursor: pointer;
+  font-size: 13px; line-height: 1.5; position: relative;
   box-shadow: 0 4px 16px rgba(0,0,0,.25); word-break: break-word;
-  max-height: 140px; overflow: hidden;
 }
 .bubble::after {
   content: ''; position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%);
   border: 7px solid transparent; border-top-color: #fff; border-bottom: none;
 }
+.bubble-text.clamped {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.bubble.expanded .bubble-text { max-height: 200px; overflow-y: auto; }
+.bubble.expanded .bubble-text::-webkit-scrollbar { width: 4px; }
+.bubble.expanded .bubble-text::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
+.bubble-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+.bbtn {
+  border: none; background: #eef2ff; color: #4338ca; font-size: 11px;
+  border-radius: 6px; padding: 2px 8px; cursor: pointer; line-height: 1.6;
+}
+.bbtn:hover { background: #e0e7ff; }
+.bbtn-x { background: #fee2e2; color: #b91c1c; }
+.bbtn-x:hover { background: #fecaca; }
 .quick-input input {
   width: 100%; box-sizing: border-box; background: #1e293b; color: #e2e8f0;
   border: 1px solid #6366f1; border-radius: 10px; padding: 8px 10px; font-size: 13px; outline: none;

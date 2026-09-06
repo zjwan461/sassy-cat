@@ -2,9 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electronAPI', {
-  // 服务控制
-  startService: () => ipcRenderer.invoke('start-service'),
-  stopService: () => ipcRenderer.invoke('stop-service'),
+  // 服务状态（只读，服务随应用常驻运行）
   getStatus: () => ipcRenderer.invoke('get-status'),
 
   // 拉取缓存的监控数据（解决页面挂载晚于推送的时序问题）

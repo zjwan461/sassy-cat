@@ -3,7 +3,7 @@
     <!-- 左侧边栏 -->
     <aside class="sidebar">
       <div class="sidebar-header">
-        <div class="logo">{{ appConfig.logo }}</div>
+        <div class="logo"><img :src="logoUrl" alt="logo" /></div>
         <div class="app-name">{{ appConfig.name }}</div>
       </div>
 
@@ -21,13 +21,7 @@
           <span class="nav-label">{{ item.label }}</span>
         </router-link>
       </nav>
-
-      <div class="sidebar-footer">
-        <span class="footer-dot"></span>
-        <span class="footer-text">未连接</span>
-      </div>
     </aside>
-
     <!-- 右侧内容区 -->
     <main class="content">
       <router-view />
@@ -40,10 +34,11 @@ import { onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { appConfig } from './appConfig'
 import { useAgentSocket } from './composables/useAgentSocket'
+import logoUrl from '../assets/icon.png'
 
 const route = useRoute()
 const router = useRouter()
-const { state: wsState, connect, setPort } = useAgentSocket()
+const { connect, setPort } = useAgentSocket()
 
 onMounted(() => {
   connect()
@@ -93,13 +88,16 @@ const menuItems = [
 .logo {
   width: 44px;
   height: 44px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 22px;
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.35);
+}
+
+.logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 10px;
 }
 
 .app-name {
@@ -158,25 +156,7 @@ const menuItems = [
   width: 22px;
   text-align: center;
 }
-
-/* ===== 底部状态 ===== */
-.sidebar-footer {
-  padding: 20px 24px;
-  border-top: 1px solid #334155;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 13px;
-  color: #94a3b8;
-}
-
-.footer-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #64748b;
-}
-
+/* ===== 内容区 ===== */
 /* ===== 内容区 ===== */
 .content {
   flex: 1;

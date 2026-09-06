@@ -44,7 +44,7 @@ function getAssetPath(relativePath) {
 
 // 读取项目配置（config.json）
 function loadAppConfig() {
-  const defaults = { name: 'Electron Python App', version: '1.0.0' };
+  const defaults = { name: '臭屁猫', version: '1.0.0' };
   try {
     const configPath = getAssetPath('config.json');
     if (fs.existsSync(configPath)) {
@@ -314,16 +314,6 @@ function buildTrayTemplate() {
         updateTrayMenu();
       }
     },
-    {
-      label: isRunning ? '停止服务' : '启动服务',
-      click: () => {
-        if (isRunning) {
-          stopPythonService();
-        } else {
-          startPythonService();
-        }
-      }
-    },
     { type: 'separator' },
     {
       label: '退出',
@@ -346,14 +336,6 @@ function updateTrayMenu() {
 }
 
 // IPC处理程序
-ipcMain.handle('start-service', () => {
-  return startPythonService();
-});
-
-ipcMain.handle('stop-service', () => {
-  return stopPythonService();
-});
-
 ipcMain.handle('get-status', () => {
   return { running: isRunning };
 });
@@ -579,13 +561,22 @@ function createPetWindow() {
     clearTimeout(posTimer);
     posTimer = setTimeout(() => savePetPosition(), 600);
   });
-  petWindow.on('closed', () => { petWindow = null; });
+  // 窗口显隐状态变化时同步刷新托盘菜单（如桌宠右键“隐藏”经 pet:hide 隐藏窗口）
+  petWindow.on('hide', () => updateTrayMenu());
+  petWindow.on('show', () => updateTrayMenu());
+  petWindow.on('closed', () => { petWindow = null; updateTrayMenu(); });
 }
 
 function savePetPosition() {
   if (!petWindow || petWindow.isDestroyed() || !configStore) return;
   const [x, y] = petWindow.getPosition();
-  configStore.setByDotted('pet.position', { x, y });
+  const [w, h] = petWindow.getSize();
+  // 换算回基准尺寸（220x150）下的左上角：气泡/输入框展开会让窗口变高变宽并上移，
+  // 直接保存会导致下次启动时桌宠本体位置漂移
+  configStore.setByDotted('pet.position', {
+    x: Math.round(x + (w - PET_W) / 2),
+    y: y + (h - PET_H)
+  });
 }
 
 // 拖动节流：16ms 合并一次
@@ -616,12 +607,24 @@ ipcMain.handle('pet:get-position', () => {
   return { x, y };
 });
 
-ipcMain.handle('pet:resize', (event, height) => {
+// 支持 { height, width } 或数字（兼容旧调用）；以窗口底边中心为锚点向上/两侧扩展，
+// 并钳制到所在显示器工作区顶部，避免气泡展开时窗口超出屏幕
+ipcMain.handle('pet:resize', (event, opts) => {
   if (!petWindow || petWindow.isDestroyed()) return { success: false };
+  const height = typeof opts === 'number' ? opts : (opts && opts.height) || PET_H;
+  const width = (opts && typeof opts === 'object' && opts.width) || 0;
   const [w, h] = petWindow.getSize();
   const [x, y] = petWindow.getPosition();
-  // 保持底部对齐（精灵在窗口底部）
-  petWindow.setBounds({ x, y: y + (h - height), width: w, height });
+  const newW = Math.max(PET_W, Math.round(width || w));
+  const newH = Math.max(PET_H, Math.round(height));
+  const newX = Math.round(x + (w - newW) / 2);
+  let newY = y + (h - newH); // 底边固定
+  const { screen } = require('electron');
+  const wa = screen.getDisplayMatching({ x, y, width: w, height: h }).workArea;
+  const bottom = y + h;
+  if (newY < wa.y) newY = wa.y;
+  const finalH = Math.max(PET_H, bottom - newY);
+  petWindow.setBounds({ x: newX, y: newY, width: newW, height: finalH });
   return { success: true };
 });
 

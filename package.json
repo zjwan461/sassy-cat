@@ -35,8 +35,8 @@
     "vue-router": "^4.2.0"
   },
   "build": {
-    "appId": "com.scaffold.app",
-    "productName": "Electron Python App",
+    "appId": "com.sassy.cat.app",
+    "productName": "臭屁猫",
     "directories": {
       "output": "dist_electron"
     },
@@ -74,7 +74,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Electron Python App"
+      "shortcutName": "臭屁猫"
     },
     "mac": {
       "target": "dmg",

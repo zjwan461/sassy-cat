@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Electron Python Scaffold - Development
+title 臭屁猫 - Development
 
 echo ==========================================
 echo   Electron + Python + Vue3 脚手架
