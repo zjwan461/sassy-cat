@@ -8,7 +8,7 @@
     <div class="about-grid">
       <section class="card">
         <div class="card-body brand">
-          <div class="brand-logo">{{ appConfig.logo }}</div>
+          <div class="brand-logo"><img :src="logoUrl" alt="logo" /></div>
           <div class="brand-name">{{ appConfig.name }}</div>
           <div class="brand-version mono">v{{ appConfig.version }}</div>
           <p class="brand-desc">
@@ -51,6 +51,7 @@
 
 <script setup>
 import { appConfig, pythonVersion, appLinks } from '../appConfig'
+import logoUrl from '../../assets/icon.png'
 
 // 静态示例数据，不接入真实功能
 const techInfo = [
@@ -131,13 +132,16 @@ function openLink(url) {
   width: 72px;
   height: 72px;
   margin: 0 auto 16px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
   border-radius: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 36px;
+  overflow: hidden;
   box-shadow: 0 6px 18px rgba(99, 102, 241, 0.35);
+}
+
+.brand-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 .brand-name {

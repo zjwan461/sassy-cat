@@ -31,6 +31,13 @@ logging.basicConfig(
     datefmt='%H:%M:%S',
 )
 
+# 将 logging 记录同时转发为 __PROTOCOL__ log 行，经 Electron 推送到前端日志页
+from monitor.protocol import ProtocolLogHandler  # noqa: E402
+
+_protocol_handler = ProtocolLogHandler()
+_protocol_handler.setLevel(logging.INFO)
+logging.getLogger().addHandler(_protocol_handler)
+
 logger = logging.getLogger('main')
 
 

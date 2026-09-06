@@ -5,9 +5,70 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:* http://localhost:* ws://localhost:*">
   <title>臭屁猫</title>
+  <style>
+    /* 静态内联样式：先于任何 JS 执行，消除渲染进程加载期的白屏 */
+    html, body { background: #0f172a; }
+    #boot-loading {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 22px;
+      background: #0f172a;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      transition: opacity 0.45s ease;
+    }
+    #boot-loading.boot-hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .boot-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: #f1f5f9;
+      letter-spacing: 3px;
+    }
+    .boot-spinner {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 3px solid #334155;
+      border-top-color: #4f46e5;
+      animation: boot-spin 0.9s linear infinite;
+    }
+    @keyframes boot-spin {
+      to { transform: rotate(360deg); }
+    }
+    .boot-hint {
+      font-size: 13px;
+      color: #94a3b8;
+    }
+    .boot-dots::after {
+      content: '';
+      display: inline-block;
+      width: 16px;
+      text-align: left;
+      animation: boot-dots 1.4s steps(4, end) infinite;
+    }
+    @keyframes boot-dots {
+      0%   { content: ''; }
+      25%  { content: '.'; }
+      50%  { content: '..'; }
+      75%  { content: '...'; }
+    }
+  </style>
 </head>
 <body>
   <div id="app"></div>
+  <!-- 全屏启动加载层：系统就绪（WebSocket 建立）后由 App.vue 淡出移除 -->
+  <div id="boot-loading">
+    <div class="boot-title">臭屁猫</div>
+    <div class="boot-spinner"></div>
+    <div class="boot-hint">正在启动服务<span class="boot-dots"></span></div>
+  </div>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

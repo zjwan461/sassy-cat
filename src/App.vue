@@ -30,7 +30,7 @@
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { appConfig } from './appConfig'
 import { useAgentSocket } from './composables/useAgentSocket'
@@ -38,7 +38,34 @@ import logoUrl from '../assets/icon.png'
 
 const route = useRoute()
 const router = useRouter()
-const { connect, setPort } = useAgentSocket()
+const { state: socketState, connect, setPort } = useAgentSocket()
+
+// ---------- 启动 loading 消除 ----------
+// 就绪判定：WebSocket 首次连通（Agent/WS 服务已就绪）即淡出移除全屏 loading；
+// 非 Electron 环境（浏览器直开调试）无后端服务，挂载即移除；
+// 另设保险超时，防止异常情况下 loading 永久驻留。
+let loadingRemoved = false
+let loadingTimer = null
+
+function dismissBootLoading() {
+  if (loadingRemoved) return
+  loadingRemoved = true
+  clearTimeout(loadingTimer)
+  const el = document.getElementById('boot-loading')
+  if (!el) return
+  el.classList.add('boot-hidden')
+  // 淡出动画结束后从 DOM 移除
+  setTimeout(() => el.remove(), 500)
+}
+
+// 首次连通后不再重复触发
+const stopWatch = watch(socketState, (s) => {
+  if (s.status === 'open') {
+    stopWatch()
+    // 稍作延迟让 Dashboard 完成首帧数据拉取，衔接更顺滑
+    setTimeout(dismissBootLoading, 200)
+  }
+})
 
 onMounted(() => {
   connect()
@@ -48,7 +75,17 @@ onMounted(() => {
     })
     window.electronAPI.onAgentReady((info) => { if (info && info.port) setPort(info.port) })
     window.electronAPI.onNavigateChat(() => router.push('/chat'))
+  } else {
+    // 非 Electron 环境无 Agent 服务可等，直接进入界面
+    dismissBootLoading()
   }
+  // 保险：最长 20s 后强制移除 loading（如 WS 始终无法连通的故障场景）
+  loadingTimer = setTimeout(dismissBootLoading, 20000)
+})
+
+onBeforeUnmount(() => {
+  clearTimeout(loadingTimer)
+  stopWatch()
 })
 
 const menuItems = [

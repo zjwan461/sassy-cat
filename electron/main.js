@@ -72,6 +72,8 @@ function createWindow() {
     height: windowHeight,
     minWidth: 800,
     minHeight: 600,
+    // 窗口底色与界面一致，避免页面渲染前的白色闪屏（渲染层有全屏 loading 兜底）
+    backgroundColor: '#0f172a',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -137,6 +139,37 @@ let stdoutBuffer = '';
 let latestMetrics = null;
 let latestSysinfo = null;
 
+// ---------- 日志中心（type=log 消息统一入口） ----------
+// 环形缓冲上限，防止无限增长；渲染进程挂载较晚时经 get-logs 拉取历史
+const LOG_BUFFER_MAX = 500;
+let logBuffer = [];
+
+// 推送一条结构化日志：写入缓冲并广播到所有窗口
+function pushLog(level, text, ts) {
+  const entry = { type: 'log', ts: ts || Date.now(), level: level || 'info', text: String(text ?? '') };
+  logBuffer.push(entry);
+  if (logBuffer.length > LOG_BUFFER_MAX) {
+    logBuffer.splice(0, logBuffer.length - LOG_BUFFER_MAX);
+  }
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('log-update', entry);
+    }
+  }
+}
+
+// 解析主进程侧原始行的级别前缀（如 [ERROR] xxx / [INFO] xxx），无前缀按 info 处理
+function pushRawLineAsLog(line) {
+  const m = line.match(/^\[(ERROR|WARN(?:ING)?|INFO|DEBUG)\]\s*(.*)$/is);
+  if (m) {
+    const lv = m[1].toUpperCase();
+    const level = lv.startsWith('ERROR') ? 'error' : lv.startsWith('WARN') ? 'warn' : lv.startsWith('DEBUG') ? 'debug' : 'info';
+    pushLog(level, m[2]);
+  } else {
+    pushLog('info', line);
+  }
+}
+
 // [READY] 信号：Python Agent 服务就绪（携带 WS 端口）
 const READY_PREFIX = '[READY] ';
 
@@ -165,6 +198,10 @@ function handleProtocolLine(line) {
       latestMetrics = payload;
     } else if (payload.type === 'sysinfo') {
       latestSysinfo = payload.data;
+    } else if (payload.type === 'log') {
+      // Python 端 logging 转发的结构化日志 -> 统一经 pushLog 缓冲并广播
+      pushLog(payload.level, payload.text, payload.ts);
+      return true;
     }
     if (!mainWindow || mainWindow.isDestroyed()) {
       return true;
@@ -218,9 +255,7 @@ function startPythonService() {
         if (handleProtocolLine(line)) {
           return;
         }
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('log-output', line);
-        }
+        // 服务运行状态检测（logging 行格式为 "[HH:MM:SS] 服务启动成功"）
         if (line.includes('服务启动成功')) {
           isRunning = true;
           updateTrayMenu();
@@ -228,6 +263,13 @@ function startPythonService() {
             mainWindow.webContents.send('status-update', { running: true });
           }
         }
+        // Python logging 控制台行（[HH:MM:SS] ...）已由 ProtocolLogHandler 以
+        // 结构化 log 协议行转发，跳过原始行避免重复展示
+        if (/^\[\d{2}:\d{2}:\d{2}\]/.test(line)) {
+          return;
+        }
+        // 其余非协议原始输出（print、uvicorn 日志等）转为结构化日志
+        pushRawLineAsLog(line.trim());
       });
     };
 
@@ -251,8 +293,8 @@ function startPythonService() {
       updateTrayMenu();
       if (mainWindow) {
         mainWindow.webContents.send('status-update', { running: false });
-        mainWindow.webContents.send('log-output', `[ERROR] 进程启动失败: ${err.message}`);
       }
+      pushLog('error', `进程启动失败: ${err.message}`);
     });
 
     pythonProcess.on('exit', (code, signal) => {
@@ -261,8 +303,8 @@ function startPythonService() {
       updateTrayMenu();
       if (mainWindow) {
         mainWindow.webContents.send('status-update', { running: false });
-        mainWindow.webContents.send('log-output', `[INFO] 进程已退出 (code: ${code}, signal: ${signal})`);
       }
+      pushLog('info', `进程已退出 (code: ${code}, signal: ${signal})`);
     });
 
     return { success: true, message: '服务启动中...' };
@@ -290,8 +332,8 @@ function stopPythonService() {
     
     if (mainWindow) {
       mainWindow.webContents.send('status-update', { running: false });
-      mainWindow.webContents.send('log-output', '[INFO] 服务已停止');
     }
+    pushLog('info', '服务已停止');
     
     return { success: true, message: '服务已停止' };
   } catch (error) {
@@ -347,6 +389,41 @@ ipcMain.handle('get-metrics', () => {
 
 ipcMain.handle('get-sysinfo', () => {
   return latestSysinfo;
+});
+
+// 拉取日志历史（渲染进程挂载晚于推送时的补偿）
+ipcMain.handle('get-logs', () => {
+  return logBuffer;
+});
+
+// 导出日志为文件（系统保存对话框）
+ipcMain.handle('logs:export', async (event, logs) => {
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const { canceled, filePath } = await dialog.showSaveDialog(parent, {
+    title: '导出日志',
+    defaultPath: `sassy-cat-logs-${stamp}.log`,
+    filters: [
+      { name: '日志文件', extensions: ['log'] },
+      { name: '文本文件', extensions: ['txt'] }
+    ]
+  });
+  if (canceled || !filePath) {
+    return { success: false, canceled: true };
+  }
+  try {
+    const lines = (logs || []).map((l) => {
+      const t = new Date(l.ts || Date.now());
+      const hh = String(t.getHours()).padStart(2, '0');
+      const mm = String(t.getMinutes()).padStart(2, '0');
+      const ss = String(t.getSeconds()).padStart(2, '0');
+      return `[${hh}:${mm}:${ss}] ${(l.level || 'info').toUpperCase().padEnd(5)} ${l.text}`;
+    });
+    fs.writeFileSync(filePath, lines.join('\r\n') + '\r\n', 'utf-8');
+    return { success: true, filePath };
+  } catch (e) {
+    return { success: false, message: `写入失败: ${e.message}` };
+  }
 });
 
 // ---------- 配置系统 IPC ----------

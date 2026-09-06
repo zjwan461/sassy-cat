@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getMetrics: () => ipcRenderer.invoke('get-metrics'),
   getSysinfo: () => ipcRenderer.invoke('get-sysinfo'),
 
+  // 日志：拉取历史缓冲 / 导出为文件
+  getLogs: () => ipcRenderer.invoke('get-logs'),
+  exportLogs: (logs) => ipcRenderer.invoke('logs:export', logs),
+
   // 配置系统
   getConfig: () => ipcRenderer.invoke('config:get'),
   setConfig: (path, value) => ipcRenderer.invoke('config:set', { path, value }),
@@ -23,6 +27,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onNavigateChat: (callback) => ipcRenderer.on('navigate-chat', () => callback()),
   onStatusUpdate: (callback) => ipcRenderer.on('status-update', (event, status) => callback(status)),
   onLogOutput: (callback) => ipcRenderer.on('log-output', (event, log) => callback(log)),
+  onLogUpdate: (callback) => ipcRenderer.on('log-update', (event, log) => callback(log)),
   onMetricsUpdate: (callback) => ipcRenderer.on('metrics-update', (event, metrics) => callback(metrics)),
   onSysinfoUpdate: (callback) => ipcRenderer.on('sysinfo-update', (event, info) => callback(info)),
   onAgentReady: (callback) => ipcRenderer.on('agent-ready', (event, info) => callback(info)),
