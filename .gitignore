@@ -34,4 +34,4 @@ Thumbs.db
 # Config (可选，如果需要忽略配置文件)
 # config.json
 runtime/large_tool_results
-runtime/*.sqlite
+runtime/*.sqlite*

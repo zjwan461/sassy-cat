@@ -1,16 +1,38 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, shell, powerMonitor } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const PythonEnvChecker = require('./python-env-checker');
+const { ConfigStore } = require('./config-store');
 
 let mainWindow;
 let setupWindow;
+let petWindow = null;
 let tray;
 let pythonProcess = null;
 let isRunning = false;
 let envChecker = null;
 let pythonPath = null;
+
+// Agent 服务信息（由 Python [READY] 信号解析得到）
+let agentInfo = { ready: false, port: null };
+
+// 双层配置存储（app ready 前 userData 不可用，延迟到 whenReady 初始化）
+let configStore = null;
+
+function initConfigStore() {
+  const templatePath = getAssetPath('config.json');
+  const userPath = path.join(app.getPath('userData'), 'config.user.json');
+  configStore = new ConfigStore(templatePath, userPath);
+  // 配置变更 -> 推送给所有窗口（Settings 页负责经 WS 发 config.invalidate 通知 Python 热重建）
+  configStore.on('changed', ({ diff }) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send('config:changed', { diff });
+      }
+    }
+  });
+}
 
 // 获取资源路径（开发/打包环境兼容）
 function getAssetPath(relativePath) {
@@ -76,6 +98,9 @@ function createWindow() {
 
   mainWindow.webContents.on('did-finish-load', () => {
     mainWindow.webContents.send('status-update', { running: isRunning });
+    if (agentInfo.ready) {
+      mainWindow.webContents.send('agent-ready', agentInfo);
+    }
   });
 }
 
@@ -90,33 +115,7 @@ function createTray() {
 
   tray = new Tray(iconPath);
 
-  const contextMenu = Menu.buildFromTemplate([
-    { 
-      label: '显示主窗口', 
-      click: () => mainWindow.show() 
-    },
-    { 
-      label: isRunning ? '停止服务' : '启动服务',
-      click: () => {
-        if (isRunning) {
-          stopPythonService();
-        } else {
-          startPythonService();
-        }
-      }
-    },
-    { type: 'separator' },
-    { 
-      label: '退出', 
-      click: () => {
-        app.isQuitting = true;
-        if (isRunning) {
-          stopPythonService();
-        }
-        app.quit();
-      }
-    }
-  ]);
+  const contextMenu = Menu.buildFromTemplate(buildTrayTemplate());
 
   tray.setToolTip(appConfig.name);
   tray.setContextMenu(contextMenu);
@@ -138,8 +137,25 @@ let stdoutBuffer = '';
 let latestMetrics = null;
 let latestSysinfo = null;
 
+// [READY] 信号：Python Agent 服务就绪（携带 WS 端口）
+const READY_PREFIX = '[READY] ';
+
 // 处理一行协议数据：解析 JSON 并转发到渲染进程
 function handleProtocolLine(line) {
+  if (line.startsWith(READY_PREFIX)) {
+    try {
+      agentInfo = { ready: true, port: JSON.parse(line.slice(READY_PREFIX.length)).port };
+    } catch (e) {
+      agentInfo = { ready: true, port: null };
+    }
+    console.log('[main] agent ready, port =', agentInfo.port);
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send('agent-ready', agentInfo);
+      }
+    }
+    return true;
+  }
   if (!line.startsWith(PROTOCOL_PREFIX)) {
     return false;
   }
@@ -181,8 +197,9 @@ function startPythonService() {
     }
 
     const pythonScriptPath = getAssetPath('python/main.py');
-    
-    pythonProcess = spawn(pyPath, [pythonScriptPath], {
+    const userConfigPath = path.join(app.getPath('userData'), 'config.user.json');
+
+    pythonProcess = spawn(pyPath, [pythonScriptPath, '--config', userConfigPath], {
       cwd: getAssetPath('.'),
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
       stdio: ['ignore', 'pipe', 'pipe']
@@ -282,35 +299,48 @@ function stopPythonService() {
   }
 }
 
-function updateTrayMenu() {
-  if (tray) {
-    const contextMenu = Menu.buildFromTemplate([
-      { 
-        label: '显示主窗口', 
-        click: () => mainWindow.show() 
-      },
-      { 
-        label: isRunning ? '停止服务' : '启动服务',
-        click: () => {
-          if (isRunning) {
-            stopPythonService();
-          } else {
-            startPythonService();
-          }
+function buildTrayTemplate() {
+  const petVisible = petWindow && !petWindow.isDestroyed() && petWindow.isVisible();
+  return [
+    { label: '显示主窗口', click: () => mainWindow && mainWindow.show() },
+    {
+      label: petVisible ? '隐藏桌宠' : '显示桌宠',
+      click: () => {
+        if (petVisible) {
+          petWindow.hide();
+        } else {
+          createPetWindow();
         }
-      },
-      { type: 'separator' },
-      { 
-        label: '退出', 
-        click: () => {
-          app.isQuitting = true;
-          if (isRunning) {
-            stopPythonService();
-          }
-          app.quit();
+        updateTrayMenu();
+      }
+    },
+    {
+      label: isRunning ? '停止服务' : '启动服务',
+      click: () => {
+        if (isRunning) {
+          stopPythonService();
+        } else {
+          startPythonService();
         }
       }
-    ]);
+    },
+    { type: 'separator' },
+    {
+      label: '退出',
+      click: () => {
+        app.isQuitting = true;
+        if (isRunning) {
+          stopPythonService();
+        }
+        app.quit();
+      }
+    }
+  ];
+}
+
+function updateTrayMenu() {
+  if (tray) {
+    const contextMenu = Menu.buildFromTemplate(buildTrayTemplate());
     tray.setContextMenu(contextMenu);
   }
 }
@@ -335,6 +365,44 @@ ipcMain.handle('get-metrics', () => {
 
 ipcMain.handle('get-sysinfo', () => {
   return latestSysinfo;
+});
+
+// ---------- 配置系统 IPC ----------
+ipcMain.handle('config:get', () => {
+  if (!configStore) return { success: false, message: '配置未初始化' };
+  return { success: true, config: configStore.getMasked() };
+});
+
+ipcMain.handle('config:set', (event, { path: cfgPath, value }) => {
+  if (!configStore) return { success: false, message: '配置未初始化' };
+  return configStore.setByDotted(cfgPath, value);
+});
+
+ipcMain.handle('config:set-many', (event, patches) => {
+  if (!configStore) return { success: false, message: '配置未初始化' };
+  return configStore.applyPatches(patches);
+});
+
+// 用户原始输入（未掩码）的 apiKey 需单独获取用于展示编辑：渲染层聚焦输入框时调用
+ipcMain.handle('config:get-raw-profile-key', (event, profileName) => {
+  if (!configStore) return { success: false };
+  const profiles = configStore.merged.llm?.profiles || {};
+  return { success: true, apiKey: profiles[profileName]?.apiKey || '' };
+});
+
+// Agent 服务就绪信息（WS 端口等）
+ipcMain.handle('get-agent-info', () => {
+  return agentInfo;
+});
+
+// 重启 Python Agent 服务（配置兜底生效手段）
+ipcMain.handle('agent:restart', () => {
+  if (pythonProcess) {
+    stopPythonService();
+    setTimeout(() => startPythonService(), 800);
+    return { success: true, message: '服务重启中…' };
+  }
+  return startPythonService();
 });
 
 // 用系统默认浏览器打开外部链接（仅允许 http/https）
@@ -466,9 +534,142 @@ function runEnvCheck() {
     });
   });
 }
+// ---------- 桌宠窗口（设计稿 5 节） ----------
+const PET_W = 220;
+const PET_H = 150;
+
+function createPetWindow() {
+  if (petWindow && !petWindow.isDestroyed()) {
+    petWindow.show();
+    return;
+  }
+  const { screen } = require('electron');
+  const pos = configStore ? configStore.merged.pet?.position : null;
+  const primary = screen.getPrimaryDisplay().workArea;
+  const x = Number.isFinite(pos?.x) ? Math.min(pos.x, primary.x + primary.width - PET_W) : primary.x + primary.width - PET_W - 40;
+  const y = Number.isFinite(pos?.y) ? Math.min(pos.y, primary.y + primary.height - PET_H) : primary.y + primary.height - PET_H - 10;
+
+  petWindow = new BrowserWindow({
+    width: PET_W,
+    height: PET_H,
+    x, y,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'pet-preload.js')
+    }
+  });
+  // 默认鼠标穿透（forward 让渲染层仍能收到 mousemove 做命中检测）
+  petWindow.setIgnoreMouseEvents(true, { forward: true });
+
+  if (process.env.NODE_ENV === 'development') {
+    petWindow.loadURL('http://localhost:5173/pet/pet.html');
+  } else {
+    petWindow.loadFile(path.join(__dirname, '..', 'dist', 'pet', 'pet.html'));
+  }
+  // 移动（拖动/走动）后防抖持久化位置
+  let posTimer = null;
+  petWindow.on('moved', () => {
+    clearTimeout(posTimer);
+    posTimer = setTimeout(() => savePetPosition(), 600);
+  });
+  petWindow.on('closed', () => { petWindow = null; });
+}
+
+function savePetPosition() {
+  if (!petWindow || petWindow.isDestroyed() || !configStore) return;
+  const [x, y] = petWindow.getPosition();
+  configStore.setByDotted('pet.position', { x, y });
+}
+
+// 拖动节流：16ms 合并一次
+let moveAccum = { dx: 0, dy: 0 }, moveTimer = null;
+
+ipcMain.handle('pet:set-interactive', (event, interactive) => {
+  if (!petWindow || petWindow.isDestroyed()) return { success: false };
+  petWindow.setIgnoreMouseEvents(!interactive, { forward: true });
+  return { success: true };
+});
+
+ipcMain.on('pet:move-delta', (event, { dx, dy }) => {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  moveAccum.dx += dx; moveAccum.dy += dy;
+  if (moveTimer) return;
+  moveTimer = setTimeout(() => {
+    moveTimer = null;
+    if (!petWindow || petWindow.isDestroyed()) return;
+    const [x, y] = petWindow.getPosition();
+    petWindow.setPosition(Math.round(x + moveAccum.dx), Math.round(y + moveAccum.dy));
+    moveAccum = { dx: 0, dy: 0 };
+  }, 16);
+});
+
+ipcMain.handle('pet:get-position', () => {
+  if (!petWindow || petWindow.isDestroyed()) return null;
+  const [x, y] = petWindow.getPosition();
+  return { x, y };
+});
+
+ipcMain.handle('pet:resize', (event, height) => {
+  if (!petWindow || petWindow.isDestroyed()) return { success: false };
+  const [w, h] = petWindow.getSize();
+  const [x, y] = petWindow.getPosition();
+  // 保持底部对齐（精灵在窗口底部）
+  petWindow.setBounds({ x, y: y + (h - height), width: w, height });
+  return { success: true };
+});
+
+ipcMain.handle('pet:show-chat', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (!mainWindow.isVisible()) mainWindow.show();
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    mainWindow.webContents.send('navigate-chat');
+  }
+  return { success: true };
+});
+
+ipcMain.handle('pet:hide', () => {
+  if (petWindow && !petWindow.isDestroyed()) petWindow.hide();
+  return { success: true };
+});
+
+ipcMain.handle('pet:popup-menu', (event, items) => {
+  if (!petWindow || petWindow.isDestroyed()) return { success: false };
+  const template = (items || []).map((it) => ({
+    label: it.label,
+    click: () => petWindow.webContents.send('pet:menu-action', { action: it.action })
+  }));
+  if (template.length) {
+    Menu.buildFromTemplate(template).popup({ window: petWindow });
+  }
+  return { success: true };
+});
+
 // 应用生命周期
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
+
+  // 初始化配置存储（依赖 userData 路径）
+  initConfigStore();
+
+  // OS 级用户活动信号 -> 广播到各渲染窗口（渲染层经 WS 转发 client.event:user_activity）
+  const pingActivity = (event) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send('activity-ping', { event, ts: Date.now() });
+      }
+    }
+  };
+  powerMonitor.on('unlock-screen', () => pingActivity('unlock-screen'));
+  powerMonitor.on('lock-screen', () => pingActivity('lock-screen'));
+  powerMonitor.on('resume', () => pingActivity('activity'));
 
   // 先创建并显示环境检查窗口
   createSetupWindow();
@@ -486,6 +687,10 @@ app.whenReady().then(async () => {
     }
     // 自动启动监控采集服务（供仪表盘展示真实数据）
     startPythonService();
+    // 创建桌宠窗口
+    if (configStore.merged.pet?.enabled !== false) {
+      createPetWindow();
+    }
   } else {
     if (setupWindow && !setupWindow.isDestroyed()) {
       // 窗口已经显示错误信息，等待用户操作

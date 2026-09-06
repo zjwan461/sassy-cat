@@ -13,21 +13,30 @@ body {
   overflow-y: auto;
 }
 
-body::-webkit-scrollbar {
-  width: 6px;
+/* 统一美化滚动条：细胶囊形、透明轨道、悬停提亮（作用于所有滚动容器） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
-body::-webkit-scrollbar-track {
+::-webkit-scrollbar-track {
   background: transparent;
 }
 
-body::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb {
   background: #334155;
-  border-radius: 3px;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
-body::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background: #475569;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* 通用按钮样式 */

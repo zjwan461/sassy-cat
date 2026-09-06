@@ -1,0 +1,76 @@
+# -*- coding: utf-8 -*-
+"""
+FastAPI 应用：lifespan 内运行 monitor 周期任务与 proactive 调度任务。
+"""
+
+import asyncio
+import logging
+import time
+
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+
+from monitor import service as monitor_service
+from proactive import scheduler
+from server.bus import hub
+from server.protocol import envelope
+from server.ws_agent import ws_agent_endpoint
+
+logger = logging.getLogger(__name__)
+
+METRICS_INTERVAL = 2.0
+_metrics_stop = asyncio.Event()
+
+
+async def _monitor_loop():
+    """周期采集：阻塞采集放 to_thread，兼容 stdout 协议行 + WS metrics.snapshot"""
+    while not _metrics_stop.is_set():
+        started = time.time()
+        try:
+            payload = await asyncio.to_thread(monitor_service.collect_once_and_emit)
+            await hub.publish_all(envelope("metrics.snapshot", payload))
+        except Exception:
+            logger.exception("monitor tick 失败")
+        elapsed = time.time() - started
+        await asyncio.sleep(max(0.2, METRICS_INTERVAL - elapsed))
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 同步初始化（静态信息采集等含阻塞调用）
+    await asyncio.to_thread(monitor_service.init_sync)
+    stop_event = asyncio.Event()
+    monitor_task = asyncio.create_task(_monitor_loop())
+    proactive_task = asyncio.create_task(scheduler.run_forever(stop_event))
+    logger.info("后台任务已启动：monitor_loop / proactive_scheduler")
+    yield
+    stop_event.set()
+    _metrics_stop.set()
+    monitor_task.cancel()
+    proactive_task.cancel()
+    await asyncio.gather(monitor_task, proactive_task, return_exceptions=True)
+    await asyncio.to_thread(monitor_service.shutdown_sync)
+    logger.info("后台任务已停止")
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="sassy-cat-agent", lifespan=lifespan)
+    # 渲染进程（file:// 或 localhost:5173）直连 WS；WS 不受 CORS 约束，HTTP 侧宽松即可
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @app.get("/health")
+    async def health():
+        return {"ok": True, "ts": int(time.time() * 1000)}
+
+    @app.websocket("/ws/agent")
+    async def ws_agent(websocket: WebSocket):
+        await ws_agent_endpoint(websocket)
+
+    return app
