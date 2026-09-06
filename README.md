@@ -1,58 +1,99 @@
-# Electron + Python + Vue3 桌面应用脚手架
+# 🐱 臭屁猫（Sassy Cat）
 
-一个现代化的桌面应用脚手架，基于 Electron + Python + Vue3 技术栈，提供开箱即用的开发环境。
+一只傲娇但可靠的桌面猫咪助手 —— 基于 Electron + Vue 3 + Python 构建的 AI 桌宠应用。
 
 ## ✨ 特性
 
-- 🚀 **现代化技术栈**：Electron 28 + Vue 3 + Vite 5
-- 🐍 **Python 后端**：支持 Python 3.9+，自动环境检测和依赖安装
-- 🎨 **Vue3 前端**：使用 Composition API 和 Vue Router
-- ⚡ **Vite 构建**：快速的热重载和构建
-- 🔧 **开发友好**：开发环境自动热更新
-- 📦 **一键打包**：支持 Windows/macOS/Linux 多平台打包
-- 🛡️ **环境检查**：启动时自动检测 Python 环境，缺失时自动下载安装
-- 🎯 **系统托盘**：内置系统托盘支持
+- 🤖 **AI 智能对话**：集成 LangChain / LangGraph Agent，支持流式回复、工具调用、多轮对话
+- 🐾 **桌面宠物**：透明置顶窗口，精灵帧动画，支持拖拽、点击互动、气泡对话
+- 💬 **双入口聊天**：主窗口完整聊天页 + 桌宠气泡快捷输入，会话实时同步
+- 📊 **系统监控**：实时查看 CPU、GPU、内存、磁盘等系统指标
+- ⚙️ **灵活配置**：可视化设置页，支持多 LLM 配置切换、系统提示词（人设）自定义编辑
+- 🔔 **主动提醒**：闲置检测，桌宠会主动冒泡提醒（"为什么不理本喵😾"）
+- 🧩 **技能扩展**：支持内置工具和技能插件（如天气查询）
+- 🎨 **双层配置**：模板默认值 + 用户覆盖，升级不丢失个人配置
+- 🔌 **WebSocket 通信**：渲染进程直连 Python 后端，低延迟流式传输
+- 📦 **一键打包**：支持 Windows / macOS / Linux 多平台打包
+
+## 🛠️ 技术栈
+
+| 层 | 技术 |
+|---|---|
+| 桌面框架 | Electron 28 |
+| 前端 | Vue 3 (Composition API) + Vue Router + Vite 5 |
+| 后端 | Python 3.11 + FastAPI + uvicorn |
+| AI Agent | LangChain + LangGraph + deepagents |
+| 通信 | WebSocket（聊天/事件）+ IPC（窗口控制/配置）+ stdio 协议行（监控） |
+| 打包 | electron-builder |
 
 ## 📁 项目结构
 
 ```
-demo/
-├── electron/              # Electron 主进程
-│   ├── main.js           # 主进程入口
-│   ├── preload.js        # 预加载脚本
-│   └── python-env-checker.js  # Python 环境检查器
-├── src/                  # Vue3 前端源码
+sassy-cat/
+├── electron/                  # Electron 主进程
+│   ├── main.js               # 主进程入口（主窗口 + 桌宠窗口 + 托盘管理）
+│   ├── preload.js            # 主窗口预加载脚本
+│   ├── pet-preload.js        # 桌宠窗口预加载脚本
+│   ├── config-store.js       # 双层配置读写（深度合并 + 原子写）
+│   └── python-env-checker.js # Python 环境检查器
+├── src/                       # 主窗口 Vue3 前端
 │   ├── views/
-│   │   ├── Home.vue     # 主页面
-│   │   └── Setup.vue    # 环境检查页面
-│   ├── App.vue          # 根组件
-│   ├── main.js          # Vue 应用入口
-│   ├── setup.js         # Setup 页面入口
-│   └── styles.css       # 全局样式
-├── python/               # Python 后端
-│   └── main.py          # Python 服务入口
-├── assets/               # 静态资源（图标等）
-├── index.html           # 主页面 HTML
-├── setup.html           # 环境检查页面 HTML
-├── package.json         # Node.js 依赖
-├── vite.config.js       # Vite 配置
-├── requirements.txt     # Python 依赖
-├── start.bat            # Windows 启动脚本
-└── README.md            # 项目说明
+│   │   ├── ChatView.vue      # AI 聊天页（流式对话 + 工具状态）
+│   │   ├── Dashboard.vue     # 系统监控仪表盘
+│   │   ├── Settings.vue      # 设置页（LLM 配置 + 人设编辑）
+│   │   ├── Logs.vue          # 日志查看
+│   │   ├── About.vue         # 关于页
+│   │   ├── Setup.vue         # 环境检查页面
+│   │   └── ...
+│   ├── composables/
+│   │   └── useAgentSocket.js # WebSocket 客户端（单例 + 自动重连）
+│   ├── App.vue               # 根组件
+│   ├── main.js               # Vue 应用入口
+│   └── styles.css            # 全局样式
+├── pet/                       # 桌宠窗口（Vite 多页入口）
+│   ├── pet.html
+│   ├── pet-main.js
+│   └── components/PetApp.vue # 精灵动画 + 气泡 + 互动
+├── python/                    # Python 后端
+│   ├── main.py               # 入口（asyncio + FastAPI）
+│   ├── server/               # WebSocket 服务层
+│   │   ├── app.py            # FastAPI 实例 + 路由 + lifespan
+│   │   ├── ws_agent.py       # /ws/agent 端点 + 会话管理
+│   │   ├── protocol.py       # WS 消息模型定义
+│   │   └── bus.py            # 服务端事件总线
+│   ├── agent/                # AI Agent 引擎
+│   │   ├── engine.py         # Agent 构建（配置注入）
+│   │   ├── llms.py           # LLM 工厂
+│   │   ├── prompts.py        # 人设模板 + 运行时提示词拼接
+│   │   ├── main_agent.py     # 流式对话核心
+│   │   └── builtin_tools.py  # 内置工具集
+│   ├── monitor/              # 系统监控采集
+│   │   ├── service.py        # 采集调度
+│   │   ├── cpu.py / gpu.py / memory.py / disks.py ...
+│   │   └── ...
+│   └── proactive/            # 主动提醒引擎
+│       └── scheduler.py      # 闲置检测 + 提醒规则
+├── runtime/skills/            # 技能插件目录
+├── assets/                    # 静态资源（图标等）
+├── config.json               # 应用配置模板
+├── package.json              # Node.js 依赖
+├── requirements.txt          # Python 依赖
+├── vite.config.js            # Vite 配置（多页入口）
+├── start.bat                 # Windows 启动脚本
+└── plans/sassy-cat-design.md # 详细设计文档
 ```
 
 ## 🚀 快速开始
 
 ### 环境要求
 
-- **Node.js**: 18+ 
+- **Node.js**: 18+
 - **npm**: 9+
-- **Python**: 3.9+（可选，程序会自动检测和安装）
+- **Python**: 3.10+（程序会自动检测，缺失时自动下载嵌入式 Python）
 
 ### 安装依赖
 
 ```bash
-cd demo
 npm install
 ```
 
@@ -72,23 +113,17 @@ npm run electron:dev
 
 ### 生产构建
 
-**构建所有平台:**
 ```bash
+# 构建所有平台
 npm run electron:build
-```
 
-**仅构建 Windows:**
-```bash
+# 仅构建 Windows
 npm run electron:build:win
-```
 
-**仅构建 macOS:**
-```bash
+# 仅构建 macOS
 npm run electron:build:mac
-```
 
-**仅构建 Linux:**
-```bash
+# 仅构建 Linux
 npm run electron:build:linux
 ```
 
@@ -96,165 +131,87 @@ npm run electron:build:linux
 
 ## 🔧 开发指南
 
-### 前端开发
+### 前端（主窗口）
 
-前端使用 Vue3 + Vite，代码位于 `src/` 目录：
+前端使用 Vue 3 + Vite，代码位于 `src/` 目录：
 
-- `src/views/Home.vue` - 主页面
-- `src/views/Setup.vue` - 环境检查页面
-- `src/App.vue` - 根组件
-- `src/main.js` - Vue 应用入口
+- [`ChatView.vue`](src/views/ChatView.vue) — AI 聊天页，流式对话 + 工具调用展示
+- [`Dashboard.vue`](src/views/Dashboard.vue) — 系统监控仪表盘
+- [`Settings.vue`](src/views/Settings.vue) — LLM 配置 + 人设/系统提示词编辑
+- [`useAgentSocket.js`](src/composables/useAgentSocket.js) — WebSocket 客户端封装
 
 修改前端代码会自动热重载。
 
-### 后端开发
+### 桌宠窗口
 
-Python 后端代码位于 `python/` 目录：
+桌宠使用 Vite 多页入口，代码位于 `pet/` 目录：
 
-- `python/main.py` - Python 服务入口
-- `requirements.txt` - Python 依赖列表
+- [`PetApp.vue`](pet/components/PetApp.vue) — 精灵动画 + 气泡 + 交互逻辑
+- [`pet-preload.js`](electron/pet-preload.js) — 桌宠专用预加载脚本
 
-在 `requirements.txt` 中添加需要的 Python 包，程序启动时会自动安装。
+### Python 后端
 
-### 主进程开发
+后端代码位于 `python/` 目录，基于 FastAPI + asyncio：
 
-Electron 主进程代码位于 `electron/` 目录：
+- [`main.py`](python/main.py) — 服务入口
+- [`server/ws_agent.py`](python/server/ws_agent.py) — WebSocket 聊天端点
+- [`agent/engine.py`](python/agent/engine.py) — Agent 构建引擎
+- [`monitor/service.py`](python/monitor/service.py) — 系统监控采集
 
-- `electron/main.js` - 主进程入口
-- `electron/preload.js` - 预加载脚本
-- `electron/python-env-checker.js` - Python 环境检查器
+在 `requirements.txt` 中添加 Python 依赖，程序启动时会自动安装。
 
-修改主进程代码需要重启 Electron 应用。
+### 通信架构
 
-### IPC 通信
+| 数据类型 | 通道 | 说明 |
+|---|---|---|
+| AI 对话 / 流式 token / 主动提醒 | WebSocket | 渲染进程直连 Python，低延迟 |
+| 配置持久化（LLM / 人设 / 桌宠偏好） | IPC | 主进程读写 config.user.json |
+| 系统监控数据 | stdio 协议行 + IPC | 兼容现有解析逻辑 |
+| 窗口控制（拖动 / 置顶 / 穿透） | IPC | 主进程管理 |
 
-通过 `preload.js` 暴露的 API 进行前后端通信：
+## ⚙️ 配置说明
 
-```javascript
-// 前端调用
-const result = await window.electronAPI.startService()
-const status = await window.electronAPI.getStatus()
+### 应用配置（config.json）
 
-// 监听事件
-window.electronAPI.onStatusUpdate((status) => {
-  console.log('状态更新:', status)
-})
-```
-
-## 📦 打包说明
-
-### 配置打包
-
-编辑 `package.json` 中的 `build` 字段进行配置：
-
-```json
-{
-  "build": {
-    "appId": "com.yourcompany.app",
-    "productName": "Your App Name",
-    "directories": {
-      "output": "dist_electron"
-    }
-  }
-}
-```
-
-### 添加图标
-
-将应用图标放置在 `assets/` 目录：
-
-- `icon.ico` - Windows 图标
-- `icon.icns` - macOS 图标
-- `icon.png` - Linux 图标
-
-### 打包资源
-
-`extraResources` 配置会自动将以下资源打包到应用中：
-
-- `requirements.txt` - Python 依赖
-- `python/` - Python 代码
-- `assets/` - 静态资源
-
-## 🐍 Python 环境
-
-### 环境检测流程
-
-应用启动时会自动检测 Python 环境：
-
-1. 检查虚拟环境（`.venv` 或 `python_env`）
-2. 检查依赖是否已安装
-3. 检查系统 Python 版本
-4. 如未找到，自动下载嵌入式 Python
-5. 自动安装依赖
-
-### 项目配置（config.json）
-
-项目信息统一维护在根目录 `config.json` 中，界面（侧边栏、仪表盘、关于页）与主进程窗口标题、托盘提示均从此读取：
+项目基础信息维护在根目录 [`config.json`](config.json) 中：
 
 ```json
 {
   "app": {
-    "name": "SS Client",
-    "description": "Electron + Python 应用控制面板",
-    "introduction": "基于 Electron + Vue 3 + Python 构建的桌面应用脚手架。",
-    "version": "1.0.0",
-    "logo": "🔐"
+    "name": "臭屁猫",
+    "description": "结合AI Agent能力的桌宠",
+    "version": "1.0.0"
   },
   "pythonVersion": "3.11.9"
 }
 ```
 
+### 用户配置（config.user.json）
+
+运行时用户配置（LLM 连接、人设提示词、桌宠偏好等）存储在 `userData/config.user.json`，通过设置页可视化编辑，采用双层配置设计（模板 + 用户覆盖），应用升级不丢失。
+
 ### 自定义 Python 版本
 
-将 `pythonVersion` 修改为需要的完整版本号（如 `3.12.7`、`3.10.11`），主次版本会自动推导。修改后重启应用生效；若已下载过嵌入式 Python，需删除 `python_env` 目录后重启以重新配置环境。
+修改 `config.json` 中的 `pythonVersion`，重启应用生效。若已下载过嵌入式 Python，需删除 `python_env` 目录后重启。
 
-### 添加 Python 依赖
+## 📦 打包说明
 
-在 `requirements.txt` 中添加：
+将应用图标放置在 `assets/` 目录：
 
-```
-requests==2.31.0
-flask==3.0.0
-numpy==1.24.0
-```
+- `icon.ico` — Windows 图标
+- `icon.icns` — macOS 图标
+- `icon.png` — Linux 图标
 
-## 🎨 自定义
-
-### 修改应用名称
-
-编辑 `package.json`：
-
-```json
-{
-  "name": "your-app-name",
-  "productName": "Your App Name"
-}
-```
-
-### 修改窗口大小
-
-编辑 `electron/main.js`：
-
-```javascript
-mainWindow = new BrowserWindow({
-  width: 1200,  // 修改宽度
-  height: 800,  // 修改高度
-  // ...
-})
-```
-
-### 修改主题颜色
-
-编辑 `src/styles.css` 和各个 Vue 组件的 `<style>` 部分。
+`extraResources` 配置会自动将 `requirements.txt`、`python/`、`config.json`、`assets/` 打包到应用中。
 
 ## 📝 许可证
 
-MIT
+Apache License 2.0
 
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！
 
-## 📮 联系方式
+## 📮 反馈
 
-如有问题，请提交 Issue。
+如有问题，请前往 [项目主页](https://gitee.com/zjwan461/sassy-cat) 提交 Issue。

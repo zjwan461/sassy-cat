@@ -19,8 +19,8 @@
     "vue3",
     "scaffold"
   ],
-  "author": "",
-  "license": "MIT",
+  "author": "Jerry",
+  "license": "Apache-2.0",
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
     "concurrently": "^8.2.0",
