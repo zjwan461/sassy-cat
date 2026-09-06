@@ -35,3 +35,4 @@ Thumbs.db
 # config.json
 runtime/large_tool_results
 runtime/*.sqlite*
+runtime/tmp

@@ -18,14 +18,14 @@
         <div v-for="m in messages" :key="m.id" class="msg" :class="m.role">
           <div class="msg-avatar">{{ m.role === 'user' ? '🧑' : '🐱' }}</div>
           <div class="msg-body">
-            <!-- 工具步骤条 -->
+            <div class="msg-content">{{ m.content }}<span v-if="m.streaming" class="cursor">▌</span></div>
+            <!-- 工具步骤条：放在气泡下方，避免新消息把正文顶走 -->
             <div v-if="m.tools && m.tools.length" class="tool-steps">
               <div v-for="(t, i) in m.tools" :key="i" class="tool-step">
-                🔧 本喵正在使用工具：<b>{{ t.name }}</b>
+                🐟 本喵正在叼小鱼干：<b>{{ t.name }}</b>
                 <span v-if="t.done" class="tool-done">✓</span>
               </div>
             </div>
-            <div class="msg-content">{{ m.content }}<span v-if="m.streaming" class="cursor">▌</span></div>
             <!-- interrupt 确认 -->
             <div v-if="m.interrupt" class="interrupt-bar">
               <span>⚠️ 需要高危操作确认：{{ summarizeInterrupt(m.interrupt) }}</span>
@@ -193,7 +193,7 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
 .cursor { animation: blink 0.8s infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
-.tool-steps { margin-bottom: 6px; }
+.tool-steps { margin-top: 6px; }
 .tool-step { font-size: 12px; color: #94a3b8; background: #0f172a80; border-radius: 6px; padding: 4px 10px; margin-bottom: 4px; }
 .tool-done { color: #34d399; margin-left: 6px; }
 

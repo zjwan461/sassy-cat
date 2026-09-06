@@ -41,6 +41,8 @@ class AgentHolder:
             skills=["/skills"],
             tools=[get_date_time, internet_search, run_command, run_python],
             interrupt_on={
+                "run_command": True,
+                "run_python": True,
                 "write_file": True,
                 "edit_file": True,
                 "delete": True,
