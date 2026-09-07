@@ -210,6 +210,7 @@ async def ws_agent_endpoint(ws: WebSocket):
                 elif mtype == "llm.test":
                     await _handle_llm_test(ws, payload)
                 elif mtype == "config.invalidate":
+                    config_loader.reload_config()
                     holder.invalidate()
                     await _send(ws, envelope("config.invalidated", {"paths": payload.get("paths", [])}))
                 elif mtype == "client.event":

@@ -94,11 +94,13 @@ class AppConfig:
 
 
 _current: AppConfig = AppConfig(json.loads(json.dumps(DEFAULTS)))
+_config_path: str | None = None
 
 
 def load_config(path: str | None) -> AppConfig:
     """加载用户配置文件并与默认值合并，结果作为全局当前配置"""
-    global _current
+    global _current, _config_path
+    _config_path = path
     data = json.loads(json.dumps(DEFAULTS))  # deep copy defaults
     if path and os.path.isfile(path):
         try:
@@ -113,6 +115,14 @@ def load_config(path: str | None) -> AppConfig:
     data = _env_overrides(data)
     _current = AppConfig(data)
     return _current
+
+
+def reload_config() -> AppConfig:
+    """重新从磁盘读取配置文件并更新全局配置（热重载）"""
+    if _config_path is None:
+        logger.warning("reload_config: 未记录配置文件路径，跳过")
+        return _current
+    return load_config(_config_path)
 
 
 def current() -> AppConfig:

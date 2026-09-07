@@ -179,11 +179,53 @@ async function restartAgent() {
   showToast(res.message || '重启中…')
 }
 
-function testConnection() {
-  connect()
+async function testConnection() {
   testing.value = true
   testResult.value = null
-  send('llm.test', { profileName: activeProfile.value })
+
+  const baseUrl = form.baseUrl.trim()
+  const apiKey = form.apiKey.trim()
+  const model = form.model.trim()
+
+  if (!baseUrl || !apiKey || !model) {
+    testing.value = false
+    testResult.value = { ok: false, text: '请先填写 Base URL、API Key 和模型名称' }
+    return
+  }
+
+  const startTime = Date.now()
+  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [{ role: 'user', content: 'Hi' }],
+        max_tokens: 10
+      })
+    })
+
+    const latencyMs = Date.now() - startTime
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      testResult.value = { ok: false, text: `连接失败（HTTP ${response.status}）：${errorText.slice(0, 100)}` }
+    } else {
+      const data = await response.json()
+      const reply = data.choices?.[0]?.message?.content || 'OK'
+      testResult.value = { ok: true, text: `连接成功（${latencyMs}ms）：${reply.slice(0, 50)}` }
+    }
+  } catch (error) {
+    const latencyMs = Date.now() - startTime
+    testResult.value = { ok: false, text: `连接失败（${latencyMs}ms）：${error.message}` }
+  } finally {
+    testing.value = false
+  }
 }
 
 function previewPrompt() {
@@ -194,12 +236,6 @@ function previewPrompt() {
 onMounted(() => {
   loadConfig()
   connect()
-  on('llm.test.result', (p) => {
-    testing.value = false
-    testResult.value = p.ok
-      ? { ok: true, text: `连接成功（${p.latencyMs}ms）：${p.reply}` }
-      : { ok: false, text: '连接失败：' + p.error }
-  })
   on('prompt.preview.result', (p) => { preview.value = p.prompt })
 })
 </script>
