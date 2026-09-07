@@ -30,6 +30,18 @@
               </template>
               <template v-else>{{ m.content }}<span v-if="m.streaming" class="cursor">▌</span></template>
             </div>
+            <!-- 操作条：复制按钮（豆包风格图标按钮），助手消息流式期间隐藏 -->
+            <div v-if="isAssistant(m) ? (!m.streaming && (m.content || m.reasoning)) : !!m.content" class="msg-actions">
+              <button
+                class="action-btn"
+                type="button"
+                :title="m.copied === false ? '复制失败' : '复制'"
+                @click="copyMessage(m)"
+              >
+                <svg v-if="m.copied" class="action-icon copied" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <svg v-else class="action-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              </button>
+            </div>
             <!-- 工具步骤条：放在气泡下方，避免新消息把正文顶走 -->
             <div v-if="m.tools && m.tools.length" class="tool-steps">
               <div v-for="(t, i) in m.tools" :key="i" class="tool-step">
@@ -93,6 +105,41 @@ function isAssistant(m) {
   return m.role === 'assistant'
 }
 
+// 复制助手消息：包含深度思考内容 + 正文
+let copyTimer = null
+async function copyMessage(m) {
+  const parts = []
+  if (m.reasoning) parts.push('【深度思考】\n' + m.reasoning)
+  if (m.content) parts.push(m.content)
+  const text = parts.join('\n\n')
+  if (!text) return
+  let ok = false
+  try {
+    await navigator.clipboard.writeText(text)
+    ok = true
+  } catch {
+    // clipboard API 不可用时回退
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      ok = document.execCommand('copy')
+      document.body.removeChild(ta)
+    } catch { ok = false }
+  }
+  if (ok) {
+    m.copied = true
+    clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => { m.copied = false }, 1500)
+  } else {
+    m.copied = false
+    setTimeout(() => { m.copied = undefined }, 1500)
+  }
+}
+
 function summarizeInterrupt(payload) {
   try {
     const actions = payload?.actions || []
@@ -144,8 +191,11 @@ onMounted(() => {
   unsubs.push(on('chat.delta', (p) => {
     const m = messages.find((x) => x.id === p.msgId)
     if (m) {
-      // 收到正文 delta 时，标记思考阶段结束
-      if (m.thinking) m.thinking = false
+      // 收到正文 delta 时，标记思考阶段结束，并立即折叠深度思考区域
+      if (m.thinking) {
+        m.thinking = false
+        m.reasoningOpen = false
+      }
       m.content += p.text
       scrollBottom()
     }
@@ -233,6 +283,18 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
 details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .thinking-dot { color: #6366f1; animation: blink 1s infinite; margin-left: 2px; }
 .reasoning-content { padding: 0 14px 10px 14px; color: #64748b; font-size: 13px; font-style: italic; white-space: pre-wrap; word-break: break-word; line-height: 1.5; border-top: 1px dashed #334155; padding-top: 8px; }
+
+/* 消息操作条（豆包风格：无边框图标按钮，hover 浅底） */
+.msg-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin-top: 6px; }
+.action-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border: none; border-radius: 8px;
+  background: transparent; color: #64748b; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.action-btn:hover { background: #33415580; color: #cbd5e1; }
+.action-btn .action-icon { display: block; }
+.action-btn .action-icon.copied { color: #34d399; }
 
 .tool-steps { margin-top: 6px; }
 .tool-step { font-size: 12px; color: #94a3b8; background: #0f172a80; border-radius: 6px; padding: 4px 10px; margin-bottom: 4px; }
