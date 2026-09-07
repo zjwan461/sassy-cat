@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAgentInfo: () => ipcRenderer.invoke('get-agent-info'),
   restartAgent: () => ipcRenderer.invoke('agent:restart'),
 
+  // 测试 LLM 连接（经主进程，无 CORS 限制）
+  testLlmConnection: (params) => ipcRenderer.invoke('test-llm-connection', params),
+
   // 事件监听
   onNavigateChat: (callback) => ipcRenderer.on('navigate-chat', () => callback()),
   onStatusUpdate: (callback) => ipcRenderer.on('status-update', (event, status) => callback(status)),

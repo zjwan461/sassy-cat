@@ -473,6 +473,41 @@ ipcMain.handle('open-external', async (event, url) => {
   return { success: false, message: '无效的链接地址' };
 });
 
+// 测试 LLM 连接（主进程发起，无 CORS 限制）
+ipcMain.handle('test-llm-connection', async (event, params) => {
+  const { baseUrl, apiKey, model } = params || {};
+  if (!baseUrl || !apiKey || !model) {
+    return { ok: false, error: '请填写完整的 Base URL、API Key 和模型名称' };
+  }
+  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const startTime = Date.now();
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'Hi' }],
+        max_tokens: 10,
+      }),
+    });
+    const latencyMs = Date.now() - startTime;
+    if (!resp.ok) {
+      const errText = await resp.text();
+      return { ok: false, error: `HTTP ${resp.status}: ${errText.slice(0, 120)}` };
+    }
+    const data = await resp.json();
+    const reply = data.choices?.[0]?.message?.content || 'OK';
+    return { ok: true, latencyMs, reply: reply.slice(0, 80) };
+  } catch (e) {
+    const latencyMs = Date.now() - startTime;
+    return { ok: false, error: `${e.message}` };
+  }
+});
+
 // 环境检查失败时，用户主动退出程序
 ipcMain.handle('quit-app', () => {
   app.isQuitting = true;
