@@ -47,11 +47,17 @@
               <div v-for="(t, i) in m.tools" :key="i" class="tool-step">
                 🐟 本喵正在叼小鱼干：<b>{{ t.name }}</b>
                 <span v-if="t.done" class="tool-done">✓</span>
+                <pre v-if="t.args" class="tool-args">{{ t.args }}</pre>
               </div>
             </div>
             <!-- interrupt 确认 -->
             <div v-if="m.interrupt" class="interrupt-bar">
-              <span>⚠️ 需要高危操作确认：{{ summarizeInterrupt(m.interrupt) }}</span>
+              <div class="interrupt-title">⚠️ 需要高危操作确认，请核对以下参数：</div>
+              <div v-for="(a, i) in interruptActions(m.interrupt)" :key="i" class="interrupt-action">
+                <div class="interrupt-action-name">{{ a.name }}</div>
+                <pre class="interrupt-action-args">{{ a.argsText }}</pre>
+              </div>
+              <div v-if="!interruptActions(m.interrupt).length" class="interrupt-fallback">{{ summarizeInterrupt(m.interrupt) }}</div>
               <div class="interrupt-btns">
                 <button class="btn approve" @click="confirmTool(m.id, true)">允许</button>
                 <button class="btn reject" @click="confirmTool(m.id, false)">拒绝</button>
@@ -148,6 +154,24 @@ function summarizeInterrupt(payload) {
   } catch { return '未知操作' }
 }
 
+// 从 interrupt payload 提取待确认操作及其完整参数（action_requests 自带 args）
+function interruptActions(payload) {
+  try {
+    const actions = payload?.actions || []
+    return actions.flatMap(a => (a?.action_requests || []).map(r => ({
+      name: r.name || '未知操作',
+      argsText: r.args && Object.keys(r.args).length
+        ? JSON.stringify(r.args, null, 2)
+        : '(无参数)',
+    })))
+  } catch { return [] }
+}
+
+// 尝试美化 JSON（参数流式拼接过程中可能不完整，失败则原样展示）
+function prettyArgs(raw) {
+  try { return JSON.stringify(JSON.parse(raw), null, 2) } catch { return raw }
+}
+
 function submit() {
   const text = draft.value.trim()
   if (!text) return
@@ -228,7 +252,17 @@ onMounted(() => {
   unsubs.push(on('agent.tool_call', (p) => {
     const m = messages.find((x) => x.id === p.msgId)
     if (m && p.phase === 'start') {
-      m.tools.push({ name: p.name, done: false })
+      m.tools.push({ name: p.name, done: false, args: '' })
+      scrollBottom()
+    }
+  }))
+  unsubs.push(on('agent.tool_args', (p) => {
+    // 参数增量片段追加到最近一个进行中的工具步骤，流式展示
+    const m = messages.find((x) => x.id === p.msgId)
+    if (!m || !m.tools || !m.tools.length) return
+    const active = [...m.tools].reverse().find((t) => !t.done)
+    if (active) {
+      active.args = prettyArgs((active.args || '') + (p.args || ''))
       scrollBottom()
     }
   }))
@@ -299,8 +333,14 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .tool-steps { margin-top: 6px; }
 .tool-step { font-size: 12px; color: #94a3b8; background: #0f172a80; border-radius: 6px; padding: 4px 10px; margin-bottom: 4px; }
 .tool-done { color: #34d399; margin-left: 6px; }
+.tool-args { margin: 4px 0 0; padding: 6px 8px; background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; color: #7dd3fc; font-size: 11px; font-family: Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; }
 
 .interrupt-bar { margin-top: 8px; background: #451a03; border: 1px solid #b45309; border-radius: 8px; padding: 10px 12px; color: #fbbf24; font-size: 13px; }
+.interrupt-title { font-weight: 600; }
+.interrupt-action { margin-top: 6px; background: #0f172a; border: 1px solid #78350f; border-radius: 6px; padding: 6px 10px; }
+.interrupt-action-name { color: #fcd34d; font-weight: 600; font-size: 12px; }
+.interrupt-action-args { margin: 4px 0 0; color: #7dd3fc; font-size: 12px; font-family: Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
+.interrupt-fallback { margin-top: 4px; }
 .interrupt-btns { margin-top: 8px; display: flex; gap: 8px; }
 
 .msg-error { margin-top: 6px; color: #f87171; font-size: 13px; }

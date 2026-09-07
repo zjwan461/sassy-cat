@@ -6,6 +6,7 @@ Agent 流式运行器：在独立线程消费 langgraph agent.stream，
 事件类型（dict）：
   {"kind": "delta", "text": str}                    # 流式 token
   {"kind": "tool", "name": str, "phase": "start"}   # 工具调用开始
+  {"kind": "tool_args", "args": str}                # 工具参数增量片段（JSON 分片流）
   {"kind": "interrupt", "payload": dict}            # 高危操作待确认
   {"kind": "done", "text": str}                     # 本轮结束（最终全文）
   {"kind": "error", "message": str}                 # 异常
@@ -24,16 +25,22 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_item(item: dict):
-    """从 content_blocks 首个块解析事件，返回 dict 或 None"""
+    """从单个 content_block 解析事件，返回 list[dict]（可能为空）"""
     t = item.get("type")
     if t == "text":
-        return {"kind": "delta", "text": item.get("text", "")}
+        return [{"kind": "delta", "text": item.get("text", "")}]
     if t == "tool_call_chunk":
-        if item.get("id"):  # 每个工具调用的首块携带 id
-            return {"kind": "tool", "name": item.get("name"), "phase": "start"}
+        events = []
+        if item.get("id"):  # 每个工具调用的首块携带 id 与 name
+            events.append({"kind": "tool", "name": item.get("name"), "phase": "start"})
+        # 后续块携带 args 增量片段（不完整的 JSON 字符串分片），透传给前端流式拼接
+        args_part = item.get("args")
+        if args_part:
+            events.append({"kind": "tool_args", "args": args_part})
+        return events
     if t == "reasoning":
-        return {"kind": "reasoning", "text": item.get("reasoning", "")}
-    return None
+        return [{"kind": "reasoning", "text": item.get("reasoning", "")}]
+    return []
 
 
 def _worker_stream(
@@ -55,12 +62,11 @@ def _worker_stream(
             cb = msg_chunk.content_blocks
             if not cb:
                 continue
-            event = _extract_item(cb[0])
-            if event is None:
-                continue
-            if event["kind"] == "delta":
-                final_parts.append(event["text"])
-            q.sync_q.put(event)
+            for item in cb:  # 遍历全部块，避免同帧多块时丢事件
+                for event in _extract_item(item):
+                    if event["kind"] == "delta":
+                        final_parts.append(event["text"])
+                    q.sync_q.put(event)
 
         # 流结束后检查是否停在 interrupt（待确认）
         if not cancel.is_set():

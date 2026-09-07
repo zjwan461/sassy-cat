@@ -46,13 +46,18 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str):
         await hub.publish(session_id, envelope(evt_type, payload), exclude=None)
 
     buffer = []
+    args_buffer = []
     last_flush = time.monotonic()
 
     async def flush():
-        nonlocal buffer, last_flush
+        nonlocal buffer, args_buffer, last_flush
         if buffer:
             await emit("chat.delta", {"msgId": msg_id, "text": "".join(buffer)})
             buffer = []
+        if args_buffer:
+            # 工具参数增量合并发送（节流，避免高频小帧）
+            await emit("agent.tool_args", {"msgId": msg_id, "args": "".join(args_buffer)})
+            args_buffer = []
         last_flush = time.monotonic()
 
     try:
@@ -62,6 +67,11 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str):
                 buffer.append(event["text"])
                 if (time.monotonic() - last_flush >= FLUSH_INTERVAL
                         or sum(len(x) for x in buffer) >= FLUSH_MAX_CHARS):
+                    await flush()
+            elif kind == "tool_args":
+                args_buffer.append(event["args"])
+                if (time.monotonic() - last_flush >= FLUSH_INTERVAL
+                        or sum(len(x) for x in args_buffer) >= FLUSH_MAX_CHARS):
                     await flush()
             elif kind == "reasoning":
                 await emit("agent.reasoning", {"msgId": msg_id, "text": event.get("text", "")})

@@ -20,6 +20,7 @@ def main():
     print(f"[Agent version={version}] user: {user_prompt}")
 
     current_agent = ""
+    in_tool_args = False  # 是否正处于工具参数流式输出中（用于结束换行）
     for _, chunk in agent.stream(
         {"messages": [{"role": "user", "content": user_prompt}]},
         config={"configurable": {"thread_id": "cli-debug"}},
@@ -32,19 +33,34 @@ def main():
         lc_agent_name = metadata.get("lc_agent_name", "")
         if current_agent != lc_agent_name:
             current_agent = lc_agent_name
+            if in_tool_args:
+                print()
+                in_tool_args = False
             print(f"\nAgent: {current_agent} 开始发言：")
 
         if cb:
-            item = cb[0]
-            if item.get("type") == "text":
-                print(item.get("text"), end="", flush=True)
-            elif item.get("type") == "reasoning":
-                print(item.get("reasoning"), end="", flush=True)
-            elif item.get("type") == "tool_call_chunk":
-                if item.get("id"):
-                    print(f"\n正在调用工具：{item.get('name')}")
-            else:
-                print(item)
+            for item in cb:  # 遍历全部块，避免同帧多块时丢事件
+                t = item.get("type")
+                if t == "text" or t == "reasoning":
+                    if in_tool_args:  # 参数流结束，换行后继续正文
+                        print()
+                        in_tool_args = False
+                    print(item.get(t) or "", end="", flush=True)
+                elif t == "tool_call_chunk":
+                    if item.get("id"):  # 新工具调用开始
+                        if in_tool_args:
+                            print()
+                        print(f"\n正在调用工具：{item.get('name')}", flush=True)
+                        in_tool_args = False
+                    args_part = item.get("args")
+                    if args_part:
+                        # 流式输出参数增量（args 为不完整 JSON 分片，逐段打印）
+                        print(args_part, end="", flush=True)
+                        in_tool_args = True
+                else:
+                    print(item)
+    if in_tool_args:
+        print()
 
 
 if __name__ == "__main__":
