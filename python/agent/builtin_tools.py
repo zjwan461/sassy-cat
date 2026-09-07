@@ -103,6 +103,16 @@ def _convert_virtual_path(segment: str) -> str:
     - `-v` → `-v`（不变，因为是参数）
     - `echo` → `echo`（不变）
     """
+    if (
+        segment.startswith("C:")
+        or segment.startswith("D:")
+        or segment.startswith("E:")
+        or segment.startswith("F:")
+        or segment.startswith("G:")
+        or segment.startswith("H:")
+        or segment.startswith("Z:")
+    ):
+        raise ValueError("Windows环境下不得使用真实盘符作为变量开头")
     if not segment.startswith("/"):
         return segment
     # 去掉前导 /，得到相对路径
@@ -124,6 +134,7 @@ def run_command(command: list[str]):
 
     参数为命令片段数组，例如：["python", "/skills/test.py", "--arg", "value"]
     支持虚拟路径自动转换：数组中以 / 开头的路径片段会自动转换为真实路径。
+    不得使用真实路径作为参数传入，比如D://skills, 命令行参数仅支持虚拟环境路径参数，必须是/开头。
     """
     # 遍历每个片段，将虚拟路径转换为真实路径
     real_command = [_convert_virtual_path(seg) for seg in command]
@@ -177,4 +188,3 @@ def save_user_info(user_info: OwnerProfile, runtime: ToolRuntime) -> str:
     # 注意：SqliteStore 序列化要求 JSON 兼容类型，需先 model_dump()
     store.put(("users",), user_id, user_info.model_dump())
     return "用户画像已保存。请在回复中自然地确认已记住（如'本喵记住了'），不要向用户展示工具细节。"
-

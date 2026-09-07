@@ -124,13 +124,16 @@ async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event
         q.close()
 
 
-async def resume_turn(thread_id: str, approved: bool, cancel_event: threading.Event):
-    """用户对 interrupt 确认后恢复执行（仅对当前仍挂起的 thread 有效）"""
+async def resume_turn(thread_id: str, decisions: list[dict], cancel_event: threading.Event):
+    """用户对 interrupt 确认后恢复执行（仅对当前仍挂起的 thread 有效）。
+
+    decisions: 决策数组，每个元素为 {"type": "approve"|"reject"}，
+    数量必须与当前挂起的 interrupt 数量一致。
+    """
     version, agent = holder.get()
     q = janus.Queue()
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": _recursion_limit()}
-    decision = "approve" if approved else "reject"
-    payload = Command(resume={"decisions": [{"type": decision}]})
+    payload = Command(resume={"decisions": decisions})
     thread = threading.Thread(
         target=_worker_stream,
         args=(agent, payload, config, q, cancel_event),

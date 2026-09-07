@@ -33,6 +33,7 @@ Thumbs.db
 
 # Config (可选，如果需要忽略配置文件)
 # config.json
-runtime/large_tool_results
-runtime/*.sqlite*
-runtime/tmp
+
+# Runtime: 排除所有内容但保留 skills 目录
+runtime/*
+!runtime/skills/

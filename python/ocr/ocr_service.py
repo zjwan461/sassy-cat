@@ -126,8 +126,8 @@ def is_text_file(data: bytes) -> bool:
 
 
 if __name__ == "__main__":
-    with open(r"C:\Users\89712\Desktop\大众银行生成式AI信贷审批文件系统.pdf", "rb") as f:
+    with open(r"C:\Users\89712\Desktop\1.pdf", "rb") as f:
         file_bytes = f.read()
         import asyncio
-        content = asyncio.run(do_ocr("大众银行生成式AI信贷审批文件系统.pdf", file_bytes))["page_content"]
+        content = asyncio.run(do_ocr("1.pdf", file_bytes))["page_content"]
         print(content)

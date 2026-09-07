@@ -134,12 +134,20 @@ async def _handle_chat_send(ws, payload: dict):
 
 async def _handle_tool_confirm(ws, payload: dict):
     session_id = payload.get("sessionId") or "default"
-    approved = bool(payload.get("approved"))
     msg_id = uuid.uuid4().hex[:12]
     cancel = threading.Event()
     _session_cancel[session_id] = cancel
     await hub.publish(session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id}))
-    gen = runner.resume_turn(session_id, approved, cancel)
+
+    # 新协议：前端直接发送 decisions 数组
+    decisions = payload.get("decisions")
+    if decisions and isinstance(decisions, list):
+        gen = runner.resume_turn(session_id, decisions, cancel)
+    else:
+        # 兼容旧协议：approved 布尔值
+        approved = bool(payload.get("approved"))
+        gen = runner.resume_turn(session_id, [{"type": "approve" if approved else "reject"}], cancel)
+
     await _stream_turn(ws, session_id, gen, msg_id)
 
 

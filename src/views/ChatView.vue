@@ -51,17 +51,26 @@
               </div>
             </div>
             <!-- interrupt 确认 -->
-            <div v-if="m.interrupt" class="interrupt-bar">
+            <div v-if="m.interruptActions?.length" class="interrupt-bar">
               <div class="interrupt-title">⚠️ 需要高危操作确认，请核对以下参数：</div>
-              <div v-for="(a, i) in interruptActions(m.interrupt)" :key="i" class="interrupt-action">
-                <div class="interrupt-action-name">{{ a.name }}</div>
+              <div class="interrupt-global-btns" v-if="hasPendingDecisions(m)">
+                <button class="btn approve-all" @click="approveAll(m.id)">✅ 全部允许</button>
+              </div>
+              <div v-for="(a, i) in m.interruptActions" :key="i" class="interrupt-action" :class="getActionDecisionClass(m, i)">
+                <div class="interrupt-action-header">
+                  <span class="interrupt-action-index">#{{ i + 1 }}</span>
+                  <span class="interrupt-action-name">{{ a.name }}</span>
+                  <span v-if="m.interruptDecisions?.[i]" class="interrupt-action-status">
+                    {{ m.interruptDecisions[i] === 'approve' ? '✅ 已允许' : '❌ 已拒绝' }}
+                  </span>
+                </div>
                 <pre class="interrupt-action-args">{{ a.argsText }}</pre>
+                <div v-if="m.interruptDecisions?.[i] === undefined" class="interrupt-action-btns">
+                  <button class="btn-sm approve" @click="onActionDecision(m.id, i, 'approve')">允许</button>
+                  <button class="btn-sm reject" @click="onActionDecision(m.id, i, 'reject')">拒绝</button>
+                </div>
               </div>
-              <div v-if="!interruptActions(m.interrupt).length" class="interrupt-fallback">{{ summarizeInterrupt(m.interrupt) }}</div>
-              <div class="interrupt-btns">
-                <button class="btn approve" @click="confirmTool(m.id, true)">允许</button>
-                <button class="btn reject" @click="confirmTool(m.id, false)">拒绝</button>
-              </div>
+              <div v-if="!m.interruptActions?.length" class="interrupt-fallback">{{ summarizeInterrupt(m.interrupt) }}</div>
             </div>
             <div v-if="m.error" class="msg-error">{{ m.error }}</div>
           </div>
@@ -172,6 +181,60 @@ function prettyArgs(raw) {
   try { return JSON.stringify(JSON.parse(raw), null, 2) } catch { return raw }
 }
 
+// 判断消息是否还有未确认的操作
+function hasPendingDecisions(m) {
+  if (!m.interruptDecisions || !m.interruptActions) return false
+  return m.interruptDecisions.some((d, i) => d === undefined && i < m.interruptActions.length)
+}
+
+// 获取操作的样式类（已允许/已拒绝/待确认）
+function getActionDecisionClass(m, i) {
+  if (m.interruptDecisions?.[i] === 'approve') return 'action-approved'
+  if (m.interruptDecisions?.[i] === 'reject') return 'action-rejected'
+  return 'action-pending'
+}
+
+// 单个操作的确认/拒绝
+function onActionDecision(msgId, index, decision) {
+  const m = messages.find((x) => x.id === msgId)
+  if (!m) return
+  // 记录该操作的决策
+  if (!m.interruptDecisions) m.interruptDecisions = new Array(m.interruptActions.length).fill(undefined)
+  m.interruptDecisions[index] = decision
+
+  // 检查是否所有操作都已确认
+  const allDecided = m.interruptDecisions.every((d) => d !== undefined)
+  if (allDecided) {
+    // 全部确认后，发送 decisions 数组
+    const decisions = m.interruptDecisions.map((d) => ({ type: d }))
+    send('tool.confirm', { sessionId: state.sessionId, decisions })
+    generating.value = true
+    m.interruptActions = null
+    m.interruptDecisions = null
+  }
+  scrollBottom()
+}
+
+// 全部允许
+function approveAll(msgId) {
+  const m = messages.find((x) => x.id === msgId)
+  if (!m) return
+  const decisions = m.interruptActions.map(() => ({ type: 'approve' }))
+  m.interruptActions = null
+  m.interruptDecisions = null
+  send('tool.confirm', { sessionId: state.sessionId, decisions })
+  generating.value = true
+  scrollBottom()
+}
+
+// 兼容旧协议：一键允许/拒绝全部
+function confirmTool(msgId, approved) {
+  const m = messages.find((x) => x.id === msgId)
+  if (m) { m.interrupt = null }
+  send('tool.confirm', { sessionId: state.sessionId, approved })
+  generating.value = true
+}
+
 function submit() {
   const text = draft.value.trim()
   if (!text) return
@@ -184,13 +247,6 @@ function submit() {
 
 function stopGen() {
   send('chat.cancel', { sessionId: state.sessionId })
-}
-
-function confirmTool(msgId, approved) {
-  const m = messages.find((x) => x.id === msgId)
-  if (m) { m.interrupt = null }
-  send('tool.confirm', { sessionId: state.sessionId, approved })
-  generating.value = true
 }
 
 onMounted(() => {
@@ -268,7 +324,12 @@ onMounted(() => {
   }))
   unsubs.push(on('agent.interrupt', (p) => {
     const m = messages.find((x) => x.id === p.msgId)
-    if (m) { m.interrupt = p; m.streaming = false }
+    if (m) {
+      m.interrupt = p
+      m.interruptActions = interruptActions(p)
+      m.interruptDecisions = new Array(m.interruptActions.length).fill(undefined)
+      m.streaming = false
+    }
     generating.value = false
     scrollBottom()
   }))
@@ -336,12 +397,23 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .tool-args { margin: 4px 0 0; padding: 6px 8px; background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; color: #7dd3fc; font-size: 11px; font-family: Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; }
 
 .interrupt-bar { margin-top: 8px; background: #451a03; border: 1px solid #b45309; border-radius: 8px; padding: 10px 12px; color: #fbbf24; font-size: 13px; }
-.interrupt-title { font-weight: 600; }
-.interrupt-action { margin-top: 6px; background: #0f172a; border: 1px solid #78350f; border-radius: 6px; padding: 6px 10px; }
+.interrupt-title { font-weight: 600; margin-bottom: 8px; }
+.interrupt-global-btns { margin-bottom: 10px; display: flex; gap: 8px; }
+.btn.approve-all { background: #065f46; color: #6ee7b7; padding: 6px 16px; font-weight: 600; }
+.interrupt-action { margin-top: 6px; background: #0f172a; border: 1px solid #78350f; border-radius: 6px; padding: 6px 10px; transition: border-color 0.2s, opacity 0.2s; }
+.interrupt-action.action-approved { border-color: #059669; opacity: 0.85; }
+.interrupt-action.action-rejected { border-color: #dc2626; opacity: 0.7; }
+.interrupt-action-header { display: flex; align-items: center; gap: 6px; }
+.interrupt-action-index { color: #94a3b8; font-size: 11px; font-weight: 600; }
 .interrupt-action-name { color: #fcd34d; font-weight: 600; font-size: 12px; }
+.interrupt-action-status { margin-left: auto; font-size: 12px; }
 .interrupt-action-args { margin: 4px 0 0; color: #7dd3fc; font-size: 12px; font-family: Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
+.interrupt-action-btns { margin-top: 6px; display: flex; gap: 6px; }
 .interrupt-fallback { margin-top: 4px; }
 .interrupt-btns { margin-top: 8px; display: flex; gap: 8px; }
+.btn-sm { border: none; border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
+.btn-sm.approve { background: #065f46; color: #6ee7b7; }
+.btn-sm.reject { background: #7f1d1d; color: #fca5a5; }
 
 .msg-error { margin-top: 6px; color: #f87171; font-size: 13px; }
 
