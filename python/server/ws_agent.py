@@ -63,6 +63,8 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str):
                 if (time.monotonic() - last_flush >= FLUSH_INTERVAL
                         or sum(len(x) for x in buffer) >= FLUSH_MAX_CHARS):
                     await flush()
+            elif kind == "reasoning":
+                await emit("agent.reasoning", {"msgId": msg_id, "text": event.get("text", "")})
             elif kind == "tool":
                 await flush()
                 await emit("agent.tool_call", {
@@ -144,8 +146,15 @@ async def _handle_history(ws, payload: dict):
             if mtype in ("human", "ai") and getattr(m, "content", None):
                 content = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)
                 if content.strip():
-                    items.append({"role": "user" if mtype == "human" else "assistant",
-                                  "text": content})
+                    item = {"role": "user" if mtype == "human" else "assistant",
+                            "text": content}
+                    # 提取思考模型的 reasoning 内容
+                    if mtype == "ai":
+                        ak = getattr(m, "additional_kwargs", {}) or {}
+                        reasoning = ak.get("reasoning_content")
+                        if reasoning and isinstance(reasoning, str) and reasoning.strip():
+                            item["reasoning"] = reasoning
+                    items.append(item)
         await _send(ws, envelope("chat.history.result", {"sessionId": session_id, "items": items}))
     except Exception as e:
         logger.warning(f"读取历史失败: {e}")

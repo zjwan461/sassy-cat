@@ -21,6 +21,7 @@ DEFAULTS = {
         "profiles": {
             "default": {
                 "label": "默认",
+                "provider": "openai",
                 "baseUrl": "",
                 "apiKey": "",
                 "model": "",

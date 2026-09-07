@@ -31,10 +31,14 @@ def _extract_item(item: dict):
     if t == "tool_call_chunk":
         if item.get("id"):  # 每个工具调用的首块携带 id
             return {"kind": "tool", "name": item.get("name"), "phase": "start"}
+    if t == "reasoning":
+        return {"kind": "reasoning", "text": item.get("reasoning", "")}
     return None
 
 
-def _worker_stream(agent, input_payload, config, q: janus.Queue, cancel: threading.Event):
+def _worker_stream(
+    agent, input_payload, config, q: janus.Queue, cancel: threading.Event
+):
     """在线程内运行阻塞的 agent.stream，事件推入 q.sync_q"""
     final_parts = []
     try:
@@ -68,7 +72,9 @@ def _worker_stream(agent, input_payload, config, q: janus.Queue, cancel: threadi
                         for itr in getattr(task, "interrupts", []) or []:
                             interrupts.append(getattr(itr, "value", None))
                     if interrupts:
-                        q.sync_q.put({"kind": "interrupt", "payload": {"actions": interrupts}})
+                        q.sync_q.put(
+                            {"kind": "interrupt", "payload": {"actions": interrupts}}
+                        )
                         q.sync_q.put({"kind": "done", "text": "".join(final_parts)})
                         return
             except Exception as e:
@@ -87,7 +93,9 @@ async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
     payload = {"messages": [{"role": "user", "content": user_text}]}
     thread = threading.Thread(
-        target=_worker_stream, args=(agent, payload, config, q, cancel_event), daemon=True
+        target=_worker_stream,
+        args=(agent, payload, config, q, cancel_event),
+        daemon=True,
     )
     thread.start()
     try:
@@ -108,7 +116,9 @@ async def resume_turn(thread_id: str, approved: bool, cancel_event: threading.Ev
     decision = "approve" if approved else "reject"
     payload = Command(resume={"decisions": [{"type": decision}]})
     thread = threading.Thread(
-        target=_worker_stream, args=(agent, payload, config, q, cancel_event), daemon=True
+        target=_worker_stream,
+        args=(agent, payload, config, q, cancel_event),
+        daemon=True,
     )
     thread.start()
     try:

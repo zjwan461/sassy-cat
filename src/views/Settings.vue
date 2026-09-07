@@ -16,6 +16,14 @@
           </select>
         </div>
         <div class="field">
+          <label>Provider</label>
+          <select v-model="form.provider">
+            <option value="openai">OpenAI‑Compatible</option>
+            <option value="deepseek">DeepSeek-Compatible</option>
+          </select>
+          <span class="hint">OpenAI: reasoning 放在 content 中；DeepSeek: reasoning 放在 reasoning_content 中</span>
+        </div>
+        <div class="field">
           <label>Base URL</label>
           <input v-model="form.baseUrl" placeholder="http://localhost:8080/v1" />
         </div>
@@ -86,7 +94,7 @@ const api = window.electronAPI
 const activeProfile = ref('default')
 const profiles = ref({})
 const form = reactive({
-  baseUrl: '', apiKey: '', model: '', extraParamsText: '{}',
+  provider: 'openai', baseUrl: '', apiKey: '', model: '', extraParamsText: '{}',
   persona: '', idleEnabled: true, idleThreshold: 30, idleQuiet: 10
 })
 const showKey = ref(false)
@@ -122,6 +130,7 @@ async function loadConfig() {
 
 function fillFormFromProfile() {
   const p = profiles.value[activeProfile.value] || {}
+  form.provider = p.provider || 'openai'
   form.baseUrl = p.baseUrl || ''
   form.apiKey = p.apiKey || '' // 掩码值 ***abc
   form.model = p.model || ''
@@ -148,6 +157,7 @@ async function saveAll() {
   const prefix = `llm.profiles.${activeProfile.value}`
   const patches = [
     { path: 'llm.activeProfile', value: activeProfile.value },
+    { path: `${prefix}.provider`, value: form.provider },
     { path: `${prefix}.baseUrl`, value: form.baseUrl.trim() },
     { path: `${prefix}.model`, value: form.model.trim() },
     { path: `${prefix}.extraParams`, value: JSON.parse(form.extraParamsText || '{}') },
@@ -193,36 +203,15 @@ async function testConnection() {
     return
   }
 
-  const startTime = Date.now()
-  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`
-
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: model,
-        messages: [{ role: 'user', content: 'Hi' }],
-        max_tokens: 10
-      })
-    })
-
-    const latencyMs = Date.now() - startTime
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      testResult.value = { ok: false, text: `连接失败（HTTP ${response.status}）：${errorText.slice(0, 100)}` }
+    const result = await api.testLlmConnection({ baseUrl, apiKey, model })
+    if (result.ok) {
+      testResult.value = { ok: true, text: `连接成功（${result.latencyMs}ms）：${result.reply}` }
     } else {
-      const data = await response.json()
-      const reply = data.choices?.[0]?.message?.content || 'OK'
-      testResult.value = { ok: true, text: `连接成功（${latencyMs}ms）：${reply.slice(0, 50)}` }
+      testResult.value = { ok: false, text: `连接失败：${result.error}` }
     }
   } catch (error) {
-    const latencyMs = Date.now() - startTime
-    testResult.value = { ok: false, text: `连接失败（${latencyMs}ms）：${error.message}` }
+    testResult.value = { ok: false, text: `连接失败：${error.message}` }
   } finally {
     testing.value = false
   }

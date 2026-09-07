@@ -9,9 +9,12 @@ CLI 调试入口（历史 demo 改造）：
 import sys
 
 from agent.engine import holder
+from config_loader import load_config
+from langchain.messages import AIMessageChunk
 
 
 def main():
+    load_config("C:\\Users\\1\\AppData\\Roaming\\sassy-cat\\config.user.json")
     user_prompt = sys.argv[1] if len(sys.argv) > 1 else "hi"
     version, agent = holder.get()
     print(f"[Agent version={version}] user: {user_prompt}")
@@ -35,9 +38,13 @@ def main():
             item = cb[0]
             if item.get("type") == "text":
                 print(item.get("text"), end="", flush=True)
+            elif item.get("type") == "reasoning":
+                print(item.get("reasoning"), end="", flush=True)
             elif item.get("type") == "tool_call_chunk":
                 if item.get("id"):
                     print(f"\n正在调用工具：{item.get('name')}")
+            else:
+                print(item)
 
 
 if __name__ == "__main__":

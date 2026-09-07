@@ -18,6 +18,11 @@
         <div v-for="m in messages" :key="m.id" class="msg" :class="m.role">
           <div class="msg-avatar">{{ m.role === 'user' ? '🧑' : '🐱' }}</div>
           <div class="msg-body">
+            <!-- 深度思考区域：可折叠，仅在有助手消息且存在 reasoning 内容时显示 -->
+            <details v-if="m.reasoning" class="reasoning-block" :open="m.reasoningOpen">
+              <summary class="reasoning-summary">💭 深度思考<span v-if="m.thinking" class="thinking-dot">…</span></summary>
+              <div class="reasoning-content">{{ m.reasoning }}</div>
+            </details>
             <div class="msg-content">{{ m.content }}<span v-if="m.streaming" class="cursor">▌</span></div>
             <!-- 工具步骤条：放在气泡下方，避免新消息把正文顶走 -->
             <div v-if="m.tools && m.tools.length" class="tool-steps">
@@ -121,18 +126,33 @@ onMounted(() => {
   }))
   unsubs.push(on('chat.started', (p) => {
     currentMsgId = p.msgId
-    messages.push({ id: p.msgId, role: 'assistant', content: '', streaming: true, tools: [] })
+    messages.push({ id: p.msgId, role: 'assistant', content: '', reasoning: '', reasoningOpen: true, streaming: true, thinking: false, tools: [] })
     generating.value = true
     scrollBottom()
   }))
   unsubs.push(on('chat.delta', (p) => {
     const m = messages.find((x) => x.id === p.msgId)
-    if (m) { m.content += p.text; scrollBottom() }
+    if (m) {
+      // 收到正文 delta 时，标记思考阶段结束
+      if (m.thinking) m.thinking = false
+      m.content += p.text
+      scrollBottom()
+    }
+  }))
+  unsubs.push(on('agent.reasoning', (p) => {
+    const m = messages.find((x) => x.id === p.msgId)
+    if (m) {
+      m.reasoning = (m.reasoning || '') + (p.text || '')
+      m.thinking = true
+      scrollBottom()
+    }
   }))
   unsubs.push(on('chat.completed', (p) => {
     const m = messages.find((x) => x.id === p.msgId)
     if (m) {
       m.streaming = false
+      m.thinking = false
+      m.reasoningOpen = false
       // 以服务端最终全文为准（若比增量拼接更完整）
       if (p.text && p.text.length > m.content.length) m.content = p.text
     }
@@ -160,7 +180,7 @@ onMounted(() => {
   unsubs.push(on('chat.history.result', (p) => {
     if (messages.length === 0 && p.items && p.items.length) {
       p.items.forEach((it, i) => messages.push({
-        id: 'h-' + i, role: it.role, content: it.text, tools: []
+        id: 'h-' + i, role: it.role, content: it.text, reasoning: it.reasoning || '', reasoningOpen: false, thinking: false, tools: []
       }))
       scrollBottom()
     }
@@ -192,6 +212,14 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
 .msg.user .msg-content { background: #4338ca; border-color: #4f46e5; }
 .cursor { animation: blink 0.8s infinite; }
 @keyframes blink { 50% { opacity: 0; } }
+
+.reasoning-block { margin-bottom: 8px; background: #0f172a; border: 1px solid #334155; border-radius: 10px; overflow: hidden; }
+.reasoning-summary { cursor: pointer; padding: 8px 14px; color: #94a3b8; font-size: 13px; user-select: none; list-style: none; display: flex; align-items: center; gap: 6px; }
+.reasoning-summary::-webkit-details-marker { display: none; }
+.reasoning-summary::before { content: '▶'; font-size: 10px; transition: transform 0.2s; }
+details[open] > .reasoning-summary::before { transform: rotate(90deg); }
+.thinking-dot { color: #6366f1; animation: blink 1s infinite; margin-left: 2px; }
+.reasoning-content { padding: 0 14px 10px 14px; color: #64748b; font-size: 13px; font-style: italic; white-space: pre-wrap; word-break: break-word; line-height: 1.5; border-top: 1px dashed #334155; padding-top: 8px; }
 
 .tool-steps { margin-top: 6px; }
 .tool-step { font-size: 12px; color: #94a3b8; background: #0f172a80; border-radius: 6px; padding: 4px 10px; margin-bottom: 4px; }
