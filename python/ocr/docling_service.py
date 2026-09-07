@@ -7,12 +7,19 @@
 - 支持 PDF（含扫描件整页 OCR）、图片（png/jpg/tif 等）以及
   docx/xlsx/csv/md/pptx/html 等常规文档格式。
 """
+
+import os
+
+# 禁用 huggingface_hub 的 xet 存储后端，避免公开模型下载时出现 401 Unauthorized 错误。
+# 必须在导入 docling 相关模块之前设置。
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 import asyncio
 import io
 import logging
 import threading
 from pathlib import Path
-
+from docling_core.types.doc import ImageRefMode
 from docling.datamodel.base_models import ConversionStatus, InputFormat
 from docling.datamodel.pipeline_options import (
     PdfPipelineOptions,
@@ -55,6 +62,7 @@ def _build_converter() -> DocumentConverter:
     pdf_pipeline_options = PdfPipelineOptions(
         do_ocr=True,
         do_table_structure=True,
+        generate_picture_images=True,
         ocr_options=_build_ocr_options(),
     )
     pdf_pipeline_options.table_structure_options.do_cell_matching = True
@@ -65,9 +73,7 @@ def _build_converter() -> DocumentConverter:
             # PDF：布局分析 + OCR + 表格结构
             InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_pipeline_options),
             # 图片：复用 PDF 管线做整页 OCR
-            InputFormat.IMAGE: ImageFormatOption(
-                pipeline_options=pdf_pipeline_options
-            ),
+            InputFormat.IMAGE: ImageFormatOption(pipeline_options=pdf_pipeline_options),
             # 其余格式（docx/xlsx/csv/md/pptx/html）使用 Docling 默认
             # SimplePipeline 解析，无需在此显式配置。
         }
@@ -93,9 +99,7 @@ def _sync_convert(file_bytes: bytes, filename: str):
     return conv.convert(source=source)
 
 
-async def docling_to_markdown(
-    file_bytes: bytes, filename: str, trace_id: str = ""
-):
+async def docling_to_markdown(file_bytes: bytes, filename: str):
     """将文档/图片字节流转换为 Markdown。
 
     :param file_bytes: 文件原始字节
@@ -107,7 +111,7 @@ async def docling_to_markdown(
         if not file_bytes:
             raise ValueError("file_bytes is empty")
 
-        logger.info(f"Docling 处理文件: {filename} | trace_id={trace_id}")
+        logger.info(f"Docling 处理文件: {filename}")
         path = Path(filename.lower())
         result = await asyncio.to_thread(_sync_convert, file_bytes, filename)
 
@@ -115,23 +119,20 @@ async def docling_to_markdown(
         if result.status not in _OK_STATUSES or result.document is None:
             logger.error(
                 f"Docling 转换失败: status={result.status} errors={result.errors} "
-                f"| trace_id={trace_id}"
             )
             raise RuntimeError(
                 f"Docling conversion failed ({result.status}): {result.errors}"
             )
 
         # 导出 Markdown
-        md_text = result.document.export_to_markdown().strip()
+        md_text = result.document.export_to_markdown(image_mode=ImageRefMode.EMBEDDED).strip()
         logger.info(
             f"Docling 处理完成 | 状态: {result.status} | 字符数: {len(md_text)} "
-            f"| trace_id={trace_id}"
         )
 
         return {
             "page_content": md_text,
             "metadata": {
-                "trace_id": trace_id,
                 "filename": filename,
                 "ext": path.suffix,
                 "engine": "docling+rapidocr",
@@ -140,7 +141,5 @@ async def docling_to_markdown(
         }
 
     except Exception as e:
-        logger.error(
-            f"Docling 处理异常: {e} | trace_id={trace_id}", exc_info=True
-        )
+        logger.error(f"Docling 处理异常: {e}", exc_info=True)
         raise
