@@ -1,7 +1,7 @@
 {
-  "name": "electron-python-scaffold",
+  "name": "sassy-cat",
   "version": "1.0.0",
-  "description": "Electron + Python 桌面应用脚手架",
+  "description": "Electron + Python AI Agent能力的桌宠",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
