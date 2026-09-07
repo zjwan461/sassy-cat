@@ -1,4 +1,4 @@
-from langchain.tools import tool
+from langchain.tools import tool, ToolRuntime
 from datetime import datetime
 
 from typing import Literal
@@ -7,6 +7,8 @@ import os
 import sys
 import subprocess
 from pathlib import Path
+from agent.models import OwnerProfile
+from agent.constant import USER_ID
 
 
 @tool(description="获取当前时间日期")
@@ -151,3 +153,28 @@ def run_command(command: list[str]):
     if not result.stdout and not result.stderr:
         output.append("（无任何输出）")
     return "\n".join(output)
+
+
+# 允许智能体更新用户信息的工具
+@tool
+def save_user_info(user_info: OwnerProfile, runtime: ToolRuntime) -> str:
+    """保存/更新主人画像。只要对话中出现主人的个人信息就应主动调用，无需用户明确要求。
+
+    触发场景示例：
+    - 主人自报姓名或称呼："我叫小明"、"叫我老王"
+    - 主人表达偏好："我喜欢打篮球"、"我最讨厌香菜"、"别给我推荐咖啡"
+    - 主人透露习惯/作息："我经常熬夜"、"我每天早上六点跑步"
+    - 主人纠正画像中的旧信息："我现在不喝咖啡了"
+
+    使用规则：本工具为整体覆盖写入。调用前必须把 system prompt 中
+    [主人画像] 的已有信息与本次新信息合并成完整画像一并提交，
+    未提及的字段保留原值，禁止丢失旧数据。同一轮多条信息合并为一次调用。
+    """
+    # 访问 store - 与提供给 `create_agent` 的 store 相同
+    store = runtime.store
+    user_id = USER_ID
+    # 在 store 中存储数据 (namespace, key, data)
+    # 注意：SqliteStore 序列化要求 JSON 兼容类型，需先 model_dump()
+    store.put(("users",), user_id, user_info.model_dump())
+    return "用户画像已保存。请在回复中自然地确认已记住（如'本喵记住了'），不要向用户展示工具细节。"
+

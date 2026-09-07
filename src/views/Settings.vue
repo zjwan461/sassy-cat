@@ -100,12 +100,35 @@
       </div>
     </section>
 
+    <!-- 桌宠 -->
+    <section class="card">
+      <div class="card-header">桌宠</div>
+      <div class="card-body form">
+        <div class="field">
+          <label>快速提问快捷键（全局生效，唤起桌宠输入框）</label>
+          <div class="hotkey-row">
+            <div
+              class="hotkey-box" :class="{ recording: recordingKey, bad: hotkeyError }"
+              tabindex="0" title="点击后按下组合键进行录制"
+              @click="startRecord" @blur="stopRecord"
+              @keydown.prevent="onRecordKeydown"
+            >{{ hotkeyDisplay }}</div>
+            <button v-if="form.quickAskShortcut" class="mini" @click="form.quickAskShortcut = ''">禁用</button>
+          </div>
+          <span class="hint" :class="{ bad: hotkeyError }">
+            {{ hotkeyError || (recordingKey ? '请按下组合键（需包含 Ctrl / Alt / Shift / Win），Esc 取消' : '例如 Alt+Shift+Q；留空表示禁用') }}
+          </span>
+          <span v-if="hotkeyStatus" :class="hotkeyStatus.ok ? 'ok' : 'bad-text'">{{ hotkeyStatus.text }}</span>
+        </div>
+      </div>
+    </section>
+
     <div v-if="toast" class="toast">{{ toast }}</div>
   </div>
 </template>
 
 <script setup>
-import { reactive, ref, onMounted } from 'vue'
+import { reactive, ref, computed, onMounted } from 'vue'
 import { useAgentSocket } from '../composables/useAgentSocket'
 
 const { connect, send, on } = useAgentSocket()
@@ -115,8 +138,12 @@ const activeProfile = ref('default')
 const profiles = ref({})
 const form = reactive({
   provider: 'openai', baseUrl: '', apiKey: '', model: '', extraParamsText: '{}',
-  persona: '', memoryWindow: 50, recursionLimit: 50, idleEnabled: true, idleThreshold: 30, idleQuiet: 10
+  persona: '', memoryWindow: 50, recursionLimit: 50, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
+  quickAskShortcut: 'Alt+Shift+Q'
 })
+const recordingKey = ref(false)
+const hotkeyError = ref('')
+const hotkeyStatus = ref(null)
 const showKey = ref(false)
 const extraError = ref('')
 const testing = ref(false)
@@ -160,6 +187,68 @@ async function loadConfig() {
   form.idleEnabled = cfg.pet?.idleReminder?.enabled !== false
   form.idleThreshold = cfg.pet?.idleReminder?.thresholdMinutes ?? 30
   form.idleQuiet = cfg.pet?.idleReminder?.quietPeriodMinutes ?? 10
+  form.quickAskShortcut = cfg.pet?.quickAsk?.shortcut ?? 'Alt+Shift+Q'
+}
+
+// ---------- 快捷键录制 ----------
+const hotkeyDisplay = computed(() => {
+  if (recordingKey.value) return '按下组合键…'
+  return form.quickAskShortcut || '未设置（已禁用）'
+})
+
+// KeyboardEvent -> Electron accelerator 字符串
+function eventToAccelerator(e) {
+  const mods = []
+  if (e.ctrlKey) mods.push('Ctrl')
+  if (e.altKey) mods.push('Alt')
+  if (e.shiftKey) mods.push('Shift')
+  if (e.metaKey) mods.push('Super')
+  const KEY_MAP = {
+    Control: 'Ctrl', Alt: 'Alt', Shift: 'Shift', Meta: 'Super',
+    ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+    ' ': 'Space', Escape: 'Esc', Delete: 'Delete', Backspace: 'Backspace',
+    PageUp: 'PageUp', PageDown: 'PageDown', Home: 'Home', End: 'End', Insert: 'Insert'
+  }
+  let key = KEY_MAP[e.key]
+  if (!key) {
+    if (e.key.length === 1) {
+      key = e.key.toUpperCase()
+    } else if (/^F\d{1,2}$/.test(e.key)) {
+      key = e.key
+    } else {
+      return null // 不支持的键（如 CapsLock、输入法键等）
+    }
+  }
+  if (mods.includes(key)) return null // 纯修饰键组合无效
+  if (!mods.length) {
+    hotkeyError.value = '快捷键必须包含至少一个修饰键（Ctrl / Alt / Shift / Win）'
+    return null
+  }
+  hotkeyError.value = ''
+  return [...mods, key].join('+')
+}
+
+function startRecord() {
+  recordingKey.value = true
+  hotkeyError.value = ''
+}
+
+function stopRecord() {
+  recordingKey.value = false
+  hotkeyError.value = ''
+}
+
+async function onRecordKeydown(e) {
+  if (!recordingKey.value) return
+  if (e.key === 'Escape') { stopRecord(); return }
+  const acc = eventToAccelerator(e)
+  if (!acc) return
+  recordingKey.value = false
+  // 立即保存并等待主进程注册结果（注册失败时可再次录制换键）
+  const res = await api.setConfig('pet.quickAsk.shortcut', acc)
+  if (!res.success) return showToast('保存失败: ' + (res.message || ''))
+  form.quickAskShortcut = acc
+  showToast('快捷键已保存，正在注册…')
 }
 
 function fillFormFromProfile() {
@@ -201,6 +290,7 @@ async function saveAll() {
     { path: 'pet.idleReminder.enabled', value: form.idleEnabled },
     { path: 'pet.idleReminder.thresholdMinutes', value: form.idleThreshold },
     { path: 'pet.idleReminder.quietPeriodMinutes', value: form.idleQuiet },
+    { path: 'pet.quickAsk.shortcut', value: form.quickAskShortcut },
   ]
   // 仅在用户实际编辑过 key（非掩码）时写入
   if (!String(form.apiKey).startsWith('***')) {
@@ -262,6 +352,17 @@ onMounted(() => {
   loadConfig()
   connect()
   on('prompt.preview.result', (p) => { preview.value = p.prompt })
+  // 快捷键注册结果：主进程注册/重注册后经 shortcut-status 广播
+  api.onShortcutStatus?.((p) => {
+    if (p && p.shortcut === undefined) return
+    hotkeyStatus.value = p.success
+      ? (p.shortcut ? { ok: true, text: `✓ ${p.shortcut} 已生效` } : { ok: true, text: '快速提问快捷键已禁用' })
+      : { ok: false, text: `✗ 注册失败：${p.message || '未知原因'}，请换一个组合键` }
+  })
+  // 初始查询当前注册状态
+  api.getShortcutStatus?.().then((p) => {
+    if (p && p.success && p.shortcut) hotkeyStatus.value = { ok: true, text: `✓ ${p.shortcut} 已生效` }
+  })
 })
 </script>
 
@@ -291,6 +392,15 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: #6366f1
 .step-btn:first-child { border-left: none; border-right: 1px solid #334155; }
 .step-btn:hover:not(:disabled) { background: #334155; color: #e2e8f0; }
 .step-btn:disabled { opacity: .35; cursor: not-allowed; }
+.hotkey-row { display: flex; gap: 8px; align-items: center; }
+.hotkey-box {
+  min-width: 180px; padding: 9px 12px; border-radius: 8px; cursor: pointer;
+  background: #0f172a; border: 1px solid #334155; color: #e2e8f0; font-size: 14px;
+  font-family: Consolas, monospace; user-select: none; text-align: center;
+}
+.hotkey-box.recording { border-color: #6366f1; color: #a5b4fc; animation: hotkey-pulse 1.2s ease-in-out infinite; }
+.hotkey-box.bad { border-color: #f87171; }
+@keyframes hotkey-pulse { 0%,100% { opacity: 1 } 50% { opacity: .55 } }
 .key-row { display: flex; gap: 8px; }
 .key-row input { flex: 1; }
 .mini { background: #334155; border: none; color: #cbd5e1; border-radius: 8px; padding: 0 14px; cursor: pointer; }

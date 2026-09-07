@@ -169,6 +169,11 @@ function onContextMenu() {
   ])
 }
 
+// 全局快捷键触发：切换快速输入框
+function onQuickAskHotkey() {
+  if (inputOpen.value) closeInput(); else openInput()
+}
+
 function onMenuAction({ action }) {
   if (action === 'chat') window.petAPI.showChat()
   else if (action === 'input') inputOpen.value ? closeInput() : openInput()
@@ -180,6 +185,11 @@ async function openInput() {
   hideBubble()
   await nextTick()
   syncWindow()
+  // 快捷键唤起时鼠标未必在窗口上方，需主动退出穿透以保证输入框可点击
+  if (window.petAPI) {
+    hoverInside = true
+    window.petAPI.setInteractive(true)
+  }
   quickInputRef.value && quickInputRef.value.focus()
 }
 
@@ -356,6 +366,7 @@ onMounted(() => {
     })
     window.petAPI.onAgentReady((info) => { if (info && info.port) setPort(info.port) })
     window.petAPI.onMenuAction(onMenuAction)
+    window.petAPI.onQuickAsk(onQuickAskHotkey)
     window.petAPI.getPosition().then((pos) => { if (pos) facingLeft.value = false })
   }
   connect()

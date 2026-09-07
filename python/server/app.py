@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
+from agent import engine as agent_engine
 from monitor import service as monitor_service
 from proactive import scheduler
 from server.bus import hub
@@ -41,6 +42,8 @@ async def _monitor_loop():
 async def lifespan(app: FastAPI):
     # 同步初始化（静态信息采集等含阻塞调用）
     await asyncio.to_thread(monitor_service.init_sync)
+    # 打开 agent 共享 SQLite 连接（checkpointer/store 复用，shutdown 时统一关闭）
+    await asyncio.to_thread(agent_engine.init_db)
     stop_event = asyncio.Event()
     monitor_task = asyncio.create_task(_monitor_loop())
     proactive_task = asyncio.create_task(scheduler.run_forever(stop_event))
@@ -52,6 +55,7 @@ async def lifespan(app: FastAPI):
     proactive_task.cancel()
     await asyncio.gather(monitor_task, proactive_task, return_exceptions=True)
     await asyncio.to_thread(monitor_service.shutdown_sync)
+    await asyncio.to_thread(agent_engine.close_db)
     logger.info("后台任务已停止")
 
 

@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('petAPI', {
   // 请求主窗口显示并跳转到聊天页
   showChat: () => ipcRenderer.invoke('pet:show-chat'),
   hideSelf: () => ipcRenderer.invoke('pet:hide'),
+  // 全局快捷键触发快速提问（主进程 pet:quick-ask 事件）
+  onQuickAsk: (cb) => ipcRenderer.on('pet:quick-ask', () => cb()),
   // 原生右键菜单
   popupMenu: (items) => ipcRenderer.invoke('pet:popup-menu', items),
   onMenuAction: (cb) => ipcRenderer.on('pet:menu-action', (e, data) => cb(data)),

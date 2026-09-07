@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAgentInfo: () => ipcRenderer.invoke('get-agent-info'),
   restartAgent: () => ipcRenderer.invoke('agent:restart'),
 
+  // 快速提问全局快捷键注册状态
+  getShortcutStatus: () => ipcRenderer.invoke('shortcut:status'),
+
   // 测试 LLM 连接（经主进程，无 CORS 限制）
   testLlmConnection: (params) => ipcRenderer.invoke('test-llm-connection', params),
 
@@ -36,6 +39,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onAgentReady: (callback) => ipcRenderer.on('agent-ready', (event, info) => callback(info)),
   onConfigChanged: (callback) => ipcRenderer.on('config:changed', (event, data) => callback(data)),
   onActivityPing: (callback) => ipcRenderer.on('activity-ping', (event, data) => callback(data)),
+  onShortcutStatus: (callback) => ipcRenderer.on('shortcut-status', (event, data) => callback(data)),
 
   // 移除监听器
   removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),

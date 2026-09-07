@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, shell, powerMonitor } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, shell, powerMonitor, globalShortcut } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -26,6 +26,10 @@ function initConfigStore() {
   configStore = new ConfigStore(templatePath, userPath);
   // 配置变更 -> 推送给所有窗口（Settings 页负责经 WS 发 config.invalidate 通知 Python 热重建）
   configStore.on('changed', ({ diff }) => {
+    // 快速提问快捷键变更 -> 热重注册并广播注册结果（Settings 页展示）
+    if (Object.prototype.hasOwnProperty.call(diff, 'pet.quickAsk.shortcut')) {
+      broadcastShortcutStatus(applyQuickAskShortcut());
+    }
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         win.webContents.send('config:changed', { diff });
@@ -454,6 +458,11 @@ ipcMain.handle('get-agent-info', () => {
   return agentInfo;
 });
 
+// 当前快速提问快捷键注册状态（Settings 页加载时查询）
+ipcMain.handle('shortcut:status', () => {
+  return { success: true, shortcut: registeredQuickAsk || '', message: '' };
+});
+
 // 重启 Python Agent 服务（配置兜底生效手段）
 ipcMain.handle('agent:restart', () => {
   if (pythonProcess) {
@@ -628,6 +637,61 @@ function runEnvCheck() {
     });
   });
 }
+// ---------- 桌宠快速提问全局快捷键 ----------
+// 当前已成功注册的 accelerator（null 表示未注册/已禁用）
+let registeredQuickAsk = null;
+
+// 注册（或重新注册）快速提问全局快捷键，返回 { success, message }
+function applyQuickAskShortcut() {
+  const sc = String((configStore && configStore.merged.pet?.quickAsk?.shortcut) || '').trim();
+  if (registeredQuickAsk) {
+    globalShortcut.unregister(registeredQuickAsk);
+    registeredQuickAsk = null;
+  }
+  if (!sc) {
+    return { success: true, message: '', shortcut: '' }; // 空串 = 禁用
+  }
+  try {
+    const ok = globalShortcut.register(sc, triggerQuickAsk);
+    if (!ok) throw new Error('快捷键可能已被其他程序占用');
+    registeredQuickAsk = sc;
+    return { success: true, message: '', shortcut: sc };
+  } catch (e) {
+    pushLog('warn', `快速提问快捷键注册失败（${sc}）: ${e.message}`);
+    return { success: false, message: e.message, shortcut: sc };
+  }
+}
+
+// 快捷键触发：唤起桌宠窗口并切换快速输入框
+function triggerQuickAsk() {
+  if (!petWindow || petWindow.isDestroyed()) {
+    createPetWindow();
+    // 窗口刚创建时渲染层尚未就绪，等加载完成后再通知打开输入框
+    if (petWindow) {
+      petWindow.webContents.once('did-finish-load', () => {
+        if (petWindow && !petWindow.isDestroyed()) {
+          petWindow.webContents.send('pet:quick-ask');
+        }
+      });
+    }
+    return;
+  }
+  if (!petWindow.isVisible()) {
+    petWindow.show();
+  }
+  petWindow.focus(); // 确保渲染层 input.focus() 能立即生效
+  petWindow.webContents.send('pet:quick-ask');
+}
+
+// 广播快捷键注册状态到所有窗口（Settings 页据此提示成功/失败）
+function broadcastShortcutStatus(result) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('shortcut-status', result);
+    }
+  }
+}
+
 // ---------- 桌宠窗口（设计稿 5 节） ----------
 const PET_W = 220;
 const PET_H = 150;
@@ -806,6 +870,8 @@ app.whenReady().then(async () => {
     if (configStore.merged.pet?.enabled !== false) {
       createPetWindow();
     }
+    // 注册快速提问全局快捷键（配置来自 pet.quickAsk.shortcut）
+    applyQuickAskShortcut();
   } else {
     if (setupWindow && !setupWindow.isDestroyed()) {
       // 窗口已经显示错误信息，等待用户操作
@@ -833,6 +899,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', async () => {
   app.isQuitting = true;
+  globalShortcut.unregisterAll();
   if (isRunning) {
     stopPythonService();
   }

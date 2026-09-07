@@ -6,3 +6,5 @@ print(f"工作目录：{WORK_DIR}")
 DB_URL = f"{WORK_DIR}/checkpoints.sqlite"
 
 SKILLS_DIR = "/skills"
+
+USER_ID = "master"
