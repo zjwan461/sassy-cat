@@ -23,7 +23,13 @@
               <summary class="reasoning-summary">💭 深度思考<span v-if="m.thinking" class="thinking-dot">…</span></summary>
               <div class="reasoning-content">{{ m.reasoning }}</div>
             </details>
-            <div class="msg-content">{{ m.content }}<span v-if="m.streaming" class="cursor">▌</span></div>
+            <div class="msg-content" :class="{ 'md-mode': isAssistant(m) }">
+              <template v-if="isAssistant(m)">
+                <MarkdownRenderer :content="m.content" :done="!m.streaming" />
+                <span v-if="m.streaming" class="cursor">▌</span>
+              </template>
+              <template v-else>{{ m.content }}<span v-if="m.streaming" class="cursor">▌</span></template>
+            </div>
             <!-- 工具步骤条：放在气泡下方，避免新消息把正文顶走 -->
             <div v-if="m.tools && m.tools.length" class="tool-steps">
               <div v-for="(t, i) in m.tools" :key="i" class="tool-step">
@@ -63,6 +69,7 @@
 <script setup>
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useAgentSocket } from '../composables/useAgentSocket'
+import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 
 const { state, connect, send, on } = useAgentSocket()
 
@@ -80,6 +87,10 @@ function scrollBottom() {
   nextTick(() => {
     if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight
   })
+}
+
+function isAssistant(m) {
+  return m.role === 'assistant'
 }
 
 function summarizeInterrupt(payload) {
@@ -191,7 +202,8 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
 </script>
 
 <style scoped>
-.chat-page { max-width: 900px; height: 100%; display: flex; flex-direction: column; }
+/* 聊天区域随窗口大小自适应伸缩，不设固定宽度上限 */
+.chat-page { width: 100%; height: 100%; display: flex; flex-direction: column; }
 .page-header { margin-bottom: 16px; }
 .page-title { font-size: 26px; font-weight: 700; color: #f1f5f9; margin-bottom: 6px; }
 .page-subtitle { font-size: 14px; color: #64748b; }
@@ -209,6 +221,7 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
 .msg-avatar { font-size: 22px; flex-shrink: 0; }
 .msg-body { max-width: 76%; }
 .msg-content { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 10px 14px; color: #e2e8f0; white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+.msg-content.md-mode { white-space: normal; }
 .msg.user .msg-content { background: #4338ca; border-color: #4f46e5; }
 .cursor { animation: blink 0.8s infinite; }
 @keyframes blink { 50% { opacity: 0; } }
