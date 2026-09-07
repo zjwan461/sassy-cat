@@ -31,7 +31,7 @@ def build_openai_chat_llm(profile_cfg: dict):
         base_url=profile_cfg.get("baseUrl") or "http://localhost:8080/v1",
         api_key=profile_cfg.get("apiKey") or "sk-xxx",
         model=profile_cfg.get("model") or "Qwen3.6-35B",
-        **extra,
+        extra_body=extra,
     )
 
 
@@ -47,5 +47,5 @@ def build_ds_chat_llm(profile_cfg: dict):
         base_url=profile_cfg.get("baseUrl") or "http://localhost:8080/v1",
         api_key=profile_cfg.get("apiKey") or "sk-xxx",
         model=profile_cfg.get("model") or "Qwen3.6-35B",
-        **extra,
+        extra_body=extra,
     )

@@ -60,6 +60,26 @@
             placeholder="你是「臭屁猫」……（支持 {app_name} {time} {os_user} 变量）"></textarea>
           <span class="hint">{{ form.persona.length }} 字</span>
         </div>
+        <div class="field">
+          <label>记忆窗口（条）</label>
+          <div class="stepper">
+            <button type="button" class="step-btn" @click="step('memoryWindow', -1, 2, 500)" :disabled="form.memoryWindow <= 2">−</button>
+            <input type="number" v-model.number="form.memoryWindow" min="2" max="500" class="step-input"
+              @blur="clamp('memoryWindow', 2, 500, 50)" />
+            <button type="button" class="step-btn" @click="step('memoryWindow', 1, 2, 500)" :disabled="form.memoryWindow >= 500">+</button>
+          </div>
+          <span class="hint">对话上下文保留的最近消息条数，超出后自动裁剪（默认 50）</span>
+        </div>
+        <div class="field">
+          <label>递归上限（步）</label>
+          <div class="stepper">
+            <button type="button" class="step-btn" @click="step('recursionLimit', -1, 1, 200)" :disabled="form.recursionLimit <= 1">−</button>
+            <input type="number" v-model.number="form.recursionLimit" min="1" max="200" class="step-input"
+              @blur="clamp('recursionLimit', 1, 200, 50)" />
+            <button type="button" class="step-btn" @click="step('recursionLimit', 1, 1, 200)" :disabled="form.recursionLimit >= 200">+</button>
+          </div>
+          <span class="hint">单轮对话 Agent 可执行的最大步数（含工具调用），过小会提前中断（默认 50）</span>
+        </div>
         <div class="actions">
           <button class="btn primary" @click="saveAll">保存设置</button>
           <button class="btn" @click="previewPrompt">预览完整提示词</button>
@@ -95,7 +115,7 @@ const activeProfile = ref('default')
 const profiles = ref({})
 const form = reactive({
   provider: 'openai', baseUrl: '', apiKey: '', model: '', extraParamsText: '{}',
-  persona: '', idleEnabled: true, idleThreshold: 30, idleQuiet: 10
+  persona: '', memoryWindow: 50, recursionLimit: 50, idleEnabled: true, idleThreshold: 30, idleQuiet: 10
 })
 const showKey = ref(false)
 const extraError = ref('')
@@ -115,6 +135,18 @@ function validateExtra() {
   catch (e) { extraError.value = 'JSON 格式错误' }
 }
 
+function clamp(key, min, max, fallback) {
+  const v = Number(form[key])
+  if (!Number.isFinite(v)) { form[key] = fallback; return }
+  form[key] = Math.min(max, Math.max(min, Math.round(v)))
+}
+
+function step(key, delta, min, max) {
+  const cur = Number(form[key])
+  const base = Number.isFinite(cur) ? cur : min
+  form[key] = Math.min(max, Math.max(min, base + delta))
+}
+
 async function loadConfig() {
   const res = await api.getConfig()
   if (!res.success) return showToast('配置加载失败')
@@ -123,6 +155,8 @@ async function loadConfig() {
   activeProfile.value = cfg.llm?.activeProfile || 'default'
   fillFormFromProfile()
   form.persona = cfg.agent?.persona || ''
+  form.memoryWindow = cfg.agent?.memoryWindow ?? 50
+  form.recursionLimit = cfg.agent?.recursionLimit ?? 50
   form.idleEnabled = cfg.pet?.idleReminder?.enabled !== false
   form.idleThreshold = cfg.pet?.idleReminder?.thresholdMinutes ?? 30
   form.idleQuiet = cfg.pet?.idleReminder?.quietPeriodMinutes ?? 10
@@ -162,6 +196,8 @@ async function saveAll() {
     { path: `${prefix}.model`, value: form.model.trim() },
     { path: `${prefix}.extraParams`, value: JSON.parse(form.extraParamsText || '{}') },
     { path: 'agent.persona', value: form.persona },
+    { path: 'agent.memoryWindow', value: Number(form.memoryWindow) || 50 },
+    { path: 'agent.recursionLimit', value: Number(form.recursionLimit) || 50 },
     { path: 'pet.idleReminder.enabled', value: form.idleEnabled },
     { path: 'pet.idleReminder.thresholdMinutes', value: form.idleThreshold },
     { path: 'pet.idleReminder.quietPeriodMinutes', value: form.idleQuiet },
@@ -246,6 +282,15 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: #6366f1
 .mono { font-family: Consolas, monospace; }
 .persona { line-height: 1.6; }
 .num { width: 80px; }
+.stepper { display: inline-flex; align-items: stretch; width: fit-content; border: 1px solid #334155; border-radius: 8px; overflow: hidden; background: #0f172a; }
+.stepper:focus-within { border-color: #6366f1; }
+.step-input { width: 72px; text-align: center; border: none; border-radius: 0; background: transparent; -moz-appearance: textfield; appearance: textfield; }
+.step-input::-webkit-outer-spin-button, .step-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.step-input:focus { outline: none; border: none; }
+.step-btn { background: #1e293b; border: none; border-left: 1px solid #334155; color: #94a3b8; width: 34px; font-size: 16px; line-height: 1; cursor: pointer; transition: background .15s, color .15s; }
+.step-btn:first-child { border-left: none; border-right: 1px solid #334155; }
+.step-btn:hover:not(:disabled) { background: #334155; color: #e2e8f0; }
+.step-btn:disabled { opacity: .35; cursor: not-allowed; }
 .key-row { display: flex; gap: 8px; }
 .key-row input { flex: 1; }
 .mini { background: #334155; border: none; color: #cbd5e1; border-radius: 8px; padding: 0 14px; cursor: pointer; }

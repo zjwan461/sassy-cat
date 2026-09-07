@@ -33,6 +33,8 @@ DEFAULTS = {
         "persona": "",           # 空字符串表示使用内置默认人设（见 agent/prompts.py）
         "skillsEnabled": True,
         "maxToolRounds": 10,
+        "memoryWindow": 50,
+        "recursionLimit": 50,    # langgraph 单轮最大递归步数（见 agent/runner.py）
     },
     "server": {
         "wsPort": 8790,

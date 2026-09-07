@@ -15,11 +15,13 @@ from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+
 import config_loader
 from agent.llms import build_chat_llm
 from agent.prompts import build_system_prompt
 from agent.builtin_tools import get_date_time, internet_search, run_command, run_python
 from agent.constant import DB_URL, WORK_DIR
+from agent.middlewares import trim_messages
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,7 @@ class AgentHolder:
             backend=FilesystemBackend(root_dir=WORK_DIR, virtual_mode=True),
             checkpointer=SqliteSaver(_sqlite3.connect(DB_URL, check_same_thread=False)),
             system_prompt=system_prompt,
+            middleware=[trim_messages],
         )
         return agent
 

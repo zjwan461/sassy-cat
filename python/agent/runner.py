@@ -19,9 +19,19 @@ import threading
 import janus
 from langgraph.types import Command
 
+import config_loader
 from agent.engine import holder
 
 logger = logging.getLogger(__name__)
+
+
+def _recursion_limit() -> int:
+    """从运行时配置读取单轮最大递归步数（agent.recursionLimit），非法值回退为 50"""
+    cfg = config_loader.current()
+    try:
+        return max(1, int(cfg.get("agent.recursionLimit", 50)))
+    except (TypeError, ValueError):
+        return 50
 
 
 def _extract_item(item: dict):
@@ -96,7 +106,7 @@ async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event
     """发起新一轮对话，异步产出事件"""
     version, agent = holder.get()
     q = janus.Queue()
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": _recursion_limit()}
     payload = {"messages": [{"role": "user", "content": user_text}]}
     thread = threading.Thread(
         target=_worker_stream,
@@ -118,7 +128,7 @@ async def resume_turn(thread_id: str, approved: bool, cancel_event: threading.Ev
     """用户对 interrupt 确认后恢复执行（仅对当前仍挂起的 thread 有效）"""
     version, agent = holder.get()
     q = janus.Queue()
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": _recursion_limit()}
     decision = "approve" if approved else "reject"
     payload = Command(resume={"decisions": [{"type": decision}]})
     thread = threading.Thread(
