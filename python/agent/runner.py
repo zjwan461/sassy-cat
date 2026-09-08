@@ -49,7 +49,11 @@ def _extract_item(item: dict):
             events.append({"kind": "tool_args", "args": args_part})
         return events
     if t == "reasoning":
-        return [{"kind": "reasoning", "text": item.get("reasoning", "")}]
+        text = item.get("reasoning") or ""
+        # langchain 对 reasoning_content 仅判 is not None，正文阶段会产出空串块，过滤之
+        if not text.strip():
+            return []
+        return [{"kind": "reasoning", "text": text}]
     return []
 
 

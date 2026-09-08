@@ -284,7 +284,13 @@ onMounted(() => {
     const m = messages.find((x) => x.id === p.msgId)
     if (m) {
       m.reasoning = (m.reasoning || '') + (p.text || '')
-      m.thinking = true
+      // 正文守卫：一旦消息已开始输出正文，reasoning 只静默追加，不再点亮"思考中"或展开思考区
+      if (!m.content) {
+        m.thinking = true
+      } else {
+        m.thinking = false
+        m.reasoningOpen = false
+      }
       scrollBottom()
     }
   }))

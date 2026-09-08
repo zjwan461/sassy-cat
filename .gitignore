@@ -37,3 +37,4 @@ Thumbs.db
 # Runtime: 排除所有内容但保留 skills 目录
 runtime/*
 !runtime/skills/
+.cospec

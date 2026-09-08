@@ -74,6 +74,8 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str):
                         or sum(len(x) for x in args_buffer) >= FLUSH_MAX_CHARS):
                     await flush()
             elif kind == "reasoning":
+                # 先把已积累的 delta 正文 flush，保证 reasoning 帧不插队到正文之前
+                await flush()
                 await emit("agent.reasoning", {"msgId": msg_id, "text": event.get("text", "")})
             elif kind == "tool":
                 await flush()
