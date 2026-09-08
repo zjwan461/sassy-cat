@@ -5,6 +5,12 @@
       <p class="page-subtitle">模型连接与人设配置，保存后热生效</p>
     </header>
 
+    <!-- 全局操作 -->
+    <div class="global-actions">
+      <button class="btn primary" @click="saveAll">保存设置</button>
+      <button class="btn warn" @click="restartAgent">重启服务进程</button>
+    </div>
+
     <!-- 模型连接 -->
     <section class="card">
       <div class="card-header">模型连接</div>
@@ -95,10 +101,8 @@
           <span class="hint">单轮对话 Agent 可执行的最大步数（含工具调用），过小会提前中断（默认 50）</span>
         </div>
         <div class="actions">
-          <button class="btn primary" @click="saveAll">保存设置</button>
           <button class="btn" @click="togglePreview">{{ preview ? '隐藏完整提示词' : '预览完整提示词' }}</button>
           <button class="btn" @click="resetPersona">恢复默认人设</button>
-          <button class="btn warn" @click="restartAgent">重启服务进程</button>
         </div>
         <pre v-if="preview" class="preview-box">{{ preview }}</pre>
       </div>
@@ -563,6 +567,7 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: #6366f1
 .mini { background: #334155; border: none; color: #cbd5e1; border-radius: 8px; padding: 0 14px; cursor: pointer; }
 .hint { font-size: 12px; color: #64748b; }
 .hint.bad { color: #f87171; }
+.global-actions { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
 .actions { display: flex; gap: 10px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
 .btn { background: #334155; border: none; color: #e2e8f0; border-radius: 9px; padding: 9px 18px; font-size: 14px; cursor: pointer; }
 .btn.primary { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; }
