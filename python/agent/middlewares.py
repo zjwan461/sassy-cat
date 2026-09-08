@@ -16,7 +16,10 @@ def trim_messages(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
     messages = state["messages"]
 
     cfg = config_loader.current()
-    memory_window = int(cfg.get("agent.memoryWindow", "50"))
+    try:
+        memory_window = int(cfg.active_agent_config().get("memoryWindow", 50))
+    except (TypeError, ValueError, AttributeError):
+        memory_window = 50
 
     if len(messages) <= memory_window:
         return None  # No changes needed

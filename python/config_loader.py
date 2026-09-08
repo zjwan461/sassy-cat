@@ -30,11 +30,17 @@ DEFAULTS = {
         },
     },
     "agent": {
-        "persona": "",           # 空字符串表示使用内置默认人设（见 agent/prompts.py）
+        "activeProfile": "default",
+        "profiles": {
+            "default": {
+                "persona": "",           # 空字符串表示使用内置默认人设（见 agent/prompts.py）
+                "memoryWindow": 50,
+                "recursionLimit": 50,    # langgraph 单轮最大递归步数（见 agent/runner.py）
+            }
+        },
+        # 保留顶层字段作为兼容旧配置的 fallback
         "skillsEnabled": True,
         "maxToolRounds": 10,
-        "memoryWindow": 50,
-        "recursionLimit": 50,    # langgraph 单轮最大递归步数（见 agent/runner.py）
     },
     "server": {
         "wsPort": 8790,
@@ -94,6 +100,31 @@ class AppConfig:
         name = self.get("llm.activeProfile", "default")
         profiles = self.get("llm.profiles", {}) or {}
         return profiles.get(name) or profiles.get("default") or {}
+
+    def active_agent_profile(self) -> dict:
+        """获取当前 active agent profile"""
+        name = self.get("agent.activeProfile", "default")
+        profiles = self.get("agent.profiles", {}) or {}
+        return profiles.get(name) or profiles.get("default") or {}
+
+    def active_agent_config(self) -> dict:
+        """从当前 active agent profile 中读取配置（persona/memoryWindow/recursionLimit），
+        若 profile 中未设置则回退到顶层 agent 段（兼容旧配置）"""
+        profile = self.active_agent_profile()
+        persona = profile.get("persona")
+        if persona is None:
+            persona = self.get("agent.persona", "")
+        memory_window = profile.get("memoryWindow")
+        if memory_window is None:
+            memory_window = self.get("agent.memoryWindow", 50)
+        recursion_limit = profile.get("recursionLimit")
+        if recursion_limit is None:
+            recursion_limit = self.get("agent.recursionLimit", 50)
+        return {
+            "persona": persona,
+            "memoryWindow": memory_window,
+            "recursionLimit": recursion_limit,
+        }
 
 
 _current: AppConfig = AppConfig(json.loads(json.dumps(DEFAULTS)))

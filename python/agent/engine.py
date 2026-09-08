@@ -106,7 +106,7 @@ class AgentHolder:
         cfg = config_loader.current()
         profile = cfg.active_llm_profile()
         llm = build_chat_llm(profile)
-        system_prompt = build_system_prompt(cfg.get("agent.persona", ""))
+        system_prompt = build_system_prompt(cfg.active_agent_config().get("persona", ""))
         # 共享持久层单例：未显式 init_db 时惰性初始化（如 CLI 调试入口）
         agent = create_deep_agent(
             name="SassyCat",

@@ -11,9 +11,13 @@
       <div class="card-body form">
         <div class="field">
           <label>配置档</label>
-          <select :value="activeProfile" @change="switchProfile($event.target.value)">
-            <option v-for="(p, name) in profiles" :key="name" :value="name">{{ p.label || name }}</option>
-          </select>
+          <div class="profile-row">
+            <select :value="activeProfile" @change="switchProfile($event.target.value)">
+              <option v-for="(p, name) in profiles" :key="name" :value="name">{{ p.label || name }}</option>
+            </select>
+            <button class="btn" @click="showAddProfile = true" title="新增配置档">＋ 新增</button>
+            <button class="btn warn" @click="deleteProfile" :disabled="activeProfile === 'default'" title="删除当前配置档（default 不可删除）"> 删除</button>
+          </div>
         </div>
         <div class="field">
           <label>Provider</label>
@@ -50,10 +54,20 @@
       </div>
     </section>
 
-    <!-- 人设与行为 -->
+    <!-- Agent 配置 -->
     <section class="card">
-      <div class="card-header">人设与系统提示词</div>
+      <div class="card-header">Agent 配置</div>
       <div class="card-body form">
+        <div class="field">
+          <label>配置档</label>
+          <div class="profile-row">
+            <select :value="activeAgentProfile" @change="switchAgentProfile($event.target.value)">
+              <option v-for="(p, name) in agentProfiles" :key="name" :value="name">{{ p.label || name }}</option>
+            </select>
+            <button class="btn" @click="showAddAgentProfile = true" title="新增 Agent 配置档">＋ 新增</button>
+            <button class="btn warn" @click="deleteAgentProfile" :disabled="activeAgentProfile === 'default'" title="删除当前 Agent 配置档（default 不可删除）"> 删除</button>
+          </div>
+        </div>
         <div class="field">
           <label>人设提示词（可编辑，留空使用默认傲娇猫咪人设）</label>
           <textarea v-model="form.persona" rows="10" class="mono persona"
@@ -124,11 +138,43 @@
     </section>
 
     <div v-if="toast" class="toast">{{ toast }}</div>
+
+    <!-- 新增 LLM 配置档弹窗 -->
+    <div v-if="showAddProfile" class="modal-overlay" @click.self="showAddProfile = false">
+      <div class="modal">
+        <h3>新增 LLM 配置档</h3>
+        <div class="field">
+          <label>配置档名称</label>
+          <input v-model="newProfileName" placeholder="例如 work、personal" @keydown.enter="addProfile" ref="profileNameInput" />
+          <span class="hint" :class="{ bad: newProfileError }">{{ newProfileError || '仅允许字母、数字、下划线和短横线' }}</span>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" @click="showAddProfile = false">取消</button>
+          <button class="btn primary" @click="addProfile">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 新增 Agent 配置档弹窗 -->
+    <div v-if="showAddAgentProfile" class="modal-overlay" @click.self="showAddAgentProfile = false">
+      <div class="modal">
+        <h3>新增 Agent 配置档</h3>
+        <div class="field">
+          <label>配置档名称</label>
+          <input v-model="newAgentProfileName" placeholder="例如 work、personal" @keydown.enter="addAgentProfile" ref="agentProfileNameInput" />
+          <span class="hint" :class="{ bad: newAgentProfileError }">{{ newAgentProfileError || '仅允许字母、数字、下划线和短横线' }}</span>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" @click="showAddAgentProfile = false">取消</button>
+          <button class="btn primary" @click="addAgentProfile">确定</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { reactive, ref, computed, onMounted } from 'vue'
+import { reactive, ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useAgentSocket } from '../composables/useAgentSocket'
 
 const { connect, send, on } = useAgentSocket()
@@ -136,6 +182,8 @@ const api = window.electronAPI
 
 const activeProfile = ref('default')
 const profiles = ref({})
+const activeAgentProfile = ref('default')
+const agentProfiles = ref({})
 const form = reactive({
   provider: 'openai', baseUrl: '', apiKey: '', model: '', extraParamsText: '{}',
   persona: '', memoryWindow: 50, recursionLimit: 50, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
@@ -151,7 +199,31 @@ const testResult = ref(null)
 const preview = ref('')
 const toast = ref('')
 const keyRevealed = ref(false)
+const showAddProfile = ref(false)
+const newProfileName = ref('')
+const newProfileError = ref('')
+const profileNameInput = ref(null)
+const showAddAgentProfile = ref(false)
+const newAgentProfileName = ref('')
+const newAgentProfileError = ref('')
+const agentProfileNameInput = ref(null)
 
+// 弹窗打开时自动聚焦输入框
+// 弹窗打开时自动聚焦输入框
+watch(showAddProfile, (val) => {
+  if (val) {
+    newProfileName.value = ''
+    newProfileError.value = ''
+    nextTick(() => profileNameInput.value?.focus())
+  }
+})
+watch(showAddAgentProfile, (val) => {
+  if (val) {
+    newAgentProfileName.value = ''
+    newAgentProfileError.value = ''
+    nextTick(() => agentProfileNameInput.value?.focus())
+  }
+})
 function showToast(text) {
   toast.value = text
   setTimeout(() => (toast.value = ''), 2500)
@@ -180,10 +252,9 @@ async function loadConfig() {
   const cfg = res.config
   profiles.value = cfg.llm?.profiles || { default: { label: '默认' } }
   activeProfile.value = cfg.llm?.activeProfile || 'default'
+  agentProfiles.value = cfg.agent?.profiles || { default: { label: '默认' } }
+  activeAgentProfile.value = cfg.agent?.activeProfile || 'default'
   fillFormFromProfile()
-  form.persona = cfg.agent?.persona || ''
-  form.memoryWindow = cfg.agent?.memoryWindow ?? 50
-  form.recursionLimit = cfg.agent?.recursionLimit ?? 50
   form.idleEnabled = cfg.pet?.idleReminder?.enabled !== false
   form.idleThreshold = cfg.pet?.idleReminder?.thresholdMinutes ?? 30
   form.idleQuiet = cfg.pet?.idleReminder?.quietPeriodMinutes ?? 10
@@ -260,12 +331,92 @@ function fillFormFromProfile() {
   form.extraParamsText = JSON.stringify(p.extraParams || {}, null, 2)
   keyRevealed.value = false
   validateExtra()
+  // Agent 配置从独立的 agent profile 读取
+  const ap = agentProfiles.value[activeAgentProfile.value] || {}
+  form.persona = ap.persona || ''
+  form.memoryWindow = ap.memoryWindow ?? 50
+  form.recursionLimit = ap.recursionLimit ?? 50
 }
 
 async function switchProfile(name) {
   activeProfile.value = name
   await api.setConfig('llm.activeProfile', name)
   fillFormFromProfile()
+}
+
+async function switchAgentProfile(name) {
+  activeAgentProfile.value = name
+  await api.setConfig('agent.activeProfile', name)
+  fillFormFromProfile()
+}
+
+function validateProfileName(name, existingProfiles) {
+  if (!name || !name.trim()) return '请输入配置档名称'
+  if (!/^[a-zA-Z0-9_-]+$/.test(name.trim())) return '仅允许字母、数字、下划线和短横线'
+  if (existingProfiles[name.trim()]) return '该配置档已存在'
+  return ''
+}
+
+async function addProfile() {
+  const name = newProfileName.value.trim()
+  const err = validateProfileName(name, profiles.value)
+  if (err) { newProfileError.value = err; return }
+  const base = JSON.parse(JSON.stringify(profiles.value.default || { provider: 'openai', baseUrl: '', apiKey: '', model: '', extraParams: {} }))
+  base.label = name
+  const res = await api.setConfig(`llm.profiles.${name}`, base)
+  if (!res.success) return showToast('新增配置档失败: ' + (res.message || ''))
+  newProfileName.value = ''
+  newProfileError.value = ''
+  showAddProfile.value = false
+  await loadConfig()
+  await switchProfile(name)
+  showToast(`已新增 LLM 配置档「${name}」`)
+}
+
+async function deleteProfile() {
+  if (activeProfile.value === 'default') return showToast('default 配置档不可删除')
+  if (!confirm(`确定要删除 LLM 配置档「${activeProfile.value}」吗？此操作不可撤销。`)) return
+  const name = activeProfile.value
+  const cfg = await api.getConfig()
+  if (!cfg.success) return showToast('读取配置失败')
+  const profilesCopy = JSON.parse(JSON.stringify(cfg.config.llm?.profiles || {}))
+  delete profilesCopy[name]
+  const res = await api.setConfig('llm.profiles', profilesCopy)
+  if (!res.success) return showToast('删除配置档失败: ' + (res.message || ''))
+  await loadConfig()
+  await switchProfile('default')
+  showToast(`已删除 LLM 配置档「${name}」`)
+}
+
+async function addAgentProfile() {
+  const name = newAgentProfileName.value.trim()
+  const err = validateProfileName(name, agentProfiles.value)
+  if (err) { newAgentProfileError.value = err; return }
+  const base = JSON.parse(JSON.stringify(agentProfiles.value.default || { persona: '', memoryWindow: 50, recursionLimit: 50 }))
+  base.label = name
+  const res = await api.setConfig(`agent.profiles.${name}`, base)
+  if (!res.success) return showToast('新增 Agent 配置档失败: ' + (res.message || ''))
+  newAgentProfileName.value = ''
+  newAgentProfileError.value = ''
+  showAddAgentProfile.value = false
+  await loadConfig()
+  await switchAgentProfile(name)
+  showToast(`已新增 Agent 配置档「${name}」`)
+}
+
+async function deleteAgentProfile() {
+  if (activeAgentProfile.value === 'default') return showToast('default Agent 配置档不可删除')
+  if (!confirm(`确定要删除 Agent 配置档「${activeAgentProfile.value}」吗？此操作不可撤销。`)) return
+  const name = activeAgentProfile.value
+  const cfg = await api.getConfig()
+  if (!cfg.success) return showToast('读取配置失败')
+  const agentProfilesCopy = JSON.parse(JSON.stringify(cfg.config.agent?.profiles || {}))
+  delete agentProfilesCopy[name]
+  const res = await api.setConfig('agent.profiles', agentProfilesCopy)
+  if (!res.success) return showToast('删除 Agent 配置档失败: ' + (res.message || ''))
+  await loadConfig()
+  await switchAgentProfile('default')
+  showToast(`已删除 Agent 配置档「${name}」`)
 }
 
 async function revealKey() {
@@ -277,16 +428,18 @@ async function revealKey() {
 async function saveAll() {
   validateExtra()
   if (extraError.value) return showToast('额外参数 JSON 无效，未保存')
-  const prefix = `llm.profiles.${activeProfile.value}`
+  const llmPrefix = `llm.profiles.${activeProfile.value}`
+  const agentPrefix = `agent.profiles.${activeAgentProfile.value}`
   const patches = [
     { path: 'llm.activeProfile', value: activeProfile.value },
-    { path: `${prefix}.provider`, value: form.provider },
-    { path: `${prefix}.baseUrl`, value: form.baseUrl.trim() },
-    { path: `${prefix}.model`, value: form.model.trim() },
-    { path: `${prefix}.extraParams`, value: JSON.parse(form.extraParamsText || '{}') },
-    { path: 'agent.persona', value: form.persona },
-    { path: 'agent.memoryWindow', value: Number(form.memoryWindow) || 50 },
-    { path: 'agent.recursionLimit', value: Number(form.recursionLimit) || 50 },
+    { path: `${llmPrefix}.provider`, value: form.provider },
+    { path: `${llmPrefix}.baseUrl`, value: form.baseUrl.trim() },
+    { path: `${llmPrefix}.model`, value: form.model.trim() },
+    { path: `${llmPrefix}.extraParams`, value: JSON.parse(form.extraParamsText || '{}') },
+    { path: 'agent.activeProfile', value: activeAgentProfile.value },
+    { path: `${agentPrefix}.persona`, value: form.persona },
+    { path: `${agentPrefix}.memoryWindow`, value: Number(form.memoryWindow) || 50 },
+    { path: `${agentPrefix}.recursionLimit`, value: Number(form.recursionLimit) || 50 },
     { path: 'pet.idleReminder.enabled', value: form.idleEnabled },
     { path: 'pet.idleReminder.thresholdMinutes', value: form.idleThreshold },
     { path: 'pet.idleReminder.quietPeriodMinutes', value: form.idleQuiet },
@@ -294,7 +447,7 @@ async function saveAll() {
   ]
   // 仅在用户实际编辑过 key（非掩码）时写入
   if (!String(form.apiKey).startsWith('***')) {
-    patches.push({ path: `${prefix}.apiKey`, value: form.apiKey.trim() })
+    patches.push({ path: `${llmPrefix}.apiKey`, value: form.apiKey.trim() })
   }
   const res = await api.setConfigMany(patches)
   if (!res.success) return showToast('保存失败: ' + (res.message || ''))
@@ -307,7 +460,7 @@ async function saveAll() {
 
 function resetPersona() {
   form.persona = ''
-  showToast('已恢复默认（保存后生效）')
+  showToast('已恢复默认人设（保存后生效）')
 }
 
 async function restartAgent() {
@@ -414,5 +567,22 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: #6366f1
 .ok { color: #34d399; font-size: 13px; }
 .bad-text { color: #f87171; font-size: 13px; }
 .preview-box { margin-top: 14px; background: #0f172a; border: 1px dashed #475569; border-radius: 10px; padding: 14px; color: #a5b4fc; font-size: 12px; white-space: pre-wrap; max-height: 320px; overflow: auto; }
-.toast { position: fixed; bottom: 28px; right: 28px; background: #065f46; color: #a7f3d0; padding: 12px 20px; border-radius: 10px; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.4); z-index: 99; }
+.profile-row { display: flex; gap: 8px; align-items: center; }
+.profile-row select { flex: 1; }
+.mini.danger { background: #7f1d1d; color: #fca5a5; }
+.mini.danger:hover:not(:disabled) { background: #991b1b; }
+.mini.danger:disabled { opacity: .35; cursor: not-allowed; }
+
+/* 弹窗 */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+.modal {
+  background: #1e293b; border: 1px solid #334155; border-radius: 14px;
+  padding: 24px; width: 380px; max-width: 90vw; box-shadow: 0 16px 48px rgba(0,0,0,.5);
+}
+.modal h3 { margin: 0 0 16px; color: #f1f5f9; font-size: 18px; }
+.modal .field { margin-bottom: 14px; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
 </style>
