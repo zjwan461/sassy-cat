@@ -66,7 +66,7 @@
             <div class="msg-content" :class="{ 'md-mode': isAssistant(m) }">
               <!-- 用户消息的图片附件 -->
               <div v-if="m.images && m.images.length" class="msg-images">
-                <img v-for="(img, i) in m.images" :key="i" :src="img" class="msg-image" />
+                <img v-for="(img, i) in m.images" :key="i" :src="img" class="msg-image" @click="openImagePreview(img)" />
               </div>
               <template v-if="isAssistant(m)">
                 <MarkdownRenderer :content="m.content" :done="!m.streaming" />
@@ -163,8 +163,13 @@
         
         <!-- 拖拽提示遮罩 -->
         <div v-if="isDragOver" class="drag-overlay">
-          <div class="drag-hint">📁 松开以上传文件</div>
+          <div class="drag-hint"> 松开以上传文件</div>
         </div>
+      </div>
+
+      <!-- 消息图片放大预览弹窗 -->
+      <div v-if="previewImageUrl" class="image-modal" @click="closeImagePreview">
+        <img :src="previewImageUrl" class="image-modal-img" />
       </div>
     </section>
   </div>
@@ -189,6 +194,15 @@ const generating = computed(() => chat.generating)
 const listRef = ref(null)
 const fileInputRef = ref(null)
 const isDragOver = ref(false)
+const previewImageUrl = ref(null)
+
+function openImagePreview(url) {
+  previewImageUrl.value = url
+}
+
+function closeImagePreview() {
+  previewImageUrl.value = null
+}
 
 // ---------- 会话侧栏 ----------
 const editingId = ref(null)
@@ -447,7 +461,7 @@ onMounted(() => {
   .conv-item::before { content: '💬'; font-size: 14px; }
 }
 
-.msg-list { flex: 1; overflow-y: auto; padding: 16px 20px; }
+.msg-list { flex: 1; overflow-y: auto; padding: 16px 20px; padding-bottom: 100px; }
 .empty-hint { text-align: center; color: #64748b; margin-top: 60px; }
 .empty-emoji { font-size: 44px; margin-bottom: 10px; }
 
@@ -531,15 +545,23 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
   background: rgba(99, 102, 241, 0.05);
 }
 .input-bar { display: flex; gap: 10px; padding: 10px 14px; flex-shrink: 0; }
-.attach-btn { 
-  flex-shrink: 0; 
-  width: 36px; 
-  padding: 0; 
-  font-size: 18px;
+.attach-btn {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  font-size: 20px;
   background: #334155;
-  transition: background 0.15s;
+  color: #e2e8f0;
+  transition: background 0.15s, color 0.15s;
+  align-self: flex-start;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 6px;
 }
-.attach-btn:hover { background: #475569; }
+.attach-btn:hover { background: #475569; color: #fff; }
 .chat-input { flex: 1; resize: none; background: #0f172a; border: 1px solid #334155; border-radius: 10px; color: #e2e8f0; padding: 8px 12px; font-size: 14px; font-family: inherit; }
 .chat-input:focus { outline: none; border-color: #6366f1; }
 
@@ -572,4 +594,26 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .btn.stop { background: #7f1d1d; color: #fca5a5; }
 .btn.approve { background: #065f46; color: #6ee7b7; padding: 6px 16px; }
 .btn.reject { background: #7f1d1d; color: #fca5a5; padding: 6px 16px; }
+
+/* 消息图片放大预览弹窗 */
+.image-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  cursor: pointer;
+}
+.image-modal-img {
+  max-width: 90%;
+  max-height: 90%;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
 </style>
