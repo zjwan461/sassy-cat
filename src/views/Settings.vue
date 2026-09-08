@@ -96,7 +96,7 @@
         </div>
         <div class="actions">
           <button class="btn primary" @click="saveAll">保存设置</button>
-          <button class="btn" @click="previewPrompt">预览完整提示词</button>
+          <button class="btn" @click="togglePreview">{{ preview ? '隐藏完整提示词' : '预览完整提示词' }}</button>
           <button class="btn" @click="resetPersona">恢复默认人设</button>
           <button class="btn warn" @click="restartAgent">重启服务进程</button>
         </div>
@@ -496,9 +496,13 @@ async function testConnection() {
   }
 }
 
-function previewPrompt() {
-  connect()
-  send('prompt.preview', { persona: form.persona })
+function togglePreview() {
+  if (preview.value) {
+    preview.value = ''
+  } else {
+    connect()
+    send('prompt.preview', { persona: form.persona })
+  }
 }
 
 onMounted(() => {
@@ -585,4 +589,17 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: #6366f1
 .modal h3 { margin: 0 0 16px; color: #f1f5f9; font-size: 18px; }
 .modal .field { margin-bottom: 14px; }
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
+
+/* Toast 提示 - 顶部居中醒目显示 */
+.toast {
+  position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
+  background: #065f46; color: #a7f3d0; padding: 14px 32px; border-radius: 12px;
+  font-size: 15px; font-weight: 600; box-shadow: 0 8px 32px rgba(0,0,0,.5);
+  z-index: 9999; animation: toast-in .3s ease;
+  border: 1px solid #34d399;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-16px) }
+  to { opacity: 1; transform: translateX(-50%) translateY(0) }
+}
 </style>
