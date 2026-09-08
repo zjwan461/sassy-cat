@@ -72,6 +72,8 @@
               </div>
               <div v-if="!m.interruptActions?.length" class="interrupt-fallback">{{ summarizeInterrupt(m.interrupt) }}</div>
             </div>
+            <!-- 确认卡失效提示：用户在确认前发送了新消息，服务端以 respond 决策跳过挂起操作并续跑新消息 -->
+            <div v-if="m.interruptExpired" class="interrupt-expired">⏹ 新消息已发送，未确认的操作已跳过</div>
             <div v-if="m.error" class="msg-error">{{ m.error }}</div>
           </div>
         </div>
@@ -235,10 +237,25 @@ function confirmTool(msgId, approved) {
   generating.value = true
 }
 
+// 使所有待确认的 interrupt 卡失效：新消息发送时，服务端会把新消息作为
+// respond 决策消费掉挂起的 interrupt 并直接续跑，旧确认卡若仍可点击，
+// 点下去会触发无效的 tool.confirm，造成消息错乱
+function expirePendingInterrupts() {
+  for (const m of messages) {
+    if (m.interruptActions?.length) {
+      m.interruptActions = null
+      m.interruptDecisions = null
+      m.interrupt = null
+      m.interruptExpired = true
+    }
+  }
+}
+
 function submit() {
   const text = draft.value.trim()
   if (!text) return
   draft.value = ''
+  expirePendingInterrupts()
   messages.push({ id: 'u-' + Date.now(), role: 'user', content: text })
   send('chat.send', { sessionId: state.sessionId, content: text })
   generating.value = true
@@ -303,13 +320,14 @@ onMounted(() => {
       // 以服务端最终全文为准（若比增量拼接更完整）
       if (p.text && p.text.length > m.content.length) m.content = p.text
     }
-    generating.value = false
+    // 仅当前轮次的完成才复位 generating：旧轮次迟到的 completed 不得打断新轮次
+    if (p.msgId === currentMsgId) generating.value = false
     scrollBottom()
   }))
   unsubs.push(on('chat.error', (p) => {
     const m = messages.find((x) => x.id === p.msgId)
     if (m) { m.streaming = false; m.error = p.message || '生成失败' }
-    generating.value = false
+    if (p.msgId === currentMsgId) generating.value = false
   }))
   unsubs.push(on('agent.tool_call', (p) => {
     const m = messages.find((x) => x.id === p.msgId)
@@ -336,7 +354,15 @@ onMounted(() => {
       m.interruptDecisions = new Array(m.interruptActions.length).fill(undefined)
       m.streaming = false
     }
-    generating.value = false
+    if (p.msgId === currentMsgId) generating.value = false
+    scrollBottom()
+  }))
+  // 服务端判定确认卡已失效（resume 时线程已不再挂起）：置灰所有待确认卡。
+  // 若此刻并无轮次在流式输出，说明本次 confirm 被拒绝且不会有后续轮次，
+  // 复位 generating，避免停止按钮永久卡住。
+  unsubs.push(on('agent.interrupt.expired', () => {
+    expirePendingInterrupts()
+    if (!messages.some((m) => m.streaming)) generating.value = false
     scrollBottom()
   }))
   unsubs.push(on('chat.history.result', (p) => {
@@ -416,6 +442,7 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .interrupt-action-args { margin: 4px 0 0; color: #7dd3fc; font-size: 12px; font-family: Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
 .interrupt-action-btns { margin-top: 6px; display: flex; gap: 6px; }
 .interrupt-fallback { margin-top: 4px; }
+.interrupt-expired { margin-top: 8px; padding: 6px 12px; background: #1e293b; border: 1px dashed #475569; border-radius: 8px; color: #64748b; font-size: 12px; }
 .interrupt-btns { margin-top: 8px; display: flex; gap: 8px; }
 .btn-sm { border: none; border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
 .btn-sm.approve { background: #065f46; color: #6ee7b7; }

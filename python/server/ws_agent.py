@@ -39,7 +39,7 @@ async def _send(ws: WebSocket, frame: dict):
         await ws.send_json(frame)
 
 
-async def _stream_turn(ws, session_id: str, gen, msg_id: str):
+async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.Event):
     """消费 runner 事件生成器，节流后 fan-out 到房间"""
 
     async def emit(evt_type: str, payload: dict):
@@ -101,7 +101,52 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str):
         logger.exception("stream turn 异常")
         await emit("chat.error", {"msgId": msg_id, "code": "internal", "message": str(e)})
     finally:
-        _session_cancel.pop(session_id, None)
+        # 仅当注册的取消事件仍是本轮的才清理：旧轮次结束时可能已有新轮次
+        # 注册了自己的事件，无条件 pop 会误删新轮次的取消句柄
+        if _session_cancel.get(session_id) is cancel:
+            _session_cancel.pop(session_id, None)
+
+
+async def _pending_interrupt_decisions(session_id: str, content: str):
+    """线程若挂起于未确认的 interrupt，生成把新消息带入 resume 的 decisions 数组。
+
+    背景：用户不点确认直接发新消息时，若按普通新输入 stream，LangGraph 会丢弃
+    挂起任务，历史里留下带 tool_calls 却无对应 ToolMessage 的悬挂状态，导致
+    后续轮次消息错乱；而先自动 reject 再开新轮，会在历史中多出“用户已拒绝”
+    的噪音内容，且额外消耗一次模型收尾调用。
+
+    方案：利用 HITL middleware 的 "respond" 决策（见
+    langchain/agents/middleware/human_in_the_loop.py::_process_decision）——
+    跳过工具执行，把人类文本直接作为 ToolMessage 回填。将用户新消息作为
+    respond 内容带入本轮，模型在同一轮内直接回复新消息：无悬挂状态、
+    无拒绝噪音、不多耗一轮收尾调用。
+    （不用 Command.update 注入 HumanMessage：那会把新消息插在
+    AI(tool_calls) 与 ToolMessage 之间，OpenAI 兼容接口会拒绝该消息序列。）
+
+    返回 decisions 数组；线程无挂起（正常发消息）或异常时返回 None，
+    调用方回退到普通 run_turn。
+    """
+    try:
+        _, agent = holder.get()
+        state = agent.get_state({"configurable": {"thread_id": session_id}})
+        if not (state and state.next):
+            return None
+        # decisions 数量必须与挂起的 action_requests 总数一致（middleware 校验）
+        n = 0
+        for task in state.tasks:
+            for itr in getattr(task, "interrupts", []) or []:
+                val = getattr(itr, "value", None) or {}
+                if isinstance(val, dict):
+                    n += len(val.get("action_requests") or [])
+        if n == 0:
+            return None
+        logger.info(f"session={session_id} 存在 {n} 个未确认中断，新消息以 respond 决策续跑")
+        first = f"用户跳过了待确认的操作（工具未执行），并发送了新消息：{content}"
+        rest = "用户跳过了该待确认操作，工具未执行。"
+        return [{"type": "respond", "message": first}] + [{"type": "respond", "message": rest}] * (n - 1)
+    except Exception as e:
+        logger.warning(f"检查挂起中断失败（按普通新轮次处理）: {e}")
+        return None
 
 
 async def _handle_chat_send(ws, payload: dict):
@@ -129,15 +174,41 @@ async def _handle_chat_send(ws, payload: dict):
     await hub.publish(session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id}))
     await hub.publish(session_id, envelope("pet.command", {"action": "think"}))
 
-    gen = runner.run_turn(content, session_id, cancel)
-    await _stream_turn(ws, session_id, gen, msg_id)
+    # 有挂起未确认中断时：以 respond 决策跳过操作并把新消息带入本轮续跑；
+    # 否则正常开新轮
+    decisions = await _pending_interrupt_decisions(session_id, content)
+    if decisions is not None:
+        gen = runner.resume_turn(session_id, decisions, cancel)
+    else:
+        gen = runner.run_turn(content, session_id, cancel)
+    await _stream_turn(ws, session_id, gen, msg_id, cancel)
     await hub.publish(session_id, envelope("pet.command", {"action": "idle"}))
 
 
 async def _handle_tool_confirm(ws, payload: dict):
     session_id = payload.get("sessionId") or "default"
     msg_id = uuid.uuid4().hex[:12]
+
+    # 校验线程是否仍挂起于 interrupt：正常流程下新消息已在
+    # _handle_chat_send 中以 respond 决策续跑并消费掉挂起中断，
+    # 此处主要防御多窗口（桌宠/主窗口）确认卡不同步的竞态，
+    # 广播 expired 让前端置灰失效。
+    try:
+        _, agent = holder.get()
+        state = agent.get_state({"configurable": {"thread_id": session_id}})
+        pending = bool(state and state.next)
+    except Exception as e:
+        logger.warning(f"resume 前校验挂起状态失败: {e}")
+        pending = True  # 校验异常时保守放行，维持旧行为
+    if not pending:
+        await hub.publish(session_id, envelope("agent.interrupt.expired", {"sessionId": session_id}))
+        return
+
     cancel = threading.Event()
+    # 与 chat.send 一致：同一 session 已有进行中的轮次 -> 先取消，避免双流并发写同一 checkpoint
+    old = _session_cancel.get(session_id)
+    if old:
+        old.set()
     _session_cancel[session_id] = cancel
     await hub.publish(session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id}))
 
@@ -150,7 +221,7 @@ async def _handle_tool_confirm(ws, payload: dict):
         approved = bool(payload.get("approved"))
         gen = runner.resume_turn(session_id, [{"type": "approve" if approved else "reject"}], cancel)
 
-    await _stream_turn(ws, session_id, gen, msg_id)
+    await _stream_turn(ws, session_id, gen, msg_id, cancel)
 
 
 async def _handle_history(ws, payload: dict):

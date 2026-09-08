@@ -131,8 +131,10 @@ async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event
 async def resume_turn(thread_id: str, decisions: list[dict], cancel_event: threading.Event):
     """用户对 interrupt 确认后恢复执行（仅对当前仍挂起的 thread 有效）。
 
-    decisions: 决策数组，每个元素为 {"type": "approve"|"reject"}，
+    decisions: 决策数组，每个元素为 {"type": "approve"|"reject"|"respond"}，
     数量必须与当前挂起的 interrupt 数量一致。
+    "respond" 决策会跳过工具执行，把 message 文本直接作为 ToolMessage 回填
+    （见 HITL middleware::_process_decision），可用于把用户新消息带入本轮。
     """
     version, agent = holder.get()
     q = janus.Queue()
