@@ -35,6 +35,13 @@ class Hub:
                 if not self._rooms[session_id]:
                     del self._rooms[session_id]
 
+    async def move_room(self, old_id: str, new_id: str):
+        """把旧房间全部连接迁移到新房间（切换激活会话时，多窗口无需重连即同步换房）"""
+        async with self._lock:
+            conns = self._rooms.pop(old_id, set())
+            if conns:
+                self._rooms.setdefault(new_id, set()).update(conns)
+
     async def publish(self, session_id: str, frame: dict, exclude: WebSocket | None = None):
         """向会话房间广播；exclude 用于不回显来源连接"""
         targets = list(self._rooms.get(session_id, ()))

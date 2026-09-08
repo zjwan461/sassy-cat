@@ -7,8 +7,48 @@
         <span class="conn" :class="connClass">{{ connText }}</span>
       </p>
     </header>
+    <!-- 紧凑单行页头：标题与状态同行，把纵向空间让给聊天区 -->
 
     <section class="card chat-card">
+      <!-- 上半区：会话侧栏 + 消息流并排 -->
+      <div class="chat-body">
+      <!-- 会话侧栏：历史对话列表 + 新建 -->
+      <aside class="conv-panel">
+        <button class="btn conv-new" @click="onNewConv">＋ 新建对话</button>
+        <div class="conv-list">
+          <div
+            v-for="c in conv.list"
+            :key="c.id"
+            class="conv-item"
+            :class="{ active: c.id === chat.convId }"
+            @click="onSwitchConv(c)"
+          >
+            <template v-if="editingId === c.id">
+              <input
+                ref="renameInputRef"
+                v-model="editingTitle"
+                class="conv-rename-input"
+                @keydown.enter.prevent="commitRename(c)"
+                @keydown.esc="cancelRename"
+                @blur="commitRename(c)"
+                @click.stop
+              />
+            </template>
+            <template v-else>
+              <div class="conv-item-main">
+                <div class="conv-title">{{ c.title || '新对话' }}</div>
+                <div class="conv-time">{{ relTime(c.updatedAt) }}</div>
+              </div>
+              <div class="conv-actions">
+                <button class="conv-action-btn" title="重命名" @click.stop="startRename(c)">✎</button>
+                <button class="conv-action-btn del" title="删除" @click.stop="onDeleteConv(c)">🗑</button>
+              </div>
+            </template>
+          </div>
+          <div v-if="!conv.list.length" class="conv-empty">还没有对话</div>
+        </div>
+      </aside>
+
       <!-- 消息流 -->
       <div class="msg-list" ref="listRef">
         <div v-if="messages.length === 0" class="empty-hint">
@@ -83,8 +123,9 @@
           </div>
         </div>
       </div>
+      </div>
 
-      <!-- 输入区 -->
+      <!-- 输入区：永远固定在卡片最底部，横跨整宽 -->
       <div class="input-bar">
         <textarea
           v-model="draft"
@@ -108,12 +149,66 @@ import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 // 会话状态与 WS 事件订阅已提升到模块级单例（useChatStore）：
 // 切换 tab 导致本组件卸载时，流式数据仍在后台接收与累积；
 // 重新挂载直接恢复现场继续渲染，不再出现"切走就停止渲染"的问题。
-const { chat, socketState, submitMessage, stopGeneration, decideInterrupt, approveAllInterrupt } = useChatStore()
+const { chat, conv, socketState, submitMessage, stopGeneration, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation } = useChatStore()
 
 const messages = chat.messages
 const draft = ref('')
 const generating = computed(() => chat.generating)
 const listRef = ref(null)
+
+// ---------- 会话侧栏 ----------
+const editingId = ref(null)
+const editingTitle = ref('')
+const renameInputRef = ref(null)
+
+function relTime(ts) {
+  if (!ts) return ''
+  const diff = Date.now() - ts
+  const m = Math.floor(diff / 60000)
+  if (m < 1) return '刚刚'
+  if (m < 60) return `${m} 分钟前`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h} 小时前`
+  const d = Math.floor(h / 24)
+  if (d < 7) return `${d} 天前`
+  return new Date(ts).toLocaleDateString('zh-CN')
+}
+
+function onNewConv() {
+  newConversation()
+}
+
+function onSwitchConv(c) {
+  if (c.id === chat.convId) return
+  switchConversation(c.id)
+  scrollBottom()
+}
+
+function startRename(c) {
+  editingId.value = c.id
+  editingTitle.value = c.title || ''
+  nextTick(() => {
+    const el = Array.isArray(renameInputRef.value) ? renameInputRef.value[0] : renameInputRef.value
+    el && el.focus()
+  })
+}
+
+function cancelRename() {
+  editingId.value = null
+  editingTitle.value = ''
+}
+
+function commitRename(c) {
+  if (editingId.value !== c.id) return
+  const title = editingTitle.value.trim()
+  editingId.value = null
+  if (title && title !== c.title) renameConversation(c.id, title)
+}
+
+function onDeleteConv(c) {
+  if (!window.confirm(`删除对话「${c.title || '新对话'}」？消息记录仍会保留在本地。`)) return
+  deleteConversation(c.id)
+}
 
 const connText = computed(() => ({ open: '● 已连接', connecting: '○ 连接中…', reconnecting: '○ 重连中…', closed: '○ 未连接' }[socketState.status] || '○ 未连接'))
 const connClass = computed(() => socketState.status === 'open' ? 'online' : 'offline')
@@ -223,19 +318,50 @@ onMounted(() => {
 <style scoped>
 /* 聊天区域随窗口大小自适应伸缩，不设固定宽度上限 */
 .chat-page { width: 100%; height: 100%; display: flex; flex-direction: column; }
-.page-header { margin-bottom: 16px; }
-.page-title { font-size: 26px; font-weight: 700; color: #f1f5f9; margin-bottom: 6px; }
-.page-subtitle { font-size: 14px; color: #64748b; }
-.conn { margin-left: 10px; }
+/* 紧凑单行页头 */
+.page-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.page-title { font-size: 18px; font-weight: 700; color: #f1f5f9; margin: 0; }
+.page-subtitle { font-size: 12px; color: #64748b; margin: 0; }
+.conn { margin-left: 8px; }
 .conn.online { color: #34d399; }
 .conn.offline { color: #f59e0b; }
 
+/* 卡片纵向：上半区（侧栏+消息流并排）+ 底部全宽输入区 */
 .chat-card { flex: 1; display: flex; flex-direction: column; min-height: 0; background: #1e293b; border: 1px solid #334155; border-radius: 14px; overflow: hidden; }
-.msg-list { flex: 1; overflow-y: auto; padding: 20px; }
+.chat-body { flex: 1; min-height: 0; display: flex; flex-direction: row; }
+
+/* ===== 会话侧栏（紧凑） ===== */
+.conv-panel { width: 176px; min-width: 176px; display: flex; flex-direction: column; border-right: 1px solid #334155; background: #172033; padding: 8px; gap: 6px; }
+.conv-new { width: 100%; height: 32px; align-self: auto; flex-shrink: 0; font-size: 13px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; font-weight: 600; }
+.conv-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.conv-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s; }
+.conv-item:hover { background: #273449; }
+.conv-item.active { background: #4f46e533; outline: 1px solid #6366f1; }
+.conv-item-main { flex: 1; min-width: 0; }
+.conv-title { font-size: 12.5px; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv-time { font-size: 10px; color: #64748b; margin-top: 1px; }
+.conv-actions { display: none; flex-shrink: 0; gap: 2px; }
+.conv-item:hover .conv-actions { display: flex; }
+.conv-action-btn { border: none; background: transparent; color: #94a3b8; cursor: pointer; font-size: 12px; padding: 4px; border-radius: 4px; }
+.conv-action-btn:hover { background: #334155; color: #e2e8f0; }
+.conv-action-btn.del:hover { color: #f87171; }
+.conv-rename-input { flex: 1; min-width: 0; background: #0f172a; border: 1px solid #6366f1; border-radius: 6px; color: #e2e8f0; padding: 4px 8px; font-size: 13px; font-family: inherit; }
+.conv-rename-input:focus { outline: none; }
+.conv-empty { text-align: center; color: #64748b; font-size: 13px; margin-top: 20px; }
+/* 窄屏折叠侧栏 */
+@media (max-width: 900px) {
+  .conv-panel { width: 48px; min-width: 48px; padding: 8px 4px; }
+  .conv-panel .conv-new { font-size: 0; padding: 0; }
+  .conv-panel .conv-new::before { content: '＋'; font-size: 18px; }
+  .conv-item-main, .conv-actions { display: none; }
+  .conv-item::before { content: '💬'; font-size: 14px; }
+}
+
+.msg-list { flex: 1; overflow-y: auto; padding: 16px 20px; }
 .empty-hint { text-align: center; color: #64748b; margin-top: 60px; }
 .empty-emoji { font-size: 44px; margin-bottom: 10px; }
 
-.msg { display: flex; gap: 10px; margin-bottom: 16px; }
+.msg { display: flex; gap: 10px; margin-bottom: 12px; }
 .msg.user { flex-direction: row-reverse; }
 .msg-avatar { font-size: 22px; flex-shrink: 0; }
 .msg-body { max-width: 76%; }
@@ -299,10 +425,10 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 
 .msg-error { margin-top: 6px; color: #f87171; font-size: 13px; }
 
-.input-bar { display: flex; gap: 10px; padding: 14px; border-top: 1px solid #334155; }
-.chat-input { flex: 1; resize: none; background: #0f172a; border: 1px solid #334155; border-radius: 10px; color: #e2e8f0; padding: 10px 12px; font-size: 14px; font-family: inherit; }
+.input-bar { display: flex; gap: 10px; padding: 10px 14px; border-top: 1px solid #334155; flex-shrink: 0; }
+.chat-input { flex: 1; resize: none; background: #0f172a; border: 1px solid #334155; border-radius: 10px; color: #e2e8f0; padding: 8px 12px; font-size: 14px; font-family: inherit; }
 .chat-input:focus { outline: none; border-color: #6366f1; }
-.btn { border: none; border-radius: 10px; padding: 0 22px; font-size: 14px; cursor: pointer; align-self: stretch; }
+.btn { border: none; border-radius: 10px; padding: 0 18px; font-size: 14px; cursor: pointer; align-self: stretch; }
 .btn.send { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; }
 .btn.send:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn.stop { background: #7f1d1d; color: #fca5a5; }

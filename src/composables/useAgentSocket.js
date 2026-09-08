@@ -10,9 +10,10 @@ const state = reactive({
   status: 'closed', // connecting | open | reconnecting | closed
   port: DEFAULT_PORT,
   client: 'main', // main | pet（由 setClient 在各窗口入口设置）
-  sessionId: localStorage.getItem('sassy.sessionId') || ('web-' + Math.random().toString(36).slice(2, 10))
+  // 会话 id 由服务端 connected 帧下发（激活会话），本地值仅作为连接 query 的占位/上次值；
+  // 多会话切换（conv.activated）时会随之更新
+  sessionId: localStorage.getItem('sassy.sessionId') || ''
 })
-localStorage.setItem('sassy.sessionId', state.sessionId)
 
 export function setClient(c) { state.client = c }
 
@@ -36,7 +37,8 @@ export function on(type, fn) {
   return () => listeners.get(type).delete(fn)
 }
 function url() {
-  return `ws://127.0.0.1:${state.port}/ws/agent?client=${state.client}&sessionId=${state.sessionId}`
+  const sid = state.sessionId ? `&sessionId=${state.sessionId}` : ''
+  return `ws://127.0.0.1:${state.port}/ws/agent?client=${state.client}${sid}`
 }
 
 function flushQueue() {
@@ -64,6 +66,19 @@ export function connect() {
   ws.onmessage = (evt) => {
     let frame
     try { frame = JSON.parse(evt.data) } catch { return }
+    // 服务端为准对齐激活会话：connected 帧携带当前 activeId；
+    // 变化时先更新 sessionId 再派发，保证业务监听器看到的是新会话
+    if (frame.type === 'connected' && frame.payload?.sessionId && frame.payload.sessionId !== state.sessionId) {
+      state.sessionId = frame.payload.sessionId
+      localStorage.setItem('sassy.sessionId', state.sessionId)
+    }
+    // 会话切换广播（conv.activate/create/delete 由服务端权威处理）：
+    // 在派发业务监听器之前更新 sessionId，使 send() 落入新房间、
+    // 桌宠等直接读 state.sessionId 的消费方自动跟随
+    if (frame.type === 'conv.activated' && frame.payload?.id && frame.payload.id !== state.sessionId) {
+      state.sessionId = frame.payload.id
+      localStorage.setItem('sassy.sessionId', state.sessionId)
+    }
     emit(frame.type, frame.payload || {})
   }
   ws.onclose = () => {

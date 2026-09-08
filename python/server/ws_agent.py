@@ -21,6 +21,7 @@ from agent import runner
 from agent.engine import holder
 from agent.prompts import build_system_prompt, DEFAULT_PERSONA
 from proactive import scheduler
+from server import conversations
 from server.bus import hub
 from server.protocol import envelope
 
@@ -28,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 # 每个 session 的运行态：当前取消事件
 _session_cancel: dict[str, threading.Event] = {}
+
+# 当前激活会话对应的房间 id：所有窗口连接都聚集在该房间，
+# 切换会话时整房迁移（见 _activate_room），保证多窗口事件同步
+_active_room: str | None = None
 
 # delta 帧节流参数
 FLUSH_INTERVAL = 0.05   # 50ms
@@ -149,14 +154,27 @@ async def _pending_interrupt_decisions(session_id: str, content: str):
         return None
 
 
-async def _handle_chat_send(ws, payload: dict):
-    session_id = payload.get("sessionId") or "default"
+async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
     content = (payload.get("content") or "").strip()
     msg_id = uuid.uuid4().hex[:12]
     if not content:
         await _send(ws, envelope("error", {"message": "空消息"}))
         return
 
+    # 会话以服务端激活项为唯一权威：客户端携带的 sessionId 可能是切换前的过期值
+    # （桌宠窗口长期存活，最容易踩到），采信它会把消息写进错误线程
+    session_id = conversations.active_id()
+    # 房间对齐：连接所在房间与实际会话不一致时迁移，否则本轮 chat.* 事件 fan-out 收不到
+    if room_ref is not None and room_ref.get("id") != session_id:
+        await hub.leave(room_ref.get("id"), ws)
+        await hub.join(session_id, ws)
+        room_ref["id"] = session_id
+
+    # 新会话首条消息：截断生成标题并刷新列表（auto_title 仅在真实改名时返回）
+    if conversations.auto_title(session_id, content) is not None:
+        await hub.publish_all(envelope("conv.list.result", {"items": conversations.list_sorted()}))
+    conversations.touch(session_id)
+    conversations.touch(session_id)
     cancel = threading.Event()
     # 同一 session 已有进行中的轮次 -> 先取消
     old = _session_cancel.get(session_id)
@@ -186,7 +204,8 @@ async def _handle_chat_send(ws, payload: dict):
 
 
 async def _handle_tool_confirm(ws, payload: dict):
-    session_id = payload.get("sessionId") or "default"
+    # 与 chat.send 一致：以服务端激活会话为权威（确认卡必然属于当前激活对话）
+    session_id = conversations.active_id()
     msg_id = uuid.uuid4().hex[:12]
 
     # 校验线程是否仍挂起于 interrupt：正常流程下新消息已在
@@ -225,7 +244,8 @@ async def _handle_tool_confirm(ws, payload: dict):
 
 
 async def _handle_history(ws, payload: dict):
-    session_id = payload.get("sessionId") or "default"
+    # 历史请求同样以激活会话为权威，客户端过期 id 不作为数据源
+    session_id = conversations.active_id()
     limit = int(payload.get("limit") or 50)
     try:
         _, agent = holder.get()
@@ -316,12 +336,61 @@ async def _handle_llm_test(ws, payload: dict):
         await _send(ws, envelope("llm.test.result", {"ok": False, "error": str(e)}))
 
 
+async def _handle_conv(ws, mtype: str, payload: dict, room_ref: dict):
+    """conv.* 会话管理消息路由。room_ref 持有本连接的房间 id（可变，支持切换后迁移）。"""
+    if mtype == "conv.list":
+        await _send(ws, envelope("conv.list.result", {"items": conversations.list_sorted()}))
+    elif mtype == "conv.create":
+        conv = conversations.create()
+        await _activate_room(conv, room_ref)
+    elif mtype == "conv.activate":
+        conv = conversations.set_active(payload.get("id") or "")
+        if conv is None:
+            await _send(ws, envelope("error", {"message": f"会话不存在: {payload.get('id')}"}))
+            return
+        await _activate_room(conv, room_ref)
+    elif mtype == "conv.rename":
+        conv = conversations.rename(payload.get("id") or "", payload.get("title") or "")
+        if conv is None:
+            await _send(ws, envelope("error", {"message": f"会话不存在: {payload.get('id')}"}))
+            return
+        await hub.publish_all(envelope("conv.list.result", {"items": conversations.list_sorted()}))
+    elif mtype == "conv.delete":
+        cid = payload.get("id") or ""
+        removed = conversations.delete(cid)
+        if not removed:
+            await _send(ws, envelope("error", {"message": f"会话不存在: {cid}"}))
+            return
+        # 删除的是激活会话：active_id() 已自动回退，广播让所有窗口跟随切换
+        await hub.publish_all(envelope("conv.list.result", {"items": conversations.list_sorted()}))
+        active = conversations.get(conversations.active_id())
+        if active:
+            await _activate_room(active, room_ref)
+
+
+async def _activate_room(conv: dict, room_ref: dict):
+    """激活会话变更：整房迁移 + 全局广播，桌宠/多窗口无需重连即跟随切换。"""
+    global _active_room
+    old = _active_room
+    if old and old != conv["id"]:
+        await hub.move_room(old, conv["id"])
+    _active_room = conv["id"]
+    room_ref["id"] = conv["id"]
+    await hub.publish_all(envelope("conv.activated", {"id": conv["id"], "title": conv.get("title", "")}))
+
+
 async def ws_agent_endpoint(ws: WebSocket):
     await ws.accept()
     client = ws.query_params.get("client", "main")
-    session_id = ws.query_params.get("sessionId") or None
-    if client != "system" and session_id:
+    # 一律加入"当前激活会话"房间（服务端为权威）：客户端 query 里的 sessionId 可能是
+    # 切换前的过期值，采信它会让连接落入无人认领的房间、收不到 chat.* 广播
+    session_id = conversations.active_id()
+    room_ref = {"id": session_id}  # 可变引用：conv.activate 后房间随之迁移
+    if client != "system":
         await hub.join(session_id, ws)
+        global _active_room
+        if _active_room is None:
+            _active_room = session_id
     logger.info(f"WS 连接建立 client={client} session={session_id}")
     try:
         await _send(ws, envelope("connected", {"client": client, "sessionId": session_id}))
@@ -340,9 +409,9 @@ async def ws_agent_endpoint(ws: WebSocket):
                 if mtype == "ping":
                     await _send(ws, envelope("pong", {}))
                 elif mtype == "chat.send":
-                    asyncio.create_task(_handle_chat_send(ws, payload))
+                    asyncio.create_task(_handle_chat_send(ws, payload, room_ref))
                 elif mtype == "chat.cancel":
-                    sid = payload.get("sessionId") or session_id or "default"
+                    sid = payload.get("sessionId") or room_ref.get("id") or "default"
                     ev = _session_cancel.get(sid)
                     if ev:
                         ev.set()
@@ -351,6 +420,8 @@ async def ws_agent_endpoint(ws: WebSocket):
                     asyncio.create_task(_handle_tool_confirm(ws, payload))
                 elif mtype == "chat.history":
                     await _handle_history(ws, payload)
+                elif mtype.startswith("conv."):
+                    await _handle_conv(ws, mtype, payload, room_ref)
                 elif mtype == "prompt.preview":
                     final = build_system_prompt(payload.get("persona") or DEFAULT_PERSONA)
                     await _send(ws, envelope("prompt.preview.result", {"prompt": final}))
@@ -378,5 +449,6 @@ async def ws_agent_endpoint(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        await hub.leave(session_id, ws)
-        logger.info(f"WS 连接关闭 client={client} session={session_id}")
+        # 房间可能已随会话切换迁移（room_ref），以最新房间 id 退出
+        await hub.leave(room_ref.get("id") or session_id, ws)
+        logger.info(f"WS 连接关闭 client={client} session={room_ref.get('id') or session_id}")

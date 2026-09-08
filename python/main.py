@@ -10,7 +10,8 @@ Python 后端服务入口（由 Electron 主进程启动）
   agent/             deepagents 引擎（engine=AgentHolder, runner=流式桥接）
 
 启动参数：
-  --config <path>   用户配置文件（config.user.json，Electron userData 下）
+  --config <path>    用户配置文件（config.user.json，Electron userData 下）
+  --data-dir <path>  用户数据目录（Electron app.getPath('userData')，存会话元数据与 checkpoint）
 就绪信号：stdout 打印 `[READY] {"port": ...}`，Electron 据此广播 agent-ready。
 """
 
@@ -59,7 +60,12 @@ def _emit_ready(port: int):
 async def main():
     parser = argparse.ArgumentParser(description='sassy-cat python backend')
     parser.add_argument('--config', default=os.getenv('SASSY_CAT_CONFIG'), help='config.user.json 路径')
+    parser.add_argument('--data-dir', default=None, help='用户数据目录（userData）')
     args = parser.parse_args()
+
+    # 先初始化数据目录（含 runtime 旧 checkpoint 搬迁），后续 constant 派生 DB_URL 依赖它
+    import paths
+    paths.init(args.data_dir)
 
     import config_loader
     cfg = config_loader.load_config(args.config)

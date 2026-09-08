@@ -238,9 +238,11 @@ function startPythonService() {
     }
 
     const pythonScriptPath = getAssetPath('python/main.py');
-    const userConfigPath = path.join(app.getPath('userData'), 'config.user.json');
+    const userDataPath = app.getPath('userData');
+    const userConfigPath = path.join(userDataPath, 'config.user.json');
 
-    pythonProcess = spawn(pyPath, [pythonScriptPath, '--config', userConfigPath], {
+    // --data-dir：会话元数据与 checkpoint 等用户数据的存放目录（Python 侧 paths.py 消费）
+    pythonProcess = spawn(pyPath, [pythonScriptPath, '--config', userConfigPath, '--data-dir', userDataPath], {
       cwd: getAssetPath('.'),
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
       stdio: ['ignore', 'pipe', 'pipe']

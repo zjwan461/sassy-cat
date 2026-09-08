@@ -107,8 +107,8 @@ const menuItems = [
 
 /* ===== 侧边栏 ===== */
 .sidebar {
-  width: 240px;
-  min-width: 240px;
+  width: 168px;
+  min-width: 168px;
   background: #1e293b;
   border-right: 1px solid #334155;
   display: flex;
@@ -118,13 +118,13 @@ const menuItems = [
 .sidebar-header {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 28px 24px;
+  gap: 10px;
+  padding: 16px 16px;
 }
 
 .logo {
-  width: 44px;
-  height: 44px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -136,9 +136,8 @@ const menuItems = [
   object-fit: contain;
   border-radius: 10px;
 }
-
 .app-name {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 700;
   color: #f1f5f9;
 }
@@ -146,28 +145,27 @@ const menuItems = [
 .sidebar-divider {
   height: 1px;
   background: #334155;
-  margin: 0 16px 16px;
+  margin: 0 12px 10px;
 }
-
 /* ===== 菜单 ===== */
 .nav-menu {
   flex: 1;
-  padding: 0 16px;
+  padding: 0 10px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   overflow-y: auto;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 14px 18px;
-  border-radius: 10px;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
   color: #94a3b8;
   text-decoration: none;
-  font-size: 15px;
+  font-size: 14px;
   transition: all 0.2s;
 }
 
@@ -189,8 +187,8 @@ const menuItems = [
 }
 
 .nav-icon {
-  font-size: 18px;
-  width: 22px;
+  font-size: 16px;
+  width: 20px;
   text-align: center;
 }
 /* ===== 内容区 ===== */

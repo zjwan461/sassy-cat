@@ -12,7 +12,16 @@ const { state: socketState, connect, send, on } = useAgentSocket()
 
 export const chat = reactive({
   messages: [],
-  generating: false
+  generating: false,
+  // 当前会话（对话）：id 即 LangGraph thread_id，由服务端激活会话下发
+  convId: null,
+  convTitle: ''
+})
+
+// 会话列表（元数据来自服务端 conversations.json，按 updatedAt 倒序）
+export const conv = reactive({
+  list: [],
+  loading: false
 })
 
 let currentMsgId = null
@@ -143,6 +152,8 @@ function ensureStarted() {
     if (!chat.messages.some((m) => m.streaming)) chat.generating = false
   })
   on('chat.history.result', (p) => {
+    // 只回填当前激活会话的历史：切会话后旧请求的迟到响应直接丢弃
+    if (p.sessionId && chat.convId && p.sessionId !== chat.convId) return
     // 仅在尚无本地消息时回填历史；若切走期间有轮次在流式累积，
     // messages 非空则跳过，避免覆盖实时状态
     if (chat.messages.length === 0 && p.items && p.items.length) {
@@ -153,20 +164,78 @@ function ensureStarted() {
       }))
     }
   })
+
+  // ---------- 会话管理事件 ----------
+  // 首次连通（或重连）时对齐激活会话：进入页面早于 WS 连上的场景，
+  // 由 connected 帧驱动补拉会话列表与历史
+  on('connected', (p) => {
+    if (!p.sessionId) return
+    loadConversations()
+    // 已对齐同一会话（常规重连）：现场保持不动
+    if (chat.convId === p.sessionId) return
+    // 服务端激活会话与本地现场不同（断线期间其他窗口切换/首次进入）：
+    // 丢弃旧会话现场，按新激活会话重建
+    chat.convId = p.sessionId
+    chat.messages.splice(0, chat.messages.length)
+    chat.generating = false
+    send('chat.history', { sessionId: p.sessionId, limit: 30 })
+  })
+  on('conv.list.result', (p) => {
+    conv.list = p.items || []
+    conv.loading = false
+  })
+  // 激活会话变更（新建/切换/删除回退，含其他窗口触发）：
+  // 清空现场并重新拉取新会话历史；旧轮次事件按 msgId 找不到消息自然丢弃
+  on('conv.activated', (p) => {
+    if (!p.id || p.id === chat.convId) return
+    chat.convId = p.id
+    chat.convTitle = p.title || ''
+    chat.messages.splice(0, chat.messages.length)
+    chat.generating = false
+    currentMsgId = null
+    send('chat.history', { sessionId: p.id, limit: 30 })
+  })
 }
 
+/** 拉取会话列表 */
+export function loadConversations() {
+  conv.loading = true
+  send('conv.list', {})
+}
+
+/** 新建对话（服务端创建并激活，conv.activated 广播驱动现场切换） */
+export function newConversation() {
+  send('conv.create', {})
+}
+
+/** 切换到指定对话 */
+export function switchConversation(id) {
+  if (id === chat.convId) return
+  send('conv.activate', { id })
+}
+
+/** 重命名对话 */
+export function renameConversation(id, title) {
+  send('conv.rename', { id, title })
+}
+
+/** 删除对话（服务端自动回退激活项并广播） */
+export function deleteConversation(id) {
+  send('conv.delete', { id })
+}
+
+/** 用户发送消息 */
 /** 用户发送消息 */
 export function submitMessage(text) {
   ensureStarted()
   expirePendingInterrupts()
   chat.messages.push({ id: 'u-' + Date.now(), role: 'user', content: text })
-  send('chat.send', { sessionId: socketState.sessionId, content: text })
+  send('chat.send', { sessionId: chat.convId || socketState.sessionId, content: text })
   chat.generating = true
 }
-
 /** 停止当前轮次生成 */
 export function stopGeneration() {
-  send('chat.cancel', { sessionId: socketState.sessionId })
+  send('chat.cancel', { sessionId: chat.convId || socketState.sessionId })
 }
 
 /** 单个操作的确认/拒绝；全部确认后统一发送 decisions */
@@ -179,7 +248,7 @@ export function decideInterrupt(msgId, index, decision) {
   const allDecided = m.interruptDecisions.every((d) => d !== undefined)
   if (allDecided) {
     const decisions = m.interruptDecisions.map((d) => ({ type: d }))
-    send('tool.confirm', { sessionId: socketState.sessionId, decisions })
+    send('tool.confirm', { sessionId: chat.convId || socketState.sessionId, decisions })
     chat.generating = true
     m.interruptActions = null
     m.interruptDecisions = null
@@ -193,14 +262,22 @@ export function approveAllInterrupt(msgId) {
   const decisions = m.interruptActions.map(() => ({ type: 'approve' }))
   m.interruptActions = null
   m.interruptDecisions = null
-  send('tool.confirm', { sessionId: socketState.sessionId, decisions })
+  send('tool.confirm', { sessionId: chat.convId || socketState.sessionId, decisions })
   chat.generating = true
 }
 
 export function useChatStore() {
   ensureStarted()
-  // 每次进入聊天页拉取历史：仅在 messages 为空时生效（见 chat.history.result 守卫），
-  // 若正在流式中则数据保持不动
-  send('chat.history', { sessionId: socketState.sessionId, limit: 50 })
-  return { chat, socketState, submitMessage, stopGeneration, decideInterrupt, approveAllInterrupt }
+  loadConversations()
+  // 会话对齐：connected 帧已把激活会话写入 socketState.sessionId；
+  // 首次进入（convId 未知）按激活会话拉历史，后续切换由 conv.activated 广播驱动
+  if (!chat.convId && socketState.sessionId) {
+    chat.convId = socketState.sessionId
+    send('chat.history', { sessionId: chat.convId, limit: 30 })
+  } else if (chat.convId && chat.messages.length === 0 && !chat.generating) {
+    // 每次进入聊天页拉取历史：仅在 messages 为空时生效（见 chat.history.result 守卫），
+    // 若正在流式中则数据保持不动
+    send('chat.history', { sessionId: chat.convId, limit: 30 })
+  }
+  return { chat, conv, socketState, submitMessage, stopGeneration, decideInterrupt, approveAllInterrupt, loadConversations, newConversation, switchConversation, renameConversation, deleteConversation }
 }
