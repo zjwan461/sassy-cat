@@ -92,7 +92,7 @@ const menuItems = [
   { path: '/', label: '系统监控', icon: '📊', disabled: false },
   { path: '/chat', label: 'AI 聊天', icon: '💬', disabled: false },
   { path: '/logs', label: '日志', icon: '📋', disabled: false },
-  { path: '/settings', label: '设置', icon: '🔧', disabled: false },
+  { path: '/settings', label: '设置', icon: '🐟', disabled: false },
   { path: '/about', label: '关于', icon: 'ℹ️', disabled: false }
 ]
 </script>

@@ -224,15 +224,31 @@ export function deleteConversation(id) {
   send('conv.delete', { id })
 }
 
-/** 用户发送消息 */
-/** 用户发送消息 */
-export function submitMessage(text) {
+/** 用户发送消息（支持附件） */
+export function submitMessage(text, attachments = []) {
   ensureStarted()
   expirePendingInterrupts()
-  chat.messages.push({ id: 'u-' + Date.now(), role: 'user', content: text })
-  send('chat.send', { sessionId: chat.convId || socketState.sessionId, content: text })
+  
+  // 提取图片用于前端渲染
+  const images = attachments
+    .filter(att => att.type === 'image')
+    .map(att => `data:${att.mimeType};base64,${att.data}`)
+  
+  chat.messages.push({
+    id: 'u-' + Date.now(),
+    role: 'user',
+    content: text,
+    images: images.length ? images : undefined
+  })
+  
+  send('chat.send', {
+    sessionId: chat.convId || socketState.sessionId,
+    content: text,
+    attachments: attachments.length ? attachments : undefined
+  })
   chat.generating = true
 }
+
 /** 停止当前轮次生成 */
 export function stopGeneration() {
   send('chat.cancel', { sessionId: chat.convId || socketState.sessionId })

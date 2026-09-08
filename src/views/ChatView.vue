@@ -64,6 +64,10 @@
               <div class="reasoning-content">{{ m.reasoning }}</div>
             </details>
             <div class="msg-content" :class="{ 'md-mode': isAssistant(m) }">
+              <!-- 用户消息的图片附件 -->
+              <div v-if="m.images && m.images.length" class="msg-images">
+                <img v-for="(img, i) in m.images" :key="i" :src="img" class="msg-image" />
+              </div>
               <template v-if="isAssistant(m)">
                 <MarkdownRenderer :content="m.content" :done="!m.streaming" />
                 <span v-if="m.streaming" class="cursor">▌</span>
@@ -126,16 +130,41 @@
       </div>
 
       <!-- 输入区：永远固定在卡片最底部，横跨整宽 -->
-      <div class="input-bar">
-        <textarea
-          v-model="draft"
-          class="chat-input"
-          rows="2"
-          placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-          @keydown.enter.exact.prevent="submit"
-        ></textarea>
-        <button v-if="!generating" class="btn send" :disabled="!draft.trim()" @click="submit">发送</button>
-        <button v-else class="btn stop" @click="stopGen">停止</button>
+      <div 
+        class="input-area"
+        :class="{ 'drag-over': isDragOver }"
+        @dragover.prevent="onDragOver"
+        @dragleave="onDragLeave"
+        @drop.prevent="onDrop"
+      >
+        <!-- 文件预览区 -->
+        <FilePreview v-if="hasAttachments" />
+        
+        <div class="input-bar">
+          <button class="btn attach-btn" @click="triggerFileInput" title="上传图片或文件">📎</button>
+          <input 
+            ref="fileInputRef"
+            type="file" 
+            multiple 
+            style="display: none"
+            @change="onFileSelect"
+          />
+          <textarea
+            v-model="draft"
+            class="chat-input"
+            rows="2"
+            placeholder="输入消息，Enter 发送，Shift+Enter 换行，可粘贴/拖拽图片"
+            @keydown.enter.exact.prevent="submit"
+            @paste="onPaste"
+          ></textarea>
+          <button v-if="!generating" class="btn send" :disabled="(!draft.trim() && !hasAttachments) || isProcessing" @click="submit">发送</button>
+          <button v-else class="btn stop" @click="stopGen">停止</button>
+        </div>
+        
+        <!-- 拖拽提示遮罩 -->
+        <div v-if="isDragOver" class="drag-overlay">
+          <div class="drag-hint">📁 松开以上传文件</div>
+        </div>
       </div>
     </section>
   </div>
@@ -144,17 +173,22 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useChatStore } from '../composables/useChatStore'
+import { useFileUpload } from '../composables/useFileUpload'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
+import FilePreview from '../components/FilePreview.vue'
 
 // 会话状态与 WS 事件订阅已提升到模块级单例（useChatStore）：
 // 切换 tab 导致本组件卸载时，流式数据仍在后台接收与累积；
 // 重新挂载直接恢复现场继续渲染，不再出现"切走就停止渲染"的问题。
 const { chat, conv, socketState, submitMessage, stopGeneration, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation } = useChatStore()
+const { hasAttachments, isProcessing, handleFiles, buildAttachments, clearAllAttachments } = useFileUpload()
 
 const messages = chat.messages
 const draft = ref('')
 const generating = computed(() => chat.generating)
 const listRef = ref(null)
+const fileInputRef = ref(null)
+const isDragOver = ref(false)
 
 // ---------- 会话侧栏 ----------
 const editingId = ref(null)
@@ -297,11 +331,67 @@ function onApproveAll(msgId) {
   scrollBottom()
 }
 
+// ---------- 文件上传相关 ----------
+function triggerFileInput() {
+  fileInputRef.value?.click()
+}
+
+function onFileSelect(e) {
+  const files = e.target.files
+  if (files && files.length) {
+    handleFiles(Array.from(files))
+  }
+  // 清空 input 值，允许重复选择同一文件
+  e.target.value = ''
+}
+
+function onDragOver(e) {
+  isDragOver.value = true
+}
+
+function onDragLeave(e) {
+  // 只有当离开目标元素时才隐藏（避免子元素触发）
+  if (e.currentTarget === e.target) {
+    isDragOver.value = false
+  }
+}
+
+function onDrop(e) {
+  isDragOver.value = false
+  const files = e.dataTransfer?.files
+  if (files && files.length) {
+    handleFiles(Array.from(files))
+  }
+}
+
+function onPaste(e) {
+  const items = e.clipboardData?.items
+  if (!items) return
+  
+  const files = []
+  for (const item of items) {
+    if (item.kind === 'file') {
+      const file = item.getAsFile()
+      if (file) files.push(file)
+    }
+  }
+  
+  if (files.length) {
+    e.preventDefault()
+    handleFiles(files)
+  }
+}
+
 function submit() {
   const text = draft.value.trim()
-  if (!text) return
+  const attachments = buildAttachments()
+  
+  // 没有文本也没有附件时不发送
+  if (!text && !attachments.length) return
+  
   draft.value = ''
-  submitMessage(text)
+  submitMessage(text, attachments)
+  clearAllAttachments()
   scrollBottom()
 }
 
@@ -371,6 +461,10 @@ onMounted(() => {
 .cursor { animation: blink 0.8s infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
+/* 用户消息中的图片 */
+.msg-images { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.msg-image { max-width: 200px; max-height: 200px; border-radius: 8px; border: 1px solid #334155; cursor: pointer; }
+
 .reasoning-block { margin-bottom: 8px; background: #0f172a; border: 1px solid #334155; border-radius: 10px; overflow: hidden; }
 .reasoning-summary { cursor: pointer; padding: 8px 14px; color: #94a3b8; font-size: 13px; user-select: none; list-style: none; display: flex; align-items: center; gap: 6px; }
 .reasoning-summary::-webkit-details-marker { display: none; }
@@ -425,9 +519,53 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 
 .msg-error { margin-top: 6px; color: #f87171; font-size: 13px; }
 
-.input-bar { display: flex; gap: 10px; padding: 10px 14px; border-top: 1px solid #334155; flex-shrink: 0; }
+/* 输入区域 */
+.input-area { 
+  position: relative; 
+  border-top: 1px solid #334155; 
+  flex-shrink: 0;
+  transition: border-color 0.2s;
+}
+.input-area.drag-over { 
+  border-color: #6366f1;
+  background: rgba(99, 102, 241, 0.05);
+}
+.input-bar { display: flex; gap: 10px; padding: 10px 14px; flex-shrink: 0; }
+.attach-btn { 
+  flex-shrink: 0; 
+  width: 36px; 
+  padding: 0; 
+  font-size: 18px;
+  background: #334155;
+  transition: background 0.15s;
+}
+.attach-btn:hover { background: #475569; }
 .chat-input { flex: 1; resize: none; background: #0f172a; border: 1px solid #334155; border-radius: 10px; color: #e2e8f0; padding: 8px 12px; font-size: 14px; font-family: inherit; }
 .chat-input:focus { outline: none; border-color: #6366f1; }
+
+/* 拖拽遮罩 */
+.drag-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(99, 102, 241, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 10;
+}
+.drag-hint {
+  background: #6366f1;
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
 .btn { border: none; border-radius: 10px; padding: 0 18px; font-size: 14px; cursor: pointer; align-self: stretch; }
 .btn.send { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; }
 .btn.send:disabled { opacity: 0.4; cursor: not-allowed; }

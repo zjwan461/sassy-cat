@@ -9,11 +9,12 @@ import time
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent import engine as agent_engine
 from monitor import service as monitor_service
+from ocr.ocr_service import do_ocr
 from proactive import scheduler
 from server.bus import hub
 from server.protocol import envelope
@@ -72,6 +73,26 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health():
         return {"ok": True, "ts": int(time.time() * 1000)}
+
+    @app.post("/api/ocr")
+    async def ocr_endpoint(file: UploadFile = File(...)):
+        """文档 OCR：接收文件，返回 markdown 文本"""
+        MAX_SIZE = 20 * 1024 * 1024  # 20MB
+        file_bytes = await file.read()
+        if len(file_bytes) > MAX_SIZE:
+            raise HTTPException(status_code=413, detail="文件大小超过 20MB 限制")
+        try:
+            result = await do_ocr(file.filename or "unknown", file_bytes)
+            return {
+                "status": "success",
+                "filename": file.filename,
+                "markdown": result.get("page_content", ""),
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception(f"OCR 处理失败: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
     @app.websocket("/ws/agent")
     async def ws_agent(websocket: WebSocket):

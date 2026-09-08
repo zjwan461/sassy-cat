@@ -117,7 +117,7 @@ async def _pending_interrupt_decisions(session_id: str, content: str):
 
     背景：用户不点确认直接发新消息时，若按普通新输入 stream，LangGraph 会丢弃
     挂起任务，历史里留下带 tool_calls 却无对应 ToolMessage 的悬挂状态，导致
-    后续轮次消息错乱；而先自动 reject 再开新轮，会在历史中多出“用户已拒绝”
+    后续轮次消息错乱；而先自动 reject 再开新轮，会在历史中多出"用户已拒绝"
     的噪音内容，且额外消耗一次模型收尾调用。
 
     方案：利用 HITL middleware 的 "respond" 决策（见
@@ -156,11 +156,34 @@ async def _pending_interrupt_decisions(session_id: str, content: str):
 
 async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
     content = (payload.get("content") or "").strip()
+    attachments = payload.get("attachments") or []
     msg_id = uuid.uuid4().hex[:12]
-    if not content:
+    
+    # 消息内容校验：文本和附件至少有一个
+    if not content and not attachments:
         await _send(ws, envelope("error", {"message": "空消息"}))
         return
-
+    
+    # 构造多模态内容（参考 main_agent.py 中的 LangChain 多模态格式）
+    user_content = content
+    if attachments:
+        content_parts = []
+        if content:
+            content_parts.append({"type": "text", "text": content})
+        for att in attachments:
+            if att.get("type") == "image":
+                # 图片：base64 格式 {"type": "image", "base64": "...", "mime_type": "..."}
+                content_parts.append({
+                    "type": "image",
+                    "base64": att.get("data", ""),
+                    "mime_type": att.get("mimeType", "image/png"),
+                })
+            elif att.get("type") == "text":
+                # OCR 结果：作为文本追加
+                if att.get("content"):
+                    content_parts.append({"type": "text", "text": att["content"]})
+        user_content = content_parts if content_parts else content
+    
     # 会话以服务端激活项为唯一权威：客户端携带的 sessionId 可能是切换前的过期值
     # （桌宠窗口长期存活，最容易踩到），采信它会把消息写进错误线程
     session_id = conversations.active_id()
@@ -198,7 +221,7 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
     if decisions is not None:
         gen = runner.resume_turn(session_id, decisions, cancel)
     else:
-        gen = runner.run_turn(content, session_id, cancel)
+        gen = runner.run_turn(user_content, session_id, cancel)
     await _stream_turn(ws, session_id, gen, msg_id, cancel)
     await hub.publish(session_id, envelope("pet.command", {"action": "idle"}))
 

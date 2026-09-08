@@ -11,6 +11,32 @@ import sys
 from agent.engine import holder
 from config_loader import load_config
 from langchain.messages import AIMessageChunk
+import base64
+import mimetypes
+import os
+
+
+def read_image_as_base64(file_path):
+    # 检查文件是否存在
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"文件不存在: {file_path}")
+
+    # 读取文件内容
+    with open(file_path, "rb") as f:
+        file_content = f.read()
+
+    # 获取 MIME 类型
+    # mimetypes.guess_type 返回一个元组 (type, encoding)，对于 PNG，type 通常是 'image/png'
+    mime_type, _ = mimetypes.guess_type(file_path)
+    if mime_type is None:
+        # 如果无法确定，可以根据文件扩展名手动指定，或者使用默认值
+        # 对于 PNG 文件，通常可以直接设为 'image/png'
+        mime_type = "image/png"
+
+    # 将二进制内容编码为 Base64 字符串
+    base64_encoded = base64.b64encode(file_content).decode("utf-8")
+
+    return base64_encoded, mime_type
 
 
 def main():
@@ -19,10 +45,22 @@ def main():
     version, agent = holder.get()
     print(f"[Agent version={version}] user: {user_prompt}")
 
+    base64_str, mime_type = read_image_as_base64(r"C:\Users\1\Pictures\2.png")
+
     current_agent = ""
     in_tool_args = False  # 是否正处于工具参数流式输出中（用于结束换行）
     for _, chunk in agent.stream(
-        {"messages": [{"role": "user", "content": user_prompt}]},
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_prompt},
+                        {"type": "image", "base64": base64_str, "mime_type": mime_type},
+                    ],
+                }
+            ]
+        },
         config={"configurable": {"thread_id": "cli-debug"}},
         stream_mode="messages",
         subgraphs=True,
