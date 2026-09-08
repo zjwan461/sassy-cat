@@ -46,8 +46,13 @@
             <div v-if="m.tools && m.tools.length" class="tool-steps">
               <div v-for="(t, i) in m.tools" :key="i" class="tool-step">
                 🐟 本喵正在叼小鱼干：<b>{{ t.name }}</b>
-                <span v-if="t.done" class="tool-done">✓</span>
+                <span v-if="t.done" class="tool-done" :class="{ failed: t.status === 'error' }">{{ t.status === 'error' ? '✕' : '✓' }}</span>
                 <pre v-if="t.args" class="tool-args">{{ t.args }}</pre>
+                <!-- 历史回填的工具结果（实时流无 result 字段，自然不显示） -->
+                <details v-if="t.result" class="tool-result">
+                  <summary class="tool-result-summary">执行结果</summary>
+                  <pre class="tool-result-body">{{ t.result }}</pre>
+                </details>
               </div>
             </div>
             <!-- interrupt 确认 -->
@@ -368,7 +373,9 @@ onMounted(() => {
   unsubs.push(on('chat.history.result', (p) => {
     if (messages.length === 0 && p.items && p.items.length) {
       p.items.forEach((it, i) => messages.push({
-        id: 'h-' + i, role: it.role, content: it.text, reasoning: it.reasoning || '', reasoningOpen: false, thinking: false, tools: []
+        id: 'h-' + i, role: it.role, content: it.text, reasoning: it.reasoning || '', reasoningOpen: false, thinking: false,
+        // 历史工具条目结构对齐实时流 { name, done, args }，额外带 result/status 供折叠查看
+        tools: (it.tools || []).map((t) => ({ name: t.name, done: !!t.done, status: t.status, args: prettyArgs(t.args || ''), result: t.result || '' }))
       }))
       scrollBottom()
     }
@@ -426,6 +433,13 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .tool-steps { margin-top: 6px; }
 .tool-step { font-size: 12px; color: #94a3b8; background: #0f172a80; border-radius: 6px; padding: 4px 10px; margin-bottom: 4px; }
 .tool-done { color: #34d399; margin-left: 6px; }
+.tool-done.failed { color: #f87171; }
+.tool-result { margin-top: 4px; }
+.tool-result-summary { cursor: pointer; color: #64748b; font-size: 11px; user-select: none; list-style: none; }
+.tool-result-summary::-webkit-details-marker { display: none; }
+.tool-result-summary::before { content: '▶'; font-size: 9px; margin-right: 4px; display: inline-block; transition: transform 0.2s; }
+.tool-result[open] > .tool-result-summary::before { transform: rotate(90deg); }
+.tool-result-body { margin: 4px 0 0; padding: 6px 8px; background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; color: #94a3b8; font-size: 11px; font-family: Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; }
 .tool-args { margin: 4px 0 0; padding: 6px 8px; background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; color: #7dd3fc; font-size: 11px; font-family: Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; }
 
 .interrupt-bar { margin-top: 8px; background: #451a03; border: 1px solid #b45309; border-radius: 8px; padding: 10px 12px; color: #fbbf24; font-size: 13px; }

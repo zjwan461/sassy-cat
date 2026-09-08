@@ -26,12 +26,12 @@ _metrics_stop = asyncio.Event()
 
 
 async def _monitor_loop():
-    """周期采集：阻塞采集放 to_thread，兼容 stdout 协议行 + WS metrics.snapshot"""
+    """周期采集：阻塞采集放 to_thread，兼容 stdout 协议行"""
     while not _metrics_stop.is_set():
         started = time.time()
         try:
             payload = await asyncio.to_thread(monitor_service.collect_once_and_emit)
-            await hub.publish_all(envelope("metrics.snapshot", payload))
+            # await hub.publish_all(envelope("metrics.snapshot", payload))
         except Exception:
             logger.exception("monitor tick 失败")
         elapsed = time.time() - started

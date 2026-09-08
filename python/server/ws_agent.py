@@ -232,20 +232,67 @@ async def _handle_history(ws, payload: dict):
         state = agent.get_state({"configurable": {"thread_id": session_id}})
         messages = state.values.get("messages", []) if state else []
         items = []
+        # 工具结果截断保护：历史里 ToolMessage 可能携带大段输出，仅回填预览
+        TOOL_RESULT_MAX = 500
+
+        def _tool_text(content):
+            if isinstance(content, str):
+                return content
+            try:
+                return json.dumps(content, ensure_ascii=False)
+            except (TypeError, ValueError):
+                return str(content)
+
         for m in list(messages)[-limit:]:
             mtype = getattr(m, "type", None)
-            if mtype in ("human", "ai") and getattr(m, "content", None):
-                content = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)
+            if mtype == "human":
+                content = _tool_text(getattr(m, "content", ""))
                 if content.strip():
-                    item = {"role": "user" if mtype == "human" else "assistant",
-                            "text": content}
-                    # 提取思考模型的 reasoning 内容
-                    if mtype == "ai":
-                        ak = getattr(m, "additional_kwargs", {}) or {}
-                        reasoning = ak.get("reasoning_content")
-                        if reasoning and isinstance(reasoning, str) and reasoning.strip():
-                            item["reasoning"] = reasoning
-                    items.append(item)
+                    items.append({"role": "user", "text": content})
+            elif mtype == "ai":
+                content = _tool_text(getattr(m, "content", ""))
+                # tool_calls 是本轮工具步骤的骨架来源（含 id/name/args dict）
+                tool_calls = getattr(m, "tool_calls", None) or []
+                # 正文与工具调用任一非空即保留：纯工具调用轮次的 content 为空，
+                # 若仍按旧条件跳过会把其携带的 tool_calls 一并丢失
+                if not content.strip() and not tool_calls:
+                    continue
+                item = {"role": "assistant", "text": content}
+                # 提取思考模型的 reasoning 内容
+                ak = getattr(m, "additional_kwargs", {}) or {}
+                reasoning = ak.get("reasoning_content")
+                if reasoning and isinstance(reasoning, str) and reasoning.strip():
+                    item["reasoning"] = reasoning
+                if tool_calls:
+                    item["tools"] = [
+                        {"toolCallId": tc.get("id"),
+                         "name": tc.get("name"),
+                         "args": json.dumps(tc.get("args") or {}, ensure_ascii=False),
+                         "done": False}
+                        for tc in tool_calls
+                    ]
+                items.append(item)
+            elif mtype == "tool":
+                # ToolMessage 按 tool_call_id 配对回填到最近一条 assistant 的 tools 骨架
+                target = next((it for it in reversed(items)
+                               if it.get("role") == "assistant" and "tools" in it), None)
+                call_id = getattr(m, "tool_call_id", None)
+                entry = None
+                if target and call_id:
+                    entry = next((t for t in target["tools"] if t.get("toolCallId") == call_id), None)
+                if entry is None:
+                    # 配对失败兜底（如骨架已被截断窗口切掉）：孤立追加到最近 assistant
+                    if target is None:
+                        target = {"role": "assistant", "text": "", "tools": []}
+                        items.append(target)
+                    else:
+                        target.setdefault("tools", [])
+                    entry = {"toolCallId": call_id, "name": getattr(m, "name", None)}
+                    target["tools"].append(entry)
+                result = _tool_text(getattr(m, "content", ""))
+                entry["done"] = True
+                entry["status"] = getattr(m, "status", None) or "success"
+                entry["result"] = result[:TOOL_RESULT_MAX] + ("…" if len(result) > TOOL_RESULT_MAX else "")
         await _send(ws, envelope("chat.history.result", {"sessionId": session_id, "items": items}))
     except Exception as e:
         logger.warning(f"读取历史失败: {e}")
