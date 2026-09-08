@@ -201,6 +201,6 @@ export function useChatStore() {
   ensureStarted()
   // 每次进入聊天页拉取历史：仅在 messages 为空时生效（见 chat.history.result 守卫），
   // 若正在流式中则数据保持不动
-  send('chat.history', { sessionId: socketState.sessionId, limit: 30 })
+  send('chat.history', { sessionId: socketState.sessionId, limit: 50 })
   return { chat, socketState, submitMessage, stopGeneration, decideInterrupt, approveAllInterrupt }
 }
