@@ -1,0 +1,64 @@
+# -*- coding: utf-8 -*-
+"""
+SQLAlchemy 模型定义：messages 和 attachments 表。
+"""
+
+from sqlalchemy import (
+    Column,
+    String,
+    Text,
+    Integer,
+    BigInteger,
+    ForeignKey,
+    Index,
+)
+from sqlalchemy.orm import declarative_base, relationship
+
+Base = declarative_base()
+
+
+class Message(Base):
+    """聊天消息表"""
+    __tablename__ = "messages"
+    
+    id = Column(String, primary_key=True)              # 消息唯一 ID
+    session_id = Column(String, nullable=False, index=True)  # 会话 ID，对应 LangChain 的 thread_id
+    role = Column(String, nullable=False)              # 'user' | 'assistant' | 'tool'
+    content = Column(Text)                             # 消息文本内容
+    reasoning = Column(Text)                           # AI 思考内容 (仅 assistant)
+    tool_calls = Column(Text)                          # 工具调用名称列表 JSON，如 ["search", "run_cmd"] (仅 assistant)
+    tool_call_args = Column(Text)                      # 工具调用参数 JSON，如 {"search": {"q": "..."}} (仅 assistant)
+    tool_call_id = Column(String)                      # 工具结果关联 ID (仅 tool)
+    tool_name = Column(String)                         # 工具名称 (仅 tool)
+    tool_status = Column(String)                       # 工具执行状态 (仅 tool)
+    created_at = Column(BigInteger, nullable=False, index=True)  # 创建时间戳 (毫秒)
+    
+    # 关系
+    attachments = relationship(
+        "Attachment",
+        back_populates="message",
+        cascade="all, delete-orphan"
+    )
+    
+    __table_args__ = (
+        Index("idx_messages_session_time", "session_id", "created_at"),
+    )
+
+
+class Attachment(Base):
+    """附件表"""
+    __tablename__ = "attachments"
+    
+    id = Column(String, primary_key=True)              # 附件唯一 ID
+    message_id = Column(String, ForeignKey("messages.id"), nullable=False, index=True)
+    type = Column(String, nullable=False)              # 'image' | 'document'
+    file_name = Column(String, nullable=False)         # 文件名
+    file_ext = Column(String)                          # 文件后缀 (如 .pdf, .png)
+    file_size = Column(Integer)                        # 文件大小 (字节)
+    mime_type = Column(String)                         # MIME 类型
+    base64_data = Column(Text)                         # 图片的 base64 数据 (仅 image)
+    markdown_content = Column(Text)                    # 文档 OCR 后的 markdown (仅 document)
+    created_at = Column(BigInteger, nullable=False)    # 创建时间戳 (毫秒)
+    
+    # 关系
+    message = relationship("Message", back_populates="attachments")

@@ -50,7 +50,14 @@
       </aside>
 
       <!-- 消息流 -->
-      <div class="msg-list" ref="listRef">
+      <div class="msg-list" ref="listRef" @scroll="onMsgListScroll">
+        <!-- 加载更多提示 -->
+        <div v-if="chat.loadingMore" class="load-more-hint">
+          <span class="spinner"></span> 加载中...
+        </div>
+        <div v-else-if="chat.hasMore && messages.length > 0" class="load-more-hint clickable" @click="onLoadMore">
+          加载更多历史消息
+        </div>
         <div v-if="messages.length === 0" class="empty-hint">
           <div class="empty-emoji">🐱</div>
           <p>喵？有什么事就说吧，本喵听着呢。</p>
@@ -67,6 +74,14 @@
               <!-- 用户消息的图片附件 -->
               <div v-if="m.images && m.images.length" class="msg-images">
                 <img v-for="(img, i) in m.images" :key="i" :src="img" class="msg-image" @click="openImagePreview(img)" />
+              </div>
+              <!-- 用户消息的文档附件 -->
+              <div v-if="docAttachments(m).length" class="msg-doc-attachments">
+                <DocumentAttachment
+                  v-for="att in docAttachments(m)"
+                  :key="att.id"
+                  :attachment="att"
+                />
               </div>
               <template v-if="isAssistant(m)">
                 <MarkdownRenderer :content="m.content" :done="!m.streaming" />
@@ -176,16 +191,17 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useChatStore } from '../composables/useChatStore'
 import { useFileUpload } from '../composables/useFileUpload'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 import FilePreview from '../components/FilePreview.vue'
+import DocumentAttachment from '../components/DocumentAttachment.vue'
 
 // 会话状态与 WS 事件订阅已提升到模块级单例（useChatStore）：
 // 切换 tab 导致本组件卸载时，流式数据仍在后台接收与累积；
 // 重新挂载直接恢复现场继续渲染，不再出现"切走就停止渲染"的问题。
-const { chat, conv, socketState, submitMessage, stopGeneration, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation } = useChatStore()
+const { chat, conv, socketState, submitMessage, stopGeneration, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation, loadMoreMessages } = useChatStore()
 const { hasAttachments, isProcessing, handleFiles, buildAttachments, clearAllAttachments } = useFileUpload()
 
 const messages = chat.messages
@@ -413,6 +429,37 @@ function stopGen() {
   stopGeneration()
 }
 
+// ---------- 文档附件提取 ----------
+function docAttachments(m) {
+  if (!m.attachments) return []
+  return m.attachments.filter(a => a.type === 'document')
+}
+
+// ---------- 滚动加载更多历史消息 ----------
+function onMsgListScroll() {
+  if (!listRef.value) return
+  const { scrollTop } = listRef.value
+  // 当滚动到顶部附近（50px 以内）时触发加载
+  if (scrollTop < 50 && chat.hasMore && !chat.loadingMore) {
+    onLoadMore()
+  }
+}
+
+async function onLoadMore() {
+  if (chat.loadingMore || !chat.hasMore) return
+  const oldScrollHeight = listRef.value?.scrollHeight || 0
+  await loadMoreMessages()
+  // 保持滚动位置：新消息插入头部后，调整 scrollTop 使当前内容不跳动
+  await nextTick()
+  if (listRef.value) {
+    const newScrollHeight = listRef.value.scrollHeight
+    const diff = newScrollHeight - oldScrollHeight
+    if (diff > 0) {
+      listRef.value.scrollTop += diff
+    }
+  }
+}
+
 onMounted(() => {
   // 回到页面时若仍处于流式轮次，恢复滚动位置
   scrollBottom()
@@ -464,6 +511,16 @@ onMounted(() => {
 .msg-list { flex: 1; overflow-y: auto; padding: 16px 20px; padding-bottom: 100px; }
 .empty-hint { text-align: center; color: #64748b; margin-top: 60px; }
 .empty-emoji { font-size: 44px; margin-bottom: 10px; }
+
+/* 加载更多提示 */
+.load-more-hint { text-align: center; color: #64748b; font-size: 13px; padding: 12px 0; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.load-more-hint.clickable { cursor: pointer; transition: color 0.15s; }
+.load-more-hint.clickable:hover { color: #94a3b8; }
+.load-more-hint .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #64748b; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 文档附件区域 */
+.msg-doc-attachments { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 
 .msg { display: flex; gap: 10px; margin-bottom: 12px; }
 .msg.user { flex-direction: row-reverse; }

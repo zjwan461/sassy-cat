@@ -81,7 +81,7 @@ def run_python(code: str):
     except Exception as e:
         return f"执行失败：{e}，解释器：{python_exe}"
 
-    output = [f"解释器：{python_exe}", f"退出码：{result.returncode}"]
+    output = [f"解释器：python", f"退出码：{result.returncode}"]
     if result.stdout:
         output.append(f"标准输出：\n{result.stdout}")
     if result.stderr:
@@ -136,11 +136,11 @@ def run_command(command: list[str]):
     支持虚拟路径自动转换：数组中以 / 开头的路径片段会自动转换为真实路径。
     不得使用真实路径作为参数传入，比如D://skills, 命令行参数仅支持虚拟环境路径参数，必须是/开头。
     """
-    # 遍历每个片段，将虚拟路径转换为真实路径
-    real_command = [_convert_virtual_path(seg) for seg in command]
-    # 拼接为字符串用于 shell 执行（支持 dir、echo 等 shell 内置命令）
-    command_str = subprocess.list2cmdline(real_command)
     try:
+        # 遍历每个片段，将虚拟路径转换为真实路径
+        real_command = [_convert_virtual_path(seg) for seg in command]
+        # 拼接为字符串用于 shell 执行（支持 dir、echo 等 shell 内置命令）
+        command_str = subprocess.list2cmdline(real_command)
         result = subprocess.run(
             command_str,
             shell=True,

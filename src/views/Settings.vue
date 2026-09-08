@@ -11,6 +11,7 @@
       <button class="btn warn" @click="restartAgent">重启服务进程</button>
     </div>
 
+    <div class="settings-grid">
     <!-- 模型连接 -->
     <section class="card">
       <div class="card-header">模型连接</div>
@@ -140,6 +141,7 @@
         </div>
       </div>
     </section>
+    </div>
 
     <div v-if="toast" class="toast">{{ toast }}</div>
 
@@ -528,11 +530,26 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.settings-page { max-width: 860px; }
+.settings-page { max-width: 1200px; }
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+}
+@media (min-width: 960px) {
+  .settings-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  /* 模型连接和 Agent 配置占满整行（内容较多） */
+  .settings-grid .card:nth-child(1),
+  .settings-grid .card:nth-child(2) {
+    grid-column: 1 / -1;
+  }
+}
 .page-header { margin-bottom: 20px; }
 .page-title { font-size: 26px; font-weight: 700; color: #f1f5f9; margin-bottom: 6px; }
 .page-subtitle { font-size: 14px; color: #64748b; }
-.card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; margin-bottom: 18px; overflow: hidden; }
+.card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; overflow: hidden; }
 .card-header { padding: 14px 20px; font-weight: 600; color: #e2e8f0; border-bottom: 1px solid #334155; }
 .card-body { padding: 18px 20px; }
 .form .field { margin-bottom: 14px; display: flex; flex-direction: column; gap: 6px; }

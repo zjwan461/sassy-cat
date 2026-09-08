@@ -7,6 +7,7 @@
  */
 import { reactive } from 'vue'
 import { useAgentSocket } from './useAgentSocket'
+import { fetchMessages } from '../api/messages'
 
 const { state: socketState, connect, send, on } = useAgentSocket()
 
@@ -15,7 +16,13 @@ export const chat = reactive({
   generating: false,
   // 当前会话（对话）：id 即 LangGraph thread_id，由服务端激活会话下发
   convId: null,
-  convTitle: ''
+  convTitle: '',
+  // 分页相关（历史消息通过 HTTP 接口分页加载）
+  currentPage: 1,
+  pageSize: 20,
+  totalMessages: 0,
+  loadingMore: false,
+  hasMore: true,
 })
 
 // 会话列表（元数据来自服务端 conversations.json，按 updatedAt 倒序）
@@ -151,20 +158,6 @@ function ensureStarted() {
     expirePendingInterrupts()
     if (!chat.messages.some((m) => m.streaming)) chat.generating = false
   })
-  on('chat.history.result', (p) => {
-    // 只回填当前激活会话的历史：切会话后旧请求的迟到响应直接丢弃
-    if (p.sessionId && chat.convId && p.sessionId !== chat.convId) return
-    // 仅在尚无本地消息时回填历史；若切走期间有轮次在流式累积，
-    // messages 非空则跳过，避免覆盖实时状态
-    if (chat.messages.length === 0 && p.items && p.items.length) {
-      p.items.forEach((it, i) => chat.messages.push({
-        id: 'h-' + i, role: it.role, content: it.text, reasoning: it.reasoning || '', reasoningOpen: false, thinking: false,
-        // 历史工具条目结构对齐实时流 { name, done, args }，额外带 result/status 供折叠查看
-        tools: (it.tools || []).map((t) => ({ name: t.name, done: !!t.done, status: t.status, args: prettyArgs(t.args || ''), result: t.result || '' }))
-      }))
-    }
-  })
-
   // ---------- 会话管理事件 ----------
   // 首次连通（或重连）时对齐激活会话：进入页面早于 WS 连上的场景，
   // 由 connected 帧驱动补拉会话列表与历史
@@ -178,7 +171,7 @@ function ensureStarted() {
     chat.convId = p.sessionId
     chat.messages.splice(0, chat.messages.length)
     chat.generating = false
-    send('chat.history', { sessionId: p.sessionId, limit: 30 })
+    loadMessages(true)
   })
   on('conv.list.result', (p) => {
     conv.list = p.items || []
@@ -193,7 +186,7 @@ function ensureStarted() {
     chat.messages.splice(0, chat.messages.length)
     chat.generating = false
     currentMsgId = null
-    send('chat.history', { sessionId: p.id, limit: 30 })
+    loadMessages(true)
   })
 }
 
@@ -282,6 +275,105 @@ export function approveAllInterrupt(msgId) {
   chat.generating = true
 }
 
+// ---------- 历史消息加载（HTTP 接口） ----------
+
+/**
+ * 转换后端消息格式为前端格式
+ * 后端返回的消息按 created_at DESC 排序（最新的在前），
+ * 前端需要按时间正序显示（旧的在上、新的在下），所以加载后要反转。
+ */
+function transformMessage(item) {
+  // 构建工具调用列表（合并 toolCalls 和 toolCallArgs）
+  const tools = []
+  if (item.toolCalls && Array.isArray(item.toolCalls)) {
+    const args = item.toolCallArgs || {}
+    for (const name of item.toolCalls) {
+      const rawArgs = args[name]
+      tools.push({
+        name,
+        done: true,
+        args: rawArgs ? prettyArgs(typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs)) : '',
+        result: '',
+      })
+    }
+  }
+
+  // 转换附件
+  const attachments = (item.attachments || []).map((att) => ({
+    id: att.id,
+    type: att.type,
+    fileName: att.fileName,
+    fileExt: att.fileExt,
+    fileSize: att.fileSize,
+    mimeType: att.mimeType,
+    base64Data: att.base64Data,
+    markdownContent: att.markdownContent,
+  }))
+
+  // 提取图片（用于兼容现有的 images 渲染逻辑）
+  const images = attachments
+    .filter((a) => a.type === 'image' && a.base64Data)
+    .map((a) => `data:${a.mimeType || 'image/png'};base64,${a.base64Data}`)
+
+  return {
+    id: item.id,
+    role: item.role,
+    content: item.content || '',
+    reasoning: item.reasoning || '',
+    reasoningOpen: false,
+    thinking: false,
+    tools,
+    attachments,
+    images: images.length ? images : undefined,
+  }
+}
+
+/**
+ * 加载历史消息（HTTP 分页接口）
+ * @param {boolean} reset 是否重置（从第一页开始，清空现有消息）
+ */
+export async function loadMessages(reset = false) {
+  if (!chat.convId) return
+  if (chat.loadingMore) return
+
+  if (reset) {
+    chat.currentPage = 1
+    chat.hasMore = true
+  }
+
+  chat.loadingMore = true
+  try {
+    const result = await fetchMessages(chat.convId, chat.currentPage, chat.pageSize)
+    const items = (result.items || []).map(transformMessage)
+
+    if (reset) {
+      // 重置：后端返回按时间倒序，反转为正序后写入
+      chat.messages.splice(0, chat.messages.length, ...items.reverse())
+    } else {
+      // 加载更多（之前的页）：后端返回按时间倒序，反转后插入到头部
+      chat.messages.splice(0, 0, ...items.reverse())
+    }
+
+    chat.totalMessages = result.total || 0
+    chat.currentPage++
+    // 判断是否还有更多
+    const loadedCount = chat.messages.filter((m) => m.role === 'user' || m.role === 'assistant').length
+    chat.hasMore = loadedCount < chat.totalMessages
+  } catch (e) {
+    console.warn('[chat] 加载历史消息失败:', e)
+  } finally {
+    chat.loadingMore = false
+  }
+}
+
+/**
+ * 加载更多历史消息（向上翻页）
+ */
+export async function loadMoreMessages() {
+  if (!chat.hasMore || chat.loadingMore) return
+  await loadMessages(false)
+}
+
 export function useChatStore() {
   ensureStarted()
   loadConversations()
@@ -289,11 +381,16 @@ export function useChatStore() {
   // 首次进入（convId 未知）按激活会话拉历史，后续切换由 conv.activated 广播驱动
   if (!chat.convId && socketState.sessionId) {
     chat.convId = socketState.sessionId
-    send('chat.history', { sessionId: chat.convId, limit: 30 })
+    loadMessages(true)
   } else if (chat.convId && chat.messages.length === 0 && !chat.generating) {
-    // 每次进入聊天页拉取历史：仅在 messages 为空时生效（见 chat.history.result 守卫），
+    // 每次进入聊天页拉取历史：仅在 messages 为空时生效，
     // 若正在流式中则数据保持不动
-    send('chat.history', { sessionId: chat.convId, limit: 30 })
+    loadMessages(true)
   }
-  return { chat, conv, socketState, submitMessage, stopGeneration, decideInterrupt, approveAllInterrupt, loadConversations, newConversation, switchConversation, renameConversation, deleteConversation }
+  return {
+    chat, conv, socketState,
+    submitMessage, stopGeneration, decideInterrupt, approveAllInterrupt,
+    loadConversations, newConversation, switchConversation, renameConversation, deleteConversation,
+    loadMessages, loadMoreMessages,
+  }
 }

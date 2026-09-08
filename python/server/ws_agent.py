@@ -9,6 +9,7 @@
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -24,6 +25,7 @@ from proactive import scheduler
 from server import conversations
 from server.bus import hub
 from server.protocol import envelope
+from server.db import save_message, save_attachment
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,79 @@ async def _send(ws: WebSocket, frame: dict):
         await ws.send_json(frame)
 
 
+async def _save_user_message_safe(
+    session_id: str,
+    msg_id: str,
+    content: str,
+    attachments: list,
+):
+    """安全地保存用户消息和附件到数据库，失败不影响聊天"""
+    try:
+        # 保存用户消息
+        await save_message(
+            id=msg_id,
+            session_id=session_id,
+            role="user",
+            content=content,
+        )
+        
+        # 保存附件
+        for att in attachments:
+            att_id = "att-" + uuid.uuid4().hex[:12]
+            att_type = att.get("type", "text")
+            file_name = att.get("name", "unknown")
+            file_ext = os.path.splitext(file_name)[1] if file_name else ""
+            
+            if att_type == "image":
+                # 图片附件
+                await save_attachment(
+                    id=att_id,
+                    message_id=msg_id,
+                    type="image",
+                    file_name=file_name,
+                    file_ext=file_ext,
+                    file_size=len(att.get("data", "")) // 4 * 3,  # 估算 base64 大小
+                    mime_type=att.get("mimeType", "image/png"),
+                    base64_data=att.get("data"),
+                )
+            elif att_type == "text":
+                # 文档附件（OCR 结果）
+                await save_attachment(
+                    id=att_id,
+                    message_id=msg_id,
+                    type="document",
+                    file_name=file_name,
+                    file_ext=file_ext,
+                    mime_type="text/plain",
+                    markdown_content=att.get("content"),
+                )
+    except Exception as e:
+        logger.warning(f"用户消息保存失败 (不影响聊天): {e}")
+
+
+async def _save_assistant_message_safe(
+    session_id: str,
+    msg_id: str,
+    content: str,
+    reasoning: str | None = None,
+    tool_calls: list | None = None,
+    tool_call_args: dict | None = None,
+):
+    """安全地保存 AI 消息到数据库，失败不影响聊天"""
+    try:
+        await save_message(
+            id=msg_id,
+            session_id=session_id,
+            role="assistant",
+            content=content,
+            reasoning=reasoning,
+            tool_calls=tool_calls,
+            tool_call_args=tool_call_args,
+        )
+    except Exception as e:
+        logger.warning(f"AI 消息保存失败 (不影响聊天): {e}")
+
+
 async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.Event):
     """消费 runner 事件生成器，节流后 fan-out 到房间"""
 
@@ -54,14 +129,28 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     args_buffer = []
     last_flush = time.monotonic()
 
+    # 用于持久化的累积数据
+    content_parts = []
+    reasoning_parts = []
+    tool_call_names = []       # 工具调用名称列表
+    tool_call_args_map = {}    # 工具调用参数映射 {name: args}
+    current_tool_name = None   # 当前正在收集参数的工具名称
+
     async def flush():
         nonlocal buffer, args_buffer, last_flush
         if buffer:
-            await emit("chat.delta", {"msgId": msg_id, "text": "".join(buffer)})
+            text = "".join(buffer)
+            content_parts.append(text)
+            await emit("chat.delta", {"msgId": msg_id, "text": text})
             buffer = []
         if args_buffer:
-            # 工具参数增量合并发送（节流，避免高频小帧）
-            await emit("agent.tool_args", {"msgId": msg_id, "args": "".join(args_buffer)})
+            args_text = "".join(args_buffer)
+            # 将工具参数追加到当前工具的参数中
+            if current_tool_name:
+                tool_call_args_map[current_tool_name] = (
+                    tool_call_args_map.get(current_tool_name, "") + args_text
+                )
+            await emit("agent.tool_args", {"msgId": msg_id, "args": args_text})
             args_buffer = []
         last_flush = time.monotonic()
 
@@ -81,12 +170,19 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
             elif kind == "reasoning":
                 # 先把已积累的 delta 正文 flush，保证 reasoning 帧不插队到正文之前
                 await flush()
-                await emit("agent.reasoning", {"msgId": msg_id, "text": event.get("text", "")})
+                reasoning_text = event.get("text", "")
+                reasoning_parts.append(reasoning_text)
+                await emit("agent.reasoning", {"msgId": msg_id, "text": reasoning_text})
             elif kind == "tool":
                 await flush()
+                tool_name = event.get("name")
+                phase = event.get("phase")
+                if phase == "start" and tool_name:
+                    tool_call_names.append(tool_name)
+                    current_tool_name = tool_name
                 await emit("agent.tool_call", {
-                    "msgId": msg_id, "name": event.get("name"),
-                    "phase": event.get("phase"),
+                    "msgId": msg_id, "name": tool_name,
+                    "phase": phase,
                 })
             elif kind == "interrupt":
                 await flush()
@@ -97,7 +193,17 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 })
             elif kind == "done":
                 await flush()
-                await emit("chat.completed", {"msgId": msg_id, "text": event.get("text", "")})
+                final_text = event.get("text", "")
+                await emit("chat.completed", {"msgId": msg_id, "text": final_text})
+                # 异步保存 AI 消息（不阻塞聊天）
+                asyncio.create_task(_save_assistant_message_safe(
+                    session_id=session_id,
+                    msg_id=msg_id,
+                    content=final_text or "".join(content_parts),
+                    reasoning="".join(reasoning_parts) if reasoning_parts else None,
+                    tool_calls=tool_call_names if tool_call_names else None,
+                    tool_call_args=tool_call_args_map if tool_call_args_map else None,
+                ))
             elif kind == "error":
                 await flush()
                 await emit("chat.error", {"msgId": msg_id, "code": "agent_error",
@@ -215,6 +321,14 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
     await hub.publish(session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id}))
     await hub.publish(session_id, envelope("pet.command", {"action": "think"}))
 
+    # 异步保存用户消息和附件到数据库（不阻塞聊天）
+    asyncio.create_task(_save_user_message_safe(
+        session_id=session_id,
+        msg_id=user_msg_id,
+        content=content,
+        attachments=attachments,
+    ))
+
     # 有挂起未确认中断时：以 respond 决策跳过操作并把新消息带入本轮续跑；
     # 否则正常开新轮
     decisions = await _pending_interrupt_decisions(session_id, content)
@@ -264,82 +378,6 @@ async def _handle_tool_confirm(ws, payload: dict):
         gen = runner.resume_turn(session_id, [{"type": "approve" if approved else "reject"}], cancel)
 
     await _stream_turn(ws, session_id, gen, msg_id, cancel)
-
-
-async def _handle_history(ws, payload: dict):
-    # 历史请求同样以激活会话为权威，客户端过期 id 不作为数据源
-    session_id = conversations.active_id()
-    limit = int(payload.get("limit") or 50)
-    try:
-        _, agent = holder.get()
-        state = agent.get_state({"configurable": {"thread_id": session_id}})
-        messages = state.values.get("messages", []) if state else []
-        items = []
-        # 工具结果截断保护：历史里 ToolMessage 可能携带大段输出，仅回填预览
-        TOOL_RESULT_MAX = 500
-
-        def _tool_text(content):
-            if isinstance(content, str):
-                return content
-            try:
-                return json.dumps(content, ensure_ascii=False)
-            except (TypeError, ValueError):
-                return str(content)
-
-        for m in list(messages)[-limit:]:
-            mtype = getattr(m, "type", None)
-            if mtype == "human":
-                content = _tool_text(getattr(m, "content", ""))
-                if content.strip():
-                    items.append({"role": "user", "text": content})
-            elif mtype == "ai":
-                content = _tool_text(getattr(m, "content", ""))
-                # tool_calls 是本轮工具步骤的骨架来源（含 id/name/args dict）
-                tool_calls = getattr(m, "tool_calls", None) or []
-                # 正文与工具调用任一非空即保留：纯工具调用轮次的 content 为空，
-                # 若仍按旧条件跳过会把其携带的 tool_calls 一并丢失
-                if not content.strip() and not tool_calls:
-                    continue
-                item = {"role": "assistant", "text": content}
-                # 提取思考模型的 reasoning 内容
-                ak = getattr(m, "additional_kwargs", {}) or {}
-                reasoning = ak.get("reasoning_content")
-                if reasoning and isinstance(reasoning, str) and reasoning.strip():
-                    item["reasoning"] = reasoning
-                if tool_calls:
-                    item["tools"] = [
-                        {"toolCallId": tc.get("id"),
-                         "name": tc.get("name"),
-                         "args": json.dumps(tc.get("args") or {}, ensure_ascii=False),
-                         "done": False}
-                        for tc in tool_calls
-                    ]
-                items.append(item)
-            elif mtype == "tool":
-                # ToolMessage 按 tool_call_id 配对回填到最近一条 assistant 的 tools 骨架
-                target = next((it for it in reversed(items)
-                               if it.get("role") == "assistant" and "tools" in it), None)
-                call_id = getattr(m, "tool_call_id", None)
-                entry = None
-                if target and call_id:
-                    entry = next((t for t in target["tools"] if t.get("toolCallId") == call_id), None)
-                if entry is None:
-                    # 配对失败兜底（如骨架已被截断窗口切掉）：孤立追加到最近 assistant
-                    if target is None:
-                        target = {"role": "assistant", "text": "", "tools": []}
-                        items.append(target)
-                    else:
-                        target.setdefault("tools", [])
-                    entry = {"toolCallId": call_id, "name": getattr(m, "name", None)}
-                    target["tools"].append(entry)
-                result = _tool_text(getattr(m, "content", ""))
-                entry["done"] = True
-                entry["status"] = getattr(m, "status", None) or "success"
-                entry["result"] = result[:TOOL_RESULT_MAX] + ("…" if len(result) > TOOL_RESULT_MAX else "")
-        await _send(ws, envelope("chat.history.result", {"sessionId": session_id, "items": items}))
-    except Exception as e:
-        logger.warning(f"读取历史失败: {e}")
-        await _send(ws, envelope("chat.history.result", {"sessionId": session_id, "items": [], "error": str(e)}))
 
 
 async def _handle_llm_test(ws, payload: dict):
@@ -441,8 +479,6 @@ async def ws_agent_endpoint(ws: WebSocket):
                     await hub.publish(sid, envelope("pet.command", {"action": "idle"}))
                 elif mtype == "tool.confirm":
                     asyncio.create_task(_handle_tool_confirm(ws, payload))
-                elif mtype == "chat.history":
-                    await _handle_history(ws, payload)
                 elif mtype.startswith("conv."):
                     await _handle_conv(ws, mtype, payload, room_ref)
                 elif mtype == "prompt.preview":

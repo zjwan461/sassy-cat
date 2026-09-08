@@ -9,7 +9,7 @@ import time
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, UploadFile, File, HTTPException
+from fastapi import FastAPI, WebSocket, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent import engine as agent_engine
@@ -19,6 +19,8 @@ from proactive import scheduler
 from server.bus import hub
 from server.protocol import envelope
 from server.ws_agent import ws_agent_endpoint
+from server.db import init_db as init_message_db, close_db as close_message_db
+from server.db import get_messages_by_session
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,8 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(monitor_service.init_sync)
     # 打开 agent 共享 SQLite 连接（checkpointer/store 复用，shutdown 时统一关闭）
     await asyncio.to_thread(agent_engine.init_db)
+    # 初始化消息数据库（SQLAlchemy 异步引擎）
+    await init_message_db()
     stop_event = asyncio.Event()
     monitor_task = asyncio.create_task(_monitor_loop())
     proactive_task = asyncio.create_task(scheduler.run_forever(stop_event))
@@ -57,6 +61,7 @@ async def lifespan(app: FastAPI):
     await asyncio.gather(monitor_task, proactive_task, return_exceptions=True)
     await asyncio.to_thread(monitor_service.shutdown_sync)
     await asyncio.to_thread(agent_engine.close_db)
+    await close_message_db()
     logger.info("后台任务已停止")
 
 
@@ -92,6 +97,25 @@ def create_app() -> FastAPI:
             raise
         except Exception as e:
             logger.exception(f"OCR 处理失败: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/messages")
+    async def api_messages(
+        session_id: str = Query(..., description="会话 ID（对应 LangChain thread_id）"),
+        page: int = Query(1, ge=1, description="页码"),
+        page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    ):
+        """分页查询历史消息（含附件）"""
+        try:
+            items, total = await get_messages_by_session(session_id, page, page_size)
+            return {
+                "items": items,
+                "total": total,
+                "page": page,
+                "pageSize": page_size,
+            }
+        except Exception as e:
+            logger.exception(f"查询历史消息失败: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.websocket("/ws/agent")
