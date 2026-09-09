@@ -439,6 +439,10 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
     # 否则正常开新轮
     decisions = await _pending_interrupt_decisions(session_id, content)
     if decisions is not None:
+        last_assistant_msg_id = payload.get("lastAssistantMsgId")
+        if last_assistant_msg_id and last_assistant_msg_id is not None:
+            # todo 把这一条消息interrupt_decisions全部置为reject.[{"type": "reject"}]
+            pass
         gen = runner.resume_turn(session_id, decisions, cancel)
     else:
         gen = runner.run_turn(user_content, session_id, cancel)

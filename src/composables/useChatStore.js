@@ -251,13 +251,15 @@ export function submitMessage(text, attachments = []) {
     id: 'u-' + Date.now(),
     role: 'user',
     content: text,
-    images: images.length ? images : undefined
+    images: images.length ? images : undefined,
   })
 
+  const len = chat.messages.length
   send('chat.send', {
     sessionId: chat.convId || socketState.sessionId,
     content: text,
-    attachments: attachments.length ? attachments : undefined
+    attachments: attachments.length ? attachments : undefined,
+    lastAssistantMsgId: len >=2 ?chat.messages[len-2].id: null
   })
   chat.generating = true
 }
