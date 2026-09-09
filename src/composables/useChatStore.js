@@ -304,11 +304,13 @@ export function approveAllInterrupt(msgId) {
  */
 function transformMessage(item) {
   // 构建工具调用列表（合并 toolCalls 和 toolCallArgs）
+  // toolCallArgs 现在是列表，与 toolCalls 一一对应
   const tools = []
   if (item.toolCalls && Array.isArray(item.toolCalls)) {
-    const args = item.toolCallArgs || {}
-    for (const name of item.toolCalls) {
-      const rawArgs = args[name]
+    const args = item.toolCallArgs || []
+    for (let i = 0; i < item.toolCalls.length; i++) {
+      const name = item.toolCalls[i]
+      const rawArgs = args[i]
       tools.push({
         name,
         done: true,

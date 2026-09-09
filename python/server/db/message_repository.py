@@ -306,3 +306,59 @@ async def count_messages_by_session(session_id: str) -> int:
     except Exception as e:
         logger.error(f"统计消息数量失败: session_id={session_id}, error={e}")
         return 0
+
+async def get_message_by_id(msg_id: str) -> Optional[dict]:
+    """
+    根据 message_id 查询消息数据（含附件）。
+
+    Args:
+        msg_id: 消息唯一 ID
+
+    Returns:
+        Optional[dict]: 消息字典（含附件），不存在时返回 None
+    """
+    try:
+        async with get_session() as session:
+            stmt = (
+                select(Message)
+                .where(Message.id == msg_id)
+                .options(selectinload(Message.attachments))
+            )
+            result = await session.execute(stmt)
+            msg = result.scalar_one_or_none()
+
+            if msg is None:
+                logger.warning(f"消息不存在: id={msg_id}")
+                return None
+
+            return {
+                "id": msg.id,
+                "sessionId": msg.session_id,
+                "role": msg.role,
+                "content": msg.content,
+                "reasoning": msg.reasoning,
+                "toolCalls": json.loads(msg.tool_calls) if msg.tool_calls else None,
+                "toolCallArgs": json.loads(msg.tool_call_args) if msg.tool_call_args else None,
+                "toolCallId": msg.tool_call_id,
+                "toolName": msg.tool_name,
+                "toolStatus": msg.tool_status,
+                "createdAt": msg.created_at,
+                "interruptActions": json.loads(msg.interrupt_actions) if msg.interrupt_actions else None,
+                "interruptDecisions": json.loads(msg.interrupt_decisions) if msg.interrupt_decisions else None,
+                "attachments": [
+                    {
+                        "id": att.id,
+                        "type": att.type,
+                        "fileName": att.file_name,
+                        "fileExt": att.file_ext,
+                        "fileSize": att.file_size,
+                        "mimeType": att.mime_type,
+                        "base64Data": att.base64_data,
+                        "markdownContent": att.markdown_content,
+                    }
+                    for att in msg.attachments
+                ],
+            }
+    except Exception as e:
+        logger.error(f"查询消息失败: id={msg_id}, error={e}")
+        return None

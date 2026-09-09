@@ -25,7 +25,7 @@ from proactive import scheduler
 from server import conversations
 from server.bus import hub
 from server.protocol import envelope
-from server.db import save_message, save_attachment, update_message
+from server.db import save_message, save_attachment, update_message, get_message_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,8 @@ async def _send(ws: WebSocket, frame: dict):
 async def _update_interrupt_decisions(msg_id: str, decisions: list):
     """安全地更新中断操作的decision到数据库，失败不影响聊天"""
     try:
+        message = await get_message_by_id(msg_id=msg_id)
+        decisions = (message.get("interruptDecisions") or []) + decisions
         # 保存用户消息
         await update_message(id=msg_id, interrupt_decisions=decisions)
     except Exception as e:
@@ -105,6 +107,50 @@ async def _save_user_message_safe(
         logger.warning(f"用户消息保存失败 (不影响聊天): {e}")
 
 
+async def _save_or_update_assistant_message_sage(session_id: str,
+    msg_id: str,
+    content: str,
+    reasoning: str | None = None,
+    tool_calls: list | None = None,
+    tool_call_args: list | None = None,
+    interrupt_actions: list | None = None,
+):
+    """安全地保存或更新 AI 消息到数据库，失败不影响聊天"""
+    try:
+        message = await get_message_by_id(msg_id=msg_id)
+        if message is not None:
+            # 消息已存在，更新
+            content = message.get("content", "") + content
+            reasoning = message.get("reasoning", "") + reasoning
+            tool_calls = (message.get("toolCalls") or [])+ tool_calls
+            tool_call_args = (message.get("toolCallArgs") or []) + (tool_call_args or [])
+            interrupt_actions = (message.get("interruptActions") or []) + interrupt_actions
+            await update_message(
+                id=msg_id,
+                content=content,
+                reasoning=reasoning,
+                tool_calls=tool_calls,
+                tool_call_args=tool_call_args,
+                interrupt_actions=interrupt_actions,
+            )
+            logger.debug(f"AI 消息已更新: id={msg_id}")
+        else:
+            # 消息不存在，保存新消息
+            await save_message(
+                id=msg_id,
+                session_id=session_id,
+                role="assistant",
+                content=content,
+                reasoning=reasoning,
+                tool_calls=tool_calls,
+                tool_call_args=tool_call_args,
+                interrupt_actions=interrupt_actions,
+            )
+            logger.debug(f"AI 消息已保存: id={msg_id}")
+    except Exception as e:
+        logger.warning(f"AI 消息保存/更新失败 (不影响聊天): {e}")
+
+
 async def _save_assistant_message_safe(
     session_id: str,
     msg_id: str,
@@ -144,8 +190,8 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     content_parts = []
     reasoning_parts = []
     tool_call_names = []  # 工具调用名称列表
-    tool_call_args_map = {}  # 工具调用参数映射 {name: args}
-    current_tool_name = None  # 当前正在收集参数的工具名称
+    tool_call_args_list = []  # 工具调用参数列表，与 tool_call_names 一一对应
+    current_tool_index = None  # 当前正在收集参数的工具索引
     interrupt_actions = []  # 要求中断的请求
 
     async def flush():
@@ -158,10 +204,8 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
         if args_buffer:
             args_text = "".join(args_buffer)
             # 将工具参数追加到当前工具的参数中
-            if current_tool_name:
-                tool_call_args_map[current_tool_name] = (
-                    tool_call_args_map.get(current_tool_name, "") + args_text
-                )
+            if current_tool_index is not None:
+                tool_call_args_list[current_tool_index] += args_text
             await emit("agent.tool_args", {"msgId": msg_id, "args": args_text})
             args_buffer = []
         last_flush = time.monotonic()
@@ -195,7 +239,8 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 phase = event.get("phase")
                 if phase == "start" and tool_name:
                     tool_call_names.append(tool_name)
-                    current_tool_name = tool_name
+                    tool_call_args_list.append("")  # 为本次调用创建独立的参数槽位
+                    current_tool_index = len(tool_call_names) - 1
                 await emit(
                     "agent.tool_call",
                     {
@@ -222,14 +267,14 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 await emit("chat.completed", {"msgId": msg_id, "text": final_text})
                 # 异步保存 AI 消息（不阻塞聊天）
                 asyncio.create_task(
-                    _save_assistant_message_safe(
+                    _save_or_update_assistant_message_sage(
                         session_id=session_id,
                         msg_id=msg_id,
                         content=final_text or "".join(content_parts),
                         reasoning="".join(reasoning_parts) if reasoning_parts else None,
                         tool_calls=tool_call_names if tool_call_names else None,
                         tool_call_args=(
-                            tool_call_args_map if tool_call_args_map else None
+                            tool_call_args_list if tool_call_args_list else None
                         ),
                         interrupt_actions=(
                             interrupt_actions if interrupt_actions else None

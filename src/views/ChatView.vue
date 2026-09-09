@@ -70,7 +70,7 @@
               <summary class="reasoning-summary">💭 深度思考<span v-if="m.thinking" class="thinking-dot">…</span></summary>
               <div class="reasoning-content">{{ m.reasoning }}</div>
             </details>
-            <div class="msg-content" :class="{ 'md-mode': isAssistant(m) }">
+            <div v-if="m.content || m.images?.length || docAttachments(m).length" class="msg-content" :class="{ 'md-mode': isAssistant(m) }">
               <!-- 用户消息的图片附件 -->
               <div v-if="m.images && m.images.length" class="msg-images">
                 <img v-for="(img, i) in m.images" :key="i" :src="img" class="msg-image" @click="openImagePreview(img)" />

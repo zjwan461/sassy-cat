@@ -10,7 +10,8 @@ from server.db.message_repository import (
     save_attachment,
     get_messages_by_session,
     count_messages_by_session,
-    update_message
+    update_message,
+    get_message_by_id
 )
 
 __all__ = [
@@ -23,5 +24,6 @@ __all__ = [
     "save_attachment",
     "get_messages_by_session",
     "count_messages_by_session",
-    "update_message"
+    "update_message",
+    "get_message_by_id"
 ]
