@@ -85,9 +85,8 @@
               </div>
               <template v-if="isAssistant(m)">
                 <MarkdownRenderer :content="m.content" :done="!m.streaming" />
-                <span v-if="m.streaming" class="cursor">▌</span>
               </template>
-              <template v-else>{{ m.content }}<span v-if="m.streaming" class="cursor">▌</span></template>
+              <template v-else>{{ m.content }}</template>
             </div>
             <!-- 操作条：复制按钮（豆包风格图标按钮），助手消息流式期间隐藏 -->
             <div v-if="isAssistant(m) ? (!m.streaming && (m.content || m.reasoning)) : !!m.content" class="msg-actions">
@@ -101,22 +100,28 @@
                 <svg v-else class="action-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
               </button>
             </div>
-            <!-- 工具步骤条：放在气泡下方，避免新消息把正文顶走 -->
-            <div v-if="m.tools && m.tools.length" class="tool-steps">
-              <div v-for="(t, i) in m.tools" :key="i" class="tool-step">
-                🐟 本喵正在叼小鱼干：<b>{{ t.name }}</b>
-                <span v-if="t.done" class="tool-done" :class="{ failed: t.status === 'error' }">{{ t.status === 'error' ? '✕' : '✓' }}</span>
-                <pre v-if="t.args" class="tool-args">{{ t.args }}</pre>
-                <!-- 历史回填的工具结果（实时流无 result 字段，自然不显示） -->
-                <details v-if="t.result" class="tool-result">
-                  <summary class="tool-result-summary">执行结果</summary>
-                  <pre class="tool-result-body">{{ t.result }}</pre>
-                </details>
+            <!-- 工具步骤条：放在气泡下方，避免新消息把正文顶走（默认折叠） -->
+            <details v-if="m.tools && m.tools.length" class="tool-steps-wrapper">
+              <summary class="tool-steps-summary">
+                🛠️ 工具调用（{{ m.tools.length }}）
+                <span class="tool-steps-arrow">▶</span>
+              </summary>
+              <div class="tool-steps">
+                <div v-for="(t, i) in m.tools" :key="i" class="tool-step">
+                  🐟 本喵正在叼小鱼干：<b>{{ t.name }}</b>
+                  <span v-if="t.done" class="tool-done" :class="{ failed: t.status === 'error' }">{{ t.status === 'error' ? '✕' : '✓' }}</span>
+                  <pre v-if="t.args" class="tool-args">{{ t.args }}</pre>
+                  <!-- 历史回填的工具结果（实时流无 result 字段，自然不显示） -->
+                  <details v-if="t.result" class="tool-result">
+                    <summary class="tool-result-summary">执行结果</summary>
+                    <pre class="tool-result-body">{{ t.result }}</pre>
+                  </details>
+                </div>
               </div>
-            </div>
+            </details>
             <!-- interrupt 确认 -->
             <div v-if="m.interruptActions?.length" class="interrupt-bar">
-              <div class="interrupt-title">⚠️ 需要高危操作确认，请核对以下参数：</div>
+              <div class="interrupt-title">⚠️ 需要高危操作确认，请核对参数：</div>
               <div class="interrupt-global-btns" v-if="hasPendingDecisions(m)">
                 <button class="btn approve-all" @click="onApproveAll(m.id)">✅ 全部允许</button>
               </div>
@@ -125,7 +130,7 @@
                   <span class="interrupt-action-index">#{{ i + 1 }}</span>
                   <span class="interrupt-action-name">{{ a.name }}</span>
                   <span v-if="m.interruptDecisions?.[i]" class="interrupt-action-status">
-                    {{ m.interruptDecisions[i] === 'approve' ? '✅ 已允许' : '❌ 已拒绝' }}
+                    {{ m.interruptDecisions[i].type === 'approve' ? '✅ 已允许' : '❌ 已拒绝' }}
                   </span>
                 </div>
                 <pre class="interrupt-action-args">{{ a.argsText }}</pre>
@@ -139,6 +144,8 @@
             <!-- 确认卡失效提示：用户在确认前发送了新消息，服务端以 respond 决策跳过挂起操作并续跑新消息 -->
             <div v-if="m.interruptExpired" class="interrupt-expired">⏹ 新消息已发送，未确认的操作已跳过</div>
             <div v-if="m.error" class="msg-error">{{ m.error }}</div>
+            <!-- 光标：放在 msg-body 末尾，确保出现在所有内容（包括工具步骤和中断确认）之后 -->
+            <span v-if="m.streaming" class="cursor cursor-at-end">▌</span>
           </div>
         </div>
       </div>
@@ -530,6 +537,7 @@ onMounted(() => {
 .msg-content.md-mode { white-space: normal; }
 .msg.user .msg-content { background: #4338ca; border-color: #4f46e5; }
 .cursor { animation: blink 0.8s infinite; }
+.cursor-at-end { display: inline-block; margin-left: 4px; vertical-align: middle; }
 @keyframes blink { 50% { opacity: 0; } }
 
 /* 用户消息中的图片 */
@@ -556,7 +564,14 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .action-btn .action-icon { display: block; }
 .action-btn .action-icon.copied { color: #34d399; }
 
-.tool-steps { margin-top: 6px; }
+/* 工具调用折叠容器 */
+.tool-steps-wrapper { margin-top: 6px; background: #0f172a80; border: 1px solid #334155; border-radius: 8px; overflow: hidden; }
+.tool-steps-summary { cursor: pointer; padding: 6px 12px; color: #94a3b8; font-size: 13px; user-select: none; list-style: none; display: flex; align-items: center; justify-content: space-between; transition: background 0.15s; }
+.tool-steps-summary::-webkit-details-marker { display: none; }
+.tool-steps-summary:hover { background: #1e293b; }
+.tool-steps-arrow { font-size: 10px; transition: transform 0.2s; }
+.tool-steps-wrapper[open] > .tool-steps-summary .tool-steps-arrow { transform: rotate(90deg); }
+.tool-steps { padding: 0 8px 8px 8px; }
 .tool-step { font-size: 12px; color: #94a3b8; background: #0f172a80; border-radius: 6px; padding: 4px 10px; margin-bottom: 4px; }
 .tool-done { color: #34d399; margin-left: 6px; }
 .tool-done.failed { color: #f87171; }

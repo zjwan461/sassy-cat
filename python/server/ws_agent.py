@@ -25,7 +25,7 @@ from proactive import scheduler
 from server import conversations
 from server.bus import hub
 from server.protocol import envelope
-from server.db import save_message, save_attachment
+from server.db import save_message, save_attachment, update_message
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +37,22 @@ _session_cancel: dict[str, threading.Event] = {}
 _active_room: str | None = None
 
 # delta 帧节流参数
-FLUSH_INTERVAL = 0.05   # 50ms
-FLUSH_MAX_CHARS = 80    # 或累积 80 字符
+FLUSH_INTERVAL = 0.05  # 50ms
+FLUSH_MAX_CHARS = 80  # 或累积 80 字符
 
 
 async def _send(ws: WebSocket, frame: dict):
     if ws.client_state == WebSocketState.CONNECTED:
         await ws.send_json(frame)
+
+
+async def _update_interrupt_decisions(msg_id: str, decisions: list):
+    """安全地更新中断操作的decision到数据库，失败不影响聊天"""
+    try:
+        # 保存用户消息
+        await update_message(id=msg_id, interrupt_decisions=decisions)
+    except Exception as e:
+        logger.warning(f"更新中断消息decision失败 (不影响聊天): {e}")
 
 
 async def _save_user_message_safe(
@@ -61,14 +70,14 @@ async def _save_user_message_safe(
             role="user",
             content=content,
         )
-        
+
         # 保存附件
         for att in attachments:
             att_id = "att-" + uuid.uuid4().hex[:12]
             att_type = att.get("type", "text")
             file_name = att.get("name", "unknown")
             file_ext = os.path.splitext(file_name)[1] if file_name else ""
-            
+
             if att_type == "image":
                 # 图片附件
                 await save_attachment(
@@ -103,6 +112,7 @@ async def _save_assistant_message_safe(
     reasoning: str | None = None,
     tool_calls: list | None = None,
     tool_call_args: dict | None = None,
+    interrupt_actions: list | None = None,
 ):
     """安全地保存 AI 消息到数据库，失败不影响聊天"""
     try:
@@ -114,6 +124,7 @@ async def _save_assistant_message_safe(
             reasoning=reasoning,
             tool_calls=tool_calls,
             tool_call_args=tool_call_args,
+            interrupt_actions=interrupt_actions,
         )
     except Exception as e:
         logger.warning(f"AI 消息保存失败 (不影响聊天): {e}")
@@ -132,9 +143,10 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     # 用于持久化的累积数据
     content_parts = []
     reasoning_parts = []
-    tool_call_names = []       # 工具调用名称列表
-    tool_call_args_map = {}    # 工具调用参数映射 {name: args}
-    current_tool_name = None   # 当前正在收集参数的工具名称
+    tool_call_names = []  # 工具调用名称列表
+    tool_call_args_map = {}  # 工具调用参数映射 {name: args}
+    current_tool_name = None  # 当前正在收集参数的工具名称
+    interrupt_actions = []  # 要求中断的请求
 
     async def flush():
         nonlocal buffer, args_buffer, last_flush
@@ -159,13 +171,17 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
             kind = event["kind"]
             if kind == "delta":
                 buffer.append(event["text"])
-                if (time.monotonic() - last_flush >= FLUSH_INTERVAL
-                        or sum(len(x) for x in buffer) >= FLUSH_MAX_CHARS):
+                if (
+                    time.monotonic() - last_flush >= FLUSH_INTERVAL
+                    or sum(len(x) for x in buffer) >= FLUSH_MAX_CHARS
+                ):
                     await flush()
             elif kind == "tool_args":
                 args_buffer.append(event["args"])
-                if (time.monotonic() - last_flush >= FLUSH_INTERVAL
-                        or sum(len(x) for x in args_buffer) >= FLUSH_MAX_CHARS):
+                if (
+                    time.monotonic() - last_flush >= FLUSH_INTERVAL
+                    or sum(len(x) for x in args_buffer) >= FLUSH_MAX_CHARS
+                ):
                     await flush()
             elif kind == "reasoning":
                 # 先把已积累的 delta 正文 flush，保证 reasoning 帧不插队到正文之前
@@ -180,37 +196,61 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 if phase == "start" and tool_name:
                     tool_call_names.append(tool_name)
                     current_tool_name = tool_name
-                await emit("agent.tool_call", {
-                    "msgId": msg_id, "name": tool_name,
-                    "phase": phase,
-                })
+                await emit(
+                    "agent.tool_call",
+                    {
+                        "msgId": msg_id,
+                        "name": tool_name,
+                        "phase": phase,
+                    },
+                )
             elif kind == "interrupt":
                 await flush()
-                await emit("agent.interrupt", {
-                    "msgId": msg_id,
-                    "callId": uuid.uuid4().hex[:8],
-                    "actions": event["payload"].get("actions"),
-                })
+                actions = event["payload"].get("actions")
+                interrupt_actions.extend(actions[0].get("action_requests"))
+                await emit(
+                    "agent.interrupt",
+                    {
+                        "msgId": msg_id,
+                        "callId": uuid.uuid4().hex[:8],
+                        "actions": actions,
+                    },
+                )
             elif kind == "done":
                 await flush()
                 final_text = event.get("text", "")
                 await emit("chat.completed", {"msgId": msg_id, "text": final_text})
                 # 异步保存 AI 消息（不阻塞聊天）
-                asyncio.create_task(_save_assistant_message_safe(
-                    session_id=session_id,
-                    msg_id=msg_id,
-                    content=final_text or "".join(content_parts),
-                    reasoning="".join(reasoning_parts) if reasoning_parts else None,
-                    tool_calls=tool_call_names if tool_call_names else None,
-                    tool_call_args=tool_call_args_map if tool_call_args_map else None,
-                ))
+                asyncio.create_task(
+                    _save_assistant_message_safe(
+                        session_id=session_id,
+                        msg_id=msg_id,
+                        content=final_text or "".join(content_parts),
+                        reasoning="".join(reasoning_parts) if reasoning_parts else None,
+                        tool_calls=tool_call_names if tool_call_names else None,
+                        tool_call_args=(
+                            tool_call_args_map if tool_call_args_map else None
+                        ),
+                        interrupt_actions=(
+                            interrupt_actions if interrupt_actions else None
+                        ),
+                    )
+                )
             elif kind == "error":
                 await flush()
-                await emit("chat.error", {"msgId": msg_id, "code": "agent_error",
-                                           "message": event.get("message", "")})
+                await emit(
+                    "chat.error",
+                    {
+                        "msgId": msg_id,
+                        "code": "agent_error",
+                        "message": event.get("message", ""),
+                    },
+                )
     except Exception as e:
         logger.exception("stream turn 异常")
-        await emit("chat.error", {"msgId": msg_id, "code": "internal", "message": str(e)})
+        await emit(
+            "chat.error", {"msgId": msg_id, "code": "internal", "message": str(e)}
+        )
     finally:
         # 仅当注册的取消事件仍是本轮的才清理：旧轮次结束时可能已有新轮次
         # 注册了自己的事件，无条件 pop 会误删新轮次的取消句柄
@@ -251,10 +291,14 @@ async def _pending_interrupt_decisions(session_id: str, content: str):
                     n += len(val.get("action_requests") or [])
         if n == 0:
             return None
-        logger.info(f"session={session_id} 存在 {n} 个未确认中断，新消息以 respond 决策续跑")
+        logger.info(
+            f"session={session_id} 存在 {n} 个未确认中断，新消息以 respond 决策续跑"
+        )
         first = f"用户跳过了待确认的操作（工具未执行），并发送了新消息：{content}"
         rest = "用户跳过了该待确认操作，工具未执行。"
-        return [{"type": "respond", "message": first}] + [{"type": "respond", "message": rest}] * (n - 1)
+        return [{"type": "respond", "message": first}] + [
+            {"type": "respond", "message": rest}
+        ] * (n - 1)
     except Exception as e:
         logger.warning(f"检查挂起中断失败（按普通新轮次处理）: {e}")
         return None
@@ -264,12 +308,12 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
     content = (payload.get("content") or "").strip()
     attachments = payload.get("attachments") or []
     msg_id = uuid.uuid4().hex[:12]
-    
+
     # 消息内容校验：文本和附件至少有一个
     if not content and not attachments:
         await _send(ws, envelope("error", {"message": "空消息"}))
         return
-    
+
     # 构造多模态内容（参考 main_agent.py 中的 LangChain 多模态格式）
     user_content = content
     if attachments:
@@ -279,17 +323,19 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
         for att in attachments:
             if att.get("type") == "image":
                 # 图片：base64 格式 {"type": "image", "base64": "...", "mime_type": "..."}
-                content_parts.append({
-                    "type": "image",
-                    "base64": att.get("data", ""),
-                    "mime_type": att.get("mimeType", "image/png"),
-                })
+                content_parts.append(
+                    {
+                        "type": "image",
+                        "base64": att.get("data", ""),
+                        "mime_type": att.get("mimeType", "image/png"),
+                    }
+                )
             elif att.get("type") == "text":
                 # OCR 结果：作为文本追加
                 if att.get("content"):
                     content_parts.append({"type": "text", "text": att["content"]})
         user_content = content_parts if content_parts else content
-    
+
     # 会话以服务端激活项为唯一权威：客户端携带的 sessionId 可能是切换前的过期值
     # （桌宠窗口长期存活，最容易踩到），采信它会把消息写进错误线程
     session_id = conversations.active_id()
@@ -301,7 +347,9 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
 
     # 新会话首条消息：截断生成标题并刷新列表（auto_title 仅在真实改名时返回）
     if conversations.auto_title(session_id, content) is not None:
-        await hub.publish_all(envelope("conv.list.result", {"items": conversations.list_sorted()}))
+        await hub.publish_all(
+            envelope("conv.list.result", {"items": conversations.list_sorted()})
+        )
     conversations.touch(session_id)
     conversations.touch(session_id)
     cancel = threading.Event()
@@ -315,19 +363,32 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
     # 注意：chat.user 使用独立的 user_msg_id，避免与助手回复的 msg_id 冲突
     # （否则接收端 find(msgId) 会把 delta 追加到用户气泡上）
     user_msg_id = "u-" + msg_id
-    await hub.publish(session_id, envelope("chat.user", {
-        "msgId": user_msg_id, "sessionId": session_id, "content": content, "source": ws.query_params.get("client", "main"),
-    }))
-    await hub.publish(session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id}))
+    await hub.publish(
+        session_id,
+        envelope(
+            "chat.user",
+            {
+                "msgId": user_msg_id,
+                "sessionId": session_id,
+                "content": content,
+                "source": ws.query_params.get("client", "main"),
+            },
+        ),
+    )
+    await hub.publish(
+        session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
+    )
     await hub.publish(session_id, envelope("pet.command", {"action": "think"}))
 
     # 异步保存用户消息和附件到数据库（不阻塞聊天）
-    asyncio.create_task(_save_user_message_safe(
-        session_id=session_id,
-        msg_id=user_msg_id,
-        content=content,
-        attachments=attachments,
-    ))
+    asyncio.create_task(
+        _save_user_message_safe(
+            session_id=session_id,
+            msg_id=user_msg_id,
+            content=content,
+            attachments=attachments,
+        )
+    )
 
     # 有挂起未确认中断时：以 respond 决策跳过操作并把新消息带入本轮续跑；
     # 否则正常开新轮
@@ -343,8 +404,11 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
 async def _handle_tool_confirm(ws, payload: dict):
     # 与 chat.send 一致：以服务端激活会话为权威（确认卡必然属于当前激活对话）
     session_id = conversations.active_id()
-    msg_id = uuid.uuid4().hex[:12]
-
+    msg_id = payload.get("msgId")
+    # 新协议：前端直接发送 decisions 数组
+    decisions = payload.get("decisions")
+    # 更新interrupt decisions
+    await _update_interrupt_decisions(msg_id=msg_id, decisions=decisions)
     # 校验线程是否仍挂起于 interrupt：正常流程下新消息已在
     # _handle_chat_send 中以 respond 决策续跑并消费掉挂起中断，
     # 此处主要防御多窗口（桌宠/主窗口）确认卡不同步的竞态，
@@ -357,7 +421,9 @@ async def _handle_tool_confirm(ws, payload: dict):
         logger.warning(f"resume 前校验挂起状态失败: {e}")
         pending = True  # 校验异常时保守放行，维持旧行为
     if not pending:
-        await hub.publish(session_id, envelope("agent.interrupt.expired", {"sessionId": session_id}))
+        await hub.publish(
+            session_id, envelope("agent.interrupt.expired", {"sessionId": session_id})
+        )
         return
 
     cancel = threading.Event()
@@ -366,16 +432,18 @@ async def _handle_tool_confirm(ws, payload: dict):
     if old:
         old.set()
     _session_cancel[session_id] = cancel
-    await hub.publish(session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id}))
+    await hub.publish(
+        session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
+    )
 
-    # 新协议：前端直接发送 decisions 数组
-    decisions = payload.get("decisions")
     if decisions and isinstance(decisions, list):
         gen = runner.resume_turn(session_id, decisions, cancel)
     else:
         # 兼容旧协议：approved 布尔值
         approved = bool(payload.get("approved"))
-        gen = runner.resume_turn(session_id, [{"type": "approve" if approved else "reject"}], cancel)
+        gen = runner.resume_turn(
+            session_id, [{"type": "approve" if approved else "reject"}], cancel
+        )
 
     await _stream_turn(ws, session_id, gen, msg_id, cancel)
 
@@ -385,14 +453,22 @@ async def _handle_llm_test(ws, payload: dict):
     profile = cfg.active_llm_profile()
     try:
         from agent.llms import build_chat_llm
+
         llm = build_chat_llm(profile)
         start = time.time()
         resp = await asyncio.wait_for(llm.ainvoke("回复：OK"), timeout=15)
         latency = int((time.time() - start) * 1000)
-        await _send(ws, envelope("llm.test.result", {
-            "ok": True, "latencyMs": latency,
-            "reply": str(getattr(resp, "content", ""))[:80],
-        }))
+        await _send(
+            ws,
+            envelope(
+                "llm.test.result",
+                {
+                    "ok": True,
+                    "latencyMs": latency,
+                    "reply": str(getattr(resp, "content", ""))[:80],
+                },
+            ),
+        )
     except Exception as e:
         await _send(ws, envelope("llm.test.result", {"ok": False, "error": str(e)}))
 
@@ -400,22 +476,30 @@ async def _handle_llm_test(ws, payload: dict):
 async def _handle_conv(ws, mtype: str, payload: dict, room_ref: dict):
     """conv.* 会话管理消息路由。room_ref 持有本连接的房间 id（可变，支持切换后迁移）。"""
     if mtype == "conv.list":
-        await _send(ws, envelope("conv.list.result", {"items": conversations.list_sorted()}))
+        await _send(
+            ws, envelope("conv.list.result", {"items": conversations.list_sorted()})
+        )
     elif mtype == "conv.create":
         conv = conversations.create()
         await _activate_room(conv, room_ref)
     elif mtype == "conv.activate":
         conv = conversations.set_active(payload.get("id") or "")
         if conv is None:
-            await _send(ws, envelope("error", {"message": f"会话不存在: {payload.get('id')}"}))
+            await _send(
+                ws, envelope("error", {"message": f"会话不存在: {payload.get('id')}"})
+            )
             return
         await _activate_room(conv, room_ref)
     elif mtype == "conv.rename":
         conv = conversations.rename(payload.get("id") or "", payload.get("title") or "")
         if conv is None:
-            await _send(ws, envelope("error", {"message": f"会话不存在: {payload.get('id')}"}))
+            await _send(
+                ws, envelope("error", {"message": f"会话不存在: {payload.get('id')}"})
+            )
             return
-        await hub.publish_all(envelope("conv.list.result", {"items": conversations.list_sorted()}))
+        await hub.publish_all(
+            envelope("conv.list.result", {"items": conversations.list_sorted()})
+        )
     elif mtype == "conv.delete":
         cid = payload.get("id") or ""
         removed = conversations.delete(cid)
@@ -423,7 +507,9 @@ async def _handle_conv(ws, mtype: str, payload: dict, room_ref: dict):
             await _send(ws, envelope("error", {"message": f"会话不存在: {cid}"}))
             return
         # 删除的是激活会话：active_id() 已自动回退，广播让所有窗口跟随切换
-        await hub.publish_all(envelope("conv.list.result", {"items": conversations.list_sorted()}))
+        await hub.publish_all(
+            envelope("conv.list.result", {"items": conversations.list_sorted()})
+        )
         active = conversations.get(conversations.active_id())
         if active:
             await _activate_room(active, room_ref)
@@ -437,7 +523,9 @@ async def _activate_room(conv: dict, room_ref: dict):
         await hub.move_room(old, conv["id"])
     _active_room = conv["id"]
     room_ref["id"] = conv["id"]
-    await hub.publish_all(envelope("conv.activated", {"id": conv["id"], "title": conv.get("title", "")}))
+    await hub.publish_all(
+        envelope("conv.activated", {"id": conv["id"], "title": conv.get("title", "")})
+    )
 
 
 async def ws_agent_endpoint(ws: WebSocket):
@@ -454,7 +542,9 @@ async def ws_agent_endpoint(ws: WebSocket):
             _active_room = session_id
     logger.info(f"WS 连接建立 client={client} session={session_id}")
     try:
-        await _send(ws, envelope("connected", {"client": client, "sessionId": session_id}))
+        await _send(
+            ws, envelope("connected", {"client": client, "sessionId": session_id})
+        )
         while True:
             raw = await ws.receive_text()
             try:
@@ -482,14 +572,23 @@ async def ws_agent_endpoint(ws: WebSocket):
                 elif mtype.startswith("conv."):
                     await _handle_conv(ws, mtype, payload, room_ref)
                 elif mtype == "prompt.preview":
-                    final = build_system_prompt(payload.get("persona") or DEFAULT_PERSONA)
-                    await _send(ws, envelope("prompt.preview.result", {"prompt": final}))
+                    final = build_system_prompt(
+                        payload.get("persona") or DEFAULT_PERSONA
+                    )
+                    await _send(
+                        ws, envelope("prompt.preview.result", {"prompt": final})
+                    )
                 elif mtype == "llm.test":
                     await _handle_llm_test(ws, payload)
                 elif mtype == "config.invalidate":
                     config_loader.reload_config()
                     holder.invalidate()
-                    await _send(ws, envelope("config.invalidated", {"paths": payload.get("paths", [])}))
+                    await _send(
+                        ws,
+                        envelope(
+                            "config.invalidated", {"paths": payload.get("paths", [])}
+                        ),
+                    )
                 elif mtype == "client.event":
                     name = payload.get("name")
                     if name == "user_activity":
@@ -501,7 +600,9 @@ async def ws_agent_endpoint(ws: WebSocket):
                         else:
                             scheduler.state.ping()
                 else:
-                    await _send(ws, envelope("error", {"message": f"未知类型: {mtype}"}))
+                    await _send(
+                        ws, envelope("error", {"message": f"未知类型: {mtype}"})
+                    )
             except Exception as e:
                 logger.exception("帧处理异常")
                 await _send(ws, envelope("error", {"message": str(e)}))
@@ -510,4 +611,6 @@ async def ws_agent_endpoint(ws: WebSocket):
     finally:
         # 房间可能已随会话切换迁移（room_ref），以最新房间 id 退出
         await hub.leave(room_ref.get("id") or session_id, ws)
-        logger.info(f"WS 连接关闭 client={client} session={room_ref.get('id') or session_id}")
+        logger.info(
+            f"WS 连接关闭 client={client} session={room_ref.get('id') or session_id}"
+        )

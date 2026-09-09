@@ -30,6 +30,8 @@ async def save_message(
     tool_name: Optional[str] = None,
     tool_status: Optional[str] = None,
     created_at: Optional[int] = None,
+    interrupt_actions: Optional[list] = None,
+    interrupt_decisions: Optional[list] = None,
 ) -> bool:
     """
     保存消息到数据库。
@@ -66,6 +68,8 @@ async def save_message(
                 tool_name=tool_name,
                 tool_status=tool_status,
                 created_at=created_at or int(time.time() * 1000),
+                interrupt_actions=json.dumps(interrupt_actions, ensure_ascii=False) if interrupt_actions else None,
+                interrupt_decisions=json.dumps(interrupt_decisions, ensure_ascii=False) if interrupt_decisions else None,
             )
             session.add(msg)
             await session.commit()
@@ -73,6 +77,83 @@ async def save_message(
             return True
     except Exception as e:
         logger.warning(f"保存消息失败 (不影响聊天): id={id}, error={e}")
+        return False
+
+
+async def update_message(
+    id: str,
+    session_id: Optional[str] = None,
+    role: Optional[str] = None,
+    content: Optional[str] = None,
+    reasoning: Optional[str] = None,
+    tool_calls: Optional[list] = None,
+    tool_call_args: Optional[dict] = None,
+    tool_call_id: Optional[str] = None,
+    tool_name: Optional[str] = None,
+    tool_status: Optional[str] = None,
+    interrupt_actions: Optional[list] = None,
+    interrupt_decisions: Optional[list] = None,
+) -> bool:
+    """
+    更新消息到数据库。
+    
+    Args:
+        id: 消息唯一 ID（用于定位要更新的消息）
+        session_id: 会话 ID
+        role: 消息类型 ('user' | 'assistant' | 'tool')
+        content: 消息文本内容
+        reasoning: AI 思考内容 (仅 assistant)
+        tool_calls: 工具调用名称列表 (仅 assistant)
+        tool_call_args: 工具调用参数映射 (仅 assistant)
+        tool_call_id: 工具结果关联 ID (仅 tool)
+        tool_name: 工具名称 (仅 tool)
+        tool_status: 工具执行状态 (仅 tool)
+        interrupt_actions: 中断请求列表
+        interrupt_decisions: 中断决定列表
+    
+    Returns:
+        bool: 是否更新成功
+    """
+    try:
+        async with get_session() as session:
+            # 查询消息
+            stmt = select(Message).where(Message.id == id)
+            result = await session.execute(stmt)
+            msg = result.scalar_one_or_none()
+            
+            if msg is None:
+                logger.warning(f"消息不存在: id={id}")
+                return False
+            
+            # 更新提供的字段
+            if session_id is not None:
+                msg.session_id = session_id
+            if role is not None:
+                msg.role = role
+            if content is not None:
+                msg.content = content
+            if reasoning is not None:
+                msg.reasoning = reasoning
+            if tool_calls is not None:
+                msg.tool_calls = json.dumps(tool_calls, ensure_ascii=False)
+            if tool_call_args is not None:
+                msg.tool_call_args = json.dumps(tool_call_args, ensure_ascii=False)
+            if tool_call_id is not None:
+                msg.tool_call_id = tool_call_id
+            if tool_name is not None:
+                msg.tool_name = tool_name
+            if tool_status is not None:
+                msg.tool_status = tool_status
+            if interrupt_actions is not None:
+                msg.interrupt_actions = json.dumps(interrupt_actions, ensure_ascii=False)
+            if interrupt_decisions is not None:
+                msg.interrupt_decisions = json.dumps(interrupt_decisions, ensure_ascii=False)
+            
+            await session.commit()
+            logger.debug(f"消息已更新: id={id}")
+            return True
+    except Exception as e:
+        logger.warning(f"更新消息失败 (不影响聊天): id={id}, error={e}")
         return False
 
 
@@ -183,6 +264,8 @@ async def get_messages_by_session(
                     "toolName": msg.tool_name,
                     "toolStatus": msg.tool_status,
                     "createdAt": msg.created_at,
+                    "interruptActions": msg.interrupt_actions,
+                    "interruptDecisions": msg.interrupt_decisions,
                     "attachments": [
                         {
                             "id": att.id,

@@ -82,7 +82,27 @@ function ensureStarted() {
   })
   on('chat.started', (p) => {
     currentMsgId = p.msgId
-    chat.messages.push({ id: p.msgId, role: 'assistant', content: '', reasoning: '', reasoningOpen: true, streaming: true, thinking: false, tools: [] })
+    // 检测是否在工具调用/中断后继续输出：若最后一条助手消息有工具或曾中断，则复用该消息而非创建新消息
+    const last = chat.messages[chat.messages.length - 1]
+    const hasTools = last?.tools && last.tools.length > 0
+    const wasInterrupted = last?.interruptActions || last?.interruptExpired
+    if (last && last.role === 'assistant' && (hasTools || wasInterrupted)) {
+      // 复用现有消息：更新 id 以匹配新的 msgId，保持 tools 和内容
+      last.id = p.msgId
+      last.streaming = true
+      last.thinking = false
+      // 清除中断状态，因为现在继续输出了
+      last.interruptActions = null
+      last.interruptDecisions = null
+      last.interrupt = null
+      // 不重置 reasoningOpen，保留用户之前的折叠状态
+      if (!last.content && !last.reasoning) {
+        last.thinking = true
+        last.reasoningOpen = true
+      }
+    } else {
+      chat.messages.push({ id: p.msgId, role: 'assistant', content: '', reasoning: '', reasoningOpen: true, streaming: true, thinking: false, tools: [] })
+    }
     chat.generating = true
   })
   on('chat.delta', (p) => {
@@ -221,19 +241,19 @@ export function deleteConversation(id) {
 export function submitMessage(text, attachments = []) {
   ensureStarted()
   expirePendingInterrupts()
-  
+
   // 提取图片用于前端渲染
   const images = attachments
     .filter(att => att.type === 'image')
     .map(att => `data:${att.mimeType};base64,${att.data}`)
-  
+
   chat.messages.push({
     id: 'u-' + Date.now(),
     role: 'user',
     content: text,
     images: images.length ? images : undefined
   })
-  
+
   send('chat.send', {
     sessionId: chat.convId || socketState.sessionId,
     content: text,
@@ -257,7 +277,7 @@ export function decideInterrupt(msgId, index, decision) {
   const allDecided = m.interruptDecisions.every((d) => d !== undefined)
   if (allDecided) {
     const decisions = m.interruptDecisions.map((d) => ({ type: d }))
-    send('tool.confirm', { sessionId: chat.convId || socketState.sessionId, decisions })
+    send('tool.confirm', { sessionId: chat.convId || socketState.sessionId, decisions, msgId: msgId })
     chat.generating = true
     m.interruptActions = null
     m.interruptDecisions = null
@@ -271,7 +291,7 @@ export function approveAllInterrupt(msgId) {
   const decisions = m.interruptActions.map(() => ({ type: 'approve' }))
   m.interruptActions = null
   m.interruptDecisions = null
-  send('tool.confirm', { sessionId: chat.convId || socketState.sessionId, decisions })
+  send('tool.confirm', { sessionId: chat.convId || socketState.sessionId, decisions, msgId: msgId })
   chat.generating = true
 }
 
@@ -315,6 +335,17 @@ function transformMessage(item) {
     .filter((a) => a.type === 'image' && a.base64Data)
     .map((a) => `data:${a.mimeType || 'image/png'};base64,${a.base64Data}`)
 
+  // 转换interruptActions
+  const interruptActions = (JSON.parse(item.interruptActions) || []).map((item) => ({
+    name: item.name,
+    argsText: item.args,
+  }))
+
+  // 转换interruptDecisions
+  const interruptDecisions = (JSON.parse(item.interruptDecisions) || [])
+
+  console.log(item)
+
   return {
     id: item.id,
     role: item.role,
@@ -325,6 +356,8 @@ function transformMessage(item) {
     tools,
     attachments,
     images: images.length ? images : undefined,
+    interruptActions: interruptActions,
+    interruptDecisions: interruptDecisions,
   }
 }
 

@@ -23,7 +23,7 @@ class Message(Base):
     
     id = Column(String, primary_key=True)              # 消息唯一 ID
     session_id = Column(String, nullable=False, index=True)  # 会话 ID，对应 LangChain 的 thread_id
-    role = Column(String, nullable=False)              # 'user' | 'assistant' | 'tool'
+    role = Column(String, nullable=False)              # 'user' | 'assistant' | 'tool' | 'interrupt'
     content = Column(Text)                             # 消息文本内容
     reasoning = Column(Text)                           # AI 思考内容 (仅 assistant)
     tool_calls = Column(Text)                          # 工具调用名称列表 JSON，如 ["search", "run_cmd"] (仅 assistant)
@@ -32,7 +32,8 @@ class Message(Base):
     tool_name = Column(String)                         # 工具名称 (仅 tool)
     tool_status = Column(String)                       # 工具执行状态 (仅 tool)
     created_at = Column(BigInteger, nullable=False, index=True)  # 创建时间戳 (毫秒)
-    
+    interrupt_actions = Column(Text)                   # 中断请求（需要人工审核的工具执行请求）
+    interrupt_decisions = Column(Text)                 # 中断请求，人工审核的决定。approve，reject
     # 关系
     attachments = relationship(
         "Attachment",
