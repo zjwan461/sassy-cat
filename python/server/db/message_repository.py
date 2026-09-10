@@ -122,7 +122,7 @@ async def update_message(
             msg = result.scalar_one_or_none()
             
             if msg is None:
-                logger.warning(f"消息不存在: id={id}")
+                logger.debug(f"消息不存在: id={id}")
                 return False
             
             # 更新提供的字段
@@ -328,7 +328,7 @@ async def get_message_by_id(msg_id: str) -> Optional[dict]:
             msg = result.scalar_one_or_none()
 
             if msg is None:
-                logger.warning(f"消息不存在: id={msg_id}")
+                logger.debug(f"消息不存在: id={msg_id}")
                 return None
 
             return {

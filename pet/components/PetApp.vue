@@ -36,8 +36,6 @@
       @mousedown="onMouseDown"
       @click="onClick"
       @contextmenu.prevent="onContextMenu"
-      @mouseenter="onMouseEnter"
-      @mouseleave="onMouseLeave"
       @wheel.prevent="onWheel"
     >
       <svg viewBox="0 0 120 110" width="120" height="110">
@@ -153,12 +151,9 @@ const eyesClosed = computed(() => {
   if (state.value === 'sleep') return true
   return frameIdx.value % 8 === 6 // 周期眨眼
 })
-const mouseHovering = ref(false)
 const tailPath = computed(() => {
-  // 鼠标悬停时尾巴摇得更快更欢
-  const speed = mouseHovering.value ? 1.6 : 0.9
-  const amp = mouseHovering.value ? 16 : 12
-  const w = Math.sin(frameIdx.value * speed) * amp
+  // 尾巴轻微摆动
+  const w = Math.sin(frameIdx.value * 0.9) * 12
   return `M92 84 q20 ${-8 + w} ${16 + w * 0.4} -26`
 })
 
@@ -259,30 +254,6 @@ function onClick() {
   }, 400)
 }
 
-function onMouseEnter() {
-  mouseHovering.value = true
-  if (state.value === 'sleep') {
-    // 睡觉时被吵醒
-    setMood('annoyed', 1500)
-    showBubble('哼… 谁吵醒本喵了… 😾', 2000)
-    setState('idle')
-  } else if (state.value === 'idle' && !dragging) {
-    // 注意到鼠标
-    if (Math.random() < 0.4) {
-      showBubble('喵？ 你来了呀～', 1800)
-    }
-  }
-}
-
-function onMouseLeave() {
-  mouseHovering.value = false
-  clearTimeout(longPressTimer)
-  longPressing.value = false
-  if (mood.value === 'purring') {
-    mood.value = ''
-  }
-}
-
 function onWheel(e) {
   // 滚轮：向上摸头（开心），向下戳（不满）
   if (state.value === 'drag') return
@@ -350,6 +321,9 @@ function sendQuick() {
 // ---------- 气泡窗口自适应 ----------
 // 气泡内容变化时，把桌宠窗口向上/向两侧扩到刚好容纳气泡（主进程负责底边锚定与屏幕钳制）
 let syncPending = false
+// 记录上一次应用的窗口尺寸：尺寸未变化时跳过 IPC resize，
+// 避免打字机高频调用导致窗口反复调整产生抖动
+let lastAppliedSize = { h: 0, w: 0 }
 function syncWindow() {
   if (!window.petAPI) return
   let h = PET_BASE_H, w = PET_BASE_W
@@ -360,20 +334,25 @@ function syncWindow() {
     h = Math.max(PET_BASE_H, BUBBLE_BOTTOM + bh + BUBBLE_TOP_PAD)
     w = BUBBLE_W
   }
+  if (h === lastAppliedSize.h && w === lastAppliedSize.w) return
+  lastAppliedSize = { h, w }
   window.petAPI.resize({ height: h, width: w })
 }
-let typingActive = false
+async function runSync() {
+  syncPending = false
+  await nextTick()
+  measureOverflow()
+  // 溢出检测结果会切换操作按钮行的显隐，需再等一次渲染后再量高度，
+  // 否则窗口高度少算按钮行，气泡顶部会被裁掉
+  await nextTick()
+  syncWindow()
+}
+// 注意：这里必须用 setTimeout 而不是 requestAnimationFrame——
+// 桌宠窗口被其他窗口遮挡时 Electron 会暂停 rAF，导致窗口永不 resize、气泡被裁到窗口外不可见
 function scheduleSync() {
-  // 打字机运行期间跳过 resize，避免窗口高频调整导致气泡抖动
-  if (typingActive) return
   if (syncPending) return
   syncPending = true
-  requestAnimationFrame(async () => {
-    syncPending = false
-    await nextTick()
-    measureOverflow()
-    syncWindow()
-  })
+  setTimeout(runSync, 0)
 }
 function measureOverflow() {
   const el = bubbleTextRef.value
@@ -432,23 +411,21 @@ let streamTarget = ''
 let typer = null
 function typewriteStart() {
   streamBuf = ''; streamTarget = ''
-  typingActive = true
   clearInterval(typer)
   typer = setInterval(() => {
     if (streamBuf.length < streamTarget.length) {
       streamBuf = streamTarget.slice(0, Math.min(streamBuf.length + 2, BUBBLE_MAX_CHARS))
       bubbleText.value = streamBuf
-      // 打字机期间不触发 scheduleSync，避免窗口频繁 resize 导致气泡抖动
+      // 打字机期间持续同步窗口高度，保证气泡始终完整可见；
+      // syncWindow 内部已做尺寸去重，未变化时不发起 resize，不会抖动
+      scheduleSync()
     }
   }, 40)
 }
 function typewriteStop() {
   clearInterval(typer); typer = null
-  if (typingActive) {
-    typingActive = false
-    // 打字结束后统一调整一次窗口尺寸
-    scheduleSync()
-  }
+  // 打字结束后统一调整一次窗口尺寸
+  scheduleSync()
 }
 
 // ---------- 拖动（增量移动，主进程节流） ----------

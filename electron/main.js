@@ -763,10 +763,23 @@ ipcMain.handle('pet:set-interactive', (event, interactive) => {
   return { success: true };
 });
 
+// 相对移动窗口（拖动/走动）：移动后按窗口所在显示器工作区钳制，
+// 保证桌宠（含展开的气泡/输入框）完整留在屏幕内，不会跑到桌面外
 ipcMain.on('pet:move-delta', (event, { dx, dy }) => {
   if (!petWindow || petWindow.isDestroyed()) return;
+  const { screen } = require('electron');
   const [x, y] = petWindow.getPosition();
-  petWindow.setPosition(Math.round(x + dx), Math.round(y + dy));
+  const [w, h] = petWindow.getSize();
+  const nx = Math.round(x + dx);
+  const ny = Math.round(y + dy);
+  // 以移动后的窗口中心为准，取最近的显示器工作区（含任务栏避让，支持多屏）
+  const wa = screen.getDisplayNearestPoint({
+    x: Math.round(nx + w / 2),
+    y: Math.round(ny + h / 2)
+  }).workArea;
+  const clampedX = Math.min(wa.x + wa.width - w, Math.max(wa.x, nx));
+  const clampedY = Math.min(wa.y + wa.height - h, Math.max(wa.y, ny));
+  petWindow.setPosition(clampedX, clampedY);
 });
 
 ipcMain.handle('pet:get-position', () => {
@@ -785,12 +798,14 @@ ipcMain.handle('pet:resize', (event, opts) => {
   const [x, y] = petWindow.getPosition();
   const newW = Math.max(PET_W, Math.round(width || w));
   const newH = Math.max(PET_H, Math.round(height));
-  const newX = Math.round(x + (w - newW) / 2);
+  let newX = Math.round(x + (w - newW) / 2);
   let newY = y + (h - newH); // 底边固定
   const { screen } = require('electron');
   const wa = screen.getDisplayMatching({ x, y, width: w, height: h }).workArea;
   const bottom = y + h;
   if (newY < wa.y) newY = wa.y;
+  // 水平方向同样钳制到工作区内，避免桌宠靠在屏幕边缘时气泡/输入框扩宽被推出屏外
+  newX = Math.min(wa.x + wa.width - newW, Math.max(wa.x, newX));
   const finalH = Math.max(PET_H, bottom - newY);
   petWindow.setBounds({ x: newX, y: newY, width: newW, height: finalH });
   return { success: true };
