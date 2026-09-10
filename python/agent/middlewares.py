@@ -8,6 +8,7 @@ import config_loader
 from typing import Any
 from agent.constant import USER_ID
 from agent.models import OwnerProfile
+from monitor.service import static_info
 
 
 @before_model
@@ -37,6 +38,55 @@ def trim_messages(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
 
 # 画像段分隔标记：用于幂等注入（重建时先剥离旧画像再拼新画像）
 PROFILE_MARKER = "[主人画像]"
+SYSTEM_INFO_MARKER = "[系统信息]"
+SOFTWARE_MARKER = "[开发软件]"
+
+
+def _format_system_info(info: dict) -> str:
+    """把 static_info 字典渲染成注入 system message 的文本段落"""
+    if not info:
+        return ""
+    lines = []
+    if info.get("hostname"):
+        lines.append(f"- 主机名：{info['hostname']}")
+    if info.get("osName"):
+        os_arch = info.get("osArch") or ""
+        lines.append(f"- 操作系统：{info['osName']} ({os_arch})")
+    if info.get("cpuName"):
+        cores = info.get("cpuCores") or "?"
+        threads = info.get("cpuThreads") or "?"
+        lines.append(f"- CPU：{info['cpuName']}（{cores}核{threads}线程）")
+    if info.get("gpuNames"):
+        gpu_mem = info.get("gpuMemGB") or {}
+        for name in info["gpuNames"]:
+            mem = gpu_mem.get(name)
+            mem_str = f"，显存 {mem}GB" if mem else ""
+            lines.append(f"- GPU：{name}{mem_str}")
+    if info.get("totalMemGB"):
+        lines.append(f"- 内存：{info['totalMemGB']}GB")
+    if info.get("bootTime"):
+        lines.append(f"- 上次启动：{info['bootTime']}")
+    return "\n".join(lines)
+
+
+def _format_software_info(software: dict) -> str:
+    """把 get_software() 返回的字典渲染成注入 system message 的文本段落"""
+    if not software:
+        return ""
+    lines = []
+    for name, info in software.items():
+        if isinstance(info, dict):
+            version = info.get("version", "")
+            path = info.get("path", "")
+            if version and path:
+                lines.append(f"- {name}: {version}（{path}）")
+            elif version:
+                lines.append(f"- {name}: {version}")
+            elif path:
+                lines.append(f"- {name}: {path}")
+        elif info:
+            lines.append(f"- {name}: {info}")
+    return "\n".join(lines)
 
 
 def _coerce_profile(item: Any) -> OwnerProfile | None:
@@ -82,8 +132,8 @@ def _format_profile(profile: OwnerProfile | dict) -> str:
 
 
 @wrap_model_call
-def inject_user_info(request, handler):
-    """把 store 中的用户画像拼接进 system message，供模型高频感知主人信息。
+def inject_base_info(request, handler):
+    """把 store 中的用户画像和系统信息拼接进 system message，供模型高频感知主人信息和硬件环境。
 
     注意：create_agent 传入的 system_prompt 不在 state["messages"] 里，
     而是独立挂在 ModelRequest.system_message 上，因此必须用 wrap_model_call
@@ -93,17 +143,39 @@ def inject_user_info(request, handler):
     if sys_msg is None:
         return handler(request)
 
+    # 获取用户画像
     user_info = _coerce_profile(request.runtime.store.get(("users",), USER_ID))
     profile_text = _format_profile(user_info) if user_info else ""
 
-    # 幂等处理：先剥离上一次注入的旧画像段，再拼接最新画像
+    # 获取系统信息
+    system_info = static_info.get()
+    system_info_text = _format_system_info(system_info)
+
+    # 获取用户电脑上安装的开发软件信息情况
+    software_info = static_info.get_software()
+    software_info_text = _format_software_info(software_info)
+
+    # 幂等处理：先剥离上一次注入的旧段落，再拼接最新内容
     content = str(sys_msg.content)
+    # 先剥离画像段
     base = content.split(PROFILE_MARKER, 1)[0].rstrip()
-    new_content = (
-        f"{base}\n\n{PROFILE_MARKER}\n{profile_text}" if profile_text else base
-    )
+    # 再剥离系统信息段（如果存在）
+    base = base.split(SYSTEM_INFO_MARKER, 1)[0].rstrip()
+    # 再剥离开发软件段（如果存在）
+    base = base.split(SOFTWARE_MARKER, 1)[0].rstrip()
+
+    # 拼接新内容
+    parts = [base]
+    if profile_text:
+        parts.append(f"{PROFILE_MARKER}\n{profile_text}")
+    if system_info_text:
+        parts.append(f"{SYSTEM_INFO_MARKER}\n{system_info_text}")
+    if software_info_text:
+        parts.append(f"{SOFTWARE_MARKER}\n{software_info_text}")
+    
+    new_content = "\n\n".join(parts) if len(parts) > 1 else base
 
     if new_content == content:
-        return handler(request)  # 画像无变化，原样透传
+        return handler(request)  # 内容无变化，原样透传
 
     return handler(request.override(system_message=SystemMessage(content=new_content)))

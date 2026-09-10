@@ -5,6 +5,7 @@ CPU 名称/核数、GPU 名称与显存总量、内存总量、启动时间等�
 采集链：psutil -> wmic -> PowerShell Get-CimInstance；GPU 名称另走 NVML -> WMI -> wmic。
 """
 
+import shutil
 import socket
 import platform
 import time
@@ -14,6 +15,7 @@ from .deps import IS_WINDOWS, HAS_PSUTIL, psutil, HAS_NVML, pynvml, HAS_WMI, WMI
 
 # 模块级缓存
 _STATIC = {}
+_SOFTWARE = {}
 
 
 def collect():
@@ -154,16 +156,119 @@ def collect():
     return info
 
 
+def _extract_version(text: str, index: int = 2) -> str | None:
+    """从命令输出中提取版本号（按空格分割后取指定位置的 token）"""
+    parts = text.strip().split()
+    if len(parts) > index:
+        return parts[index].rstrip(',')
+    return None
+
+
+def collect_software() -> dict:
+    """检测当前系统安装的开发软件版本及可执行文件绝对路径。
+
+    返回格式::
+
+        {
+            'git':    {'version': '2.43.0', 'path': 'C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe'},
+            'java':   {'version': '17.0.2', 'path': 'C:\\\\Program Files\\\\Java\\\\...'},
+            ...
+        }
+
+    仅包含已安装的软件；未安装的不出现。
+    """
+    software = {}
+
+    # 定义检测项：(key, executable, version_args, version_parser)
+    #   version_parser: callable(stdout) -> str | None
+    #   当 version_args 为空字符串时，仅检测路径不获取版本
+    def _parse_git(out):
+        return _extract_version(out, 2)
+
+    def _parse_java(out):
+        for line in out.splitlines():
+            line = line.strip()
+            if 'version' in line.lower():
+                for part in line.split():
+                    part = part.strip('"')
+                    if part and part[0].isdigit():
+                        return part
+        return None
+
+    def _parse_node(out):
+        return out.strip()
+
+    def _parse_go(out):
+        return _extract_version(out, 2)
+
+    def _parse_rust(out):
+        return _extract_version(out, 1)
+
+    def _parse_docker(out):
+        return _extract_version(out, 2)
+
+    def _parse_gcc(out):
+        for line in out.splitlines():
+            line = line.strip()
+            if line:
+                for part in line.split():
+                    if part and part[0].isdigit():
+                        return part
+        return None
+
+    def _parse_cmake(out):
+        return _extract_version(out, 2)
+
+    def _parse_code(out):
+        lines = out.strip().splitlines()
+        return lines[0].strip() if lines else None
+
+    checks = [
+        ('git',     'git',    '--version', _parse_git),
+        ('java',    'java',   '-version',  _parse_java),
+        ('nodejs',  'node',   '--version', _parse_node),
+        ('go',      'go',     'version',   _parse_go),
+        ('rust',    'rustc',  '--version', _parse_rust),
+        ('docker',  'docker', '--version', _parse_docker),
+        ('gcc',     'gcc',    '--version', _parse_gcc),
+        ('cmake',   'cmake',  '--version', _parse_cmake),
+        ('vscode',  'code',   '--version', _parse_code),
+    ]
+
+    for key, exe, args, parser in checks:
+        exe_path = shutil.which(exe)
+        if not exe_path:
+            continue
+        entry = {'path': exe_path}
+        try:
+            out = shell.run(f'{exe} {args}')
+            if out:
+                ver = parser(out)
+                if ver:
+                    entry['version'] = ver
+        except Exception:
+            pass
+        software[key] = entry
+
+    return software
+
+
 def init():
     """执行采集并写入模块缓存"""
-    global _STATIC
+    global _STATIC, _SOFTWARE
     _STATIC = collect()
+    _SOFTWARE = collect_software()
     return _STATIC
 
 
 def get() -> dict:
     """读取缓存的静态信息"""
     return _STATIC
+
+
+def get_software() -> dict:
+    """读取缓存的开发软件信息"""
+    return _SOFTWARE
 
 
 def sysinfo_payload() -> dict:

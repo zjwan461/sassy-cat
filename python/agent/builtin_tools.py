@@ -91,8 +91,10 @@ def run_python(code: str):
     return "\n".join(output)
 
 
-def _convert_virtual_path(segment: str) -> str:
+def _convert_virtual_path(segment: str) -> list[str]:
     """将单个虚拟路径片段转换为真实路径。
+
+    返回一个列表，因为某些命令（如 pip）可能需要展开为多个片段。
 
     如果片段以 / 开头且后面跟着的是目录名（不是 - 开头的参数），
     则认为是 FilesystemBackend 的虚拟路径，转换为基于 work_dir 的真实路径。
@@ -102,6 +104,7 @@ def _convert_virtual_path(segment: str) -> str:
       → `work_dir\\skills\\weather-skill\\scripts\\fetch_weather.py`（Windows）
     - `-v` → `-v`（不变，因为是参数）
     - `echo` → `echo`（不变）
+    - `pip` → `[pip绝对路径]` 或 `[python绝对路径, "-m", "pip"]`（回退）
     """
     if (
         segment.startswith("C:")
@@ -113,19 +116,33 @@ def _convert_virtual_path(segment: str) -> str:
         or segment.startswith("Z:")
     ):
         raise ValueError("Windows环境下不得使用真实盘符作为变量开头")
+    
+    # 使用 in 操作符正确检查成员关系
+    if segment in ("python", "python3"):
+        # 使用项目中实际可用的 Python 解释器绝对路径
+        return [_find_python()]
+    elif segment in ("pip", "pip3"):
+        # pip 通常与 Python 解释器在同一目录
+        python_exe = Path(_find_python())
+        pip_exe = python_exe.parent / ("pip.exe" if os.name == "nt" else "pip")
+        if pip_exe.exists():
+            return [str(pip_exe)]
+        # pip 独立可执行文件不存在，回退到 python -m pip
+        return [_find_python(), "-m", "pip"]
+
     if not segment.startswith("/"):
-        return segment
+        return [segment]
     # 去掉前导 /，得到相对路径
     relative_path = segment.lstrip("/")
     # 如果去掉 / 后为空，直接返回原片段
     if not relative_path:
-        return segment
+        return [segment]
     # 拼接真实绝对路径
     real_path = os.path.join(work_dir, relative_path)
     # Windows 下将 / 替换为 \\
     if os.name == "nt":
         real_path = real_path.replace("/", "\\")
-    return real_path
+    return [real_path]
 
 
 @tool
@@ -135,10 +152,14 @@ def run_command(command: list[str]):
     参数为命令片段数组，例如：["python", "/skills/test.py", "--arg", "value"]
     支持虚拟路径自动转换：数组中以 / 开头的路径片段会自动转换为真实路径。
     不得使用真实路径作为参数传入，比如D://skills, 命令行参数仅支持虚拟环境路径参数，必须是/开头。
+    调用如python,pip,java,node,npm,pnpm,go ... 等等开发常用命令时，不要使用绝对路径，只能使用命令本身。如：直接用python,java等，不啊哟使用/home/user/java 这种绝对路径。
+    Windows环境下不得使用真实盘符作为变量开头，比如D:/python.exe等。
     """
     try:
-        # 遍历每个片段，将虚拟路径转换为真实路径
-        real_command = [_convert_virtual_path(seg) for seg in command]
+        # 遍历每个片段，将虚拟路径转换为真实路径（每个片段可能展开为多个）
+        real_command = []
+        for seg in command:
+            real_command.extend(_convert_virtual_path(seg))
         # 拼接为字符串用于 shell 执行（支持 dir、echo 等 shell 内置命令）
         command_str = subprocess.list2cmdline(real_command)
         result = subprocess.run(

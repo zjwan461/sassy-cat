@@ -27,7 +27,7 @@ from agent.builtin_tools import (
     save_user_info,
 )
 from agent.constant import DB_URL, WORK_DIR
-from agent.middlewares import trim_messages, inject_user_info
+from agent.middlewares import trim_messages, inject_base_info
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ class AgentHolder:
             checkpointer=get_checkpointer(),
             system_prompt=system_prompt,
             store=get_store(),
-            middleware=[trim_messages, inject_user_info],
+            middleware=[trim_messages, inject_base_info],
         )
         return agent
 

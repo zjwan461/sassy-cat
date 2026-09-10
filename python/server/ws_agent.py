@@ -132,11 +132,11 @@ async def _save_or_update_assistant_message_sage(session_id: str,
         message = await get_message_by_id(msg_id=msg_id)
         if message is not None:
             # 消息已存在，更新
-            content = message.get("content", "") + content
-            reasoning = message.get("reasoning", "") + reasoning
-            tool_calls = (message.get("toolCalls") or [])+ tool_calls
+            content = (message.get("content") or "") + (content or "")
+            reasoning = (message.get("reasoning") or "") + (reasoning or "")
+            tool_calls = (message.get("toolCalls") or []) + (tool_calls or [])
             tool_call_args = (message.get("toolCallArgs") or []) + (tool_call_args or [])
-            interrupt_actions = (message.get("interruptActions") or []) + interrupt_actions
+            interrupt_actions = (message.get("interruptActions") or []) + (interrupt_actions or [])
             await update_message(
                 id=msg_id,
                 content=content,
