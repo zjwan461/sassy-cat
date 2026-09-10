@@ -45,6 +45,18 @@ async def _send(ws: WebSocket, frame: dict):
     if ws.client_state == WebSocketState.CONNECTED:
         await ws.send_json(frame)
 
+async def _reject_last_assistant_decisions(last_msg_id: str):
+    """安全地把上一条assistant消息的decision全改为拒绝。适用于AI返回的interrupt请求，但是没有选择同意、拒绝直接发送新的消息的情况"""
+    try:
+        message = await get_message_by_id(msg_id=last_msg_id)
+        if message and message is not None:
+            interrupt_actions = message.get("interruptActions") or []
+            if interrupt_actions:
+                reject_decisions = [{"type": "reject"} for i in range(len(interrupt_actions))]
+                await update_message(id=last_msg_id, interrupt_decisions=reject_decisions)
+    except Exception as e:
+        logger.warning(f"更新一条assistant消息decision为拒绝失败 (不影响聊天): {e}")
+
 
 async def _update_interrupt_decisions(msg_id: str, decisions: list):
     """安全地更新中断操作的decision到数据库，失败不影响聊天"""
@@ -441,8 +453,8 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
     if decisions is not None:
         last_assistant_msg_id = payload.get("lastAssistantMsgId")
         if last_assistant_msg_id and last_assistant_msg_id is not None:
-            # todo 把这一条消息interrupt_decisions全部置为reject.[{"type": "reject"}]
-            pass
+            # 把这一条消息interrupt_decisions全部置为reject.[{"type": "reject"}]
+            await _reject_last_assistant_decisions(last_assistant_msg_id)
         gen = runner.resume_turn(session_id, decisions, cancel)
     else:
         gen = runner.run_turn(user_content, session_id, cancel)
