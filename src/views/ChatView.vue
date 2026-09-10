@@ -119,28 +119,33 @@
                 </div>
               </div>
             </details>
-            <!-- interrupt 确认 -->
-            <div v-if="m.interruptActions?.length" class="interrupt-bar">
-              <div class="interrupt-title">⚠️ 需要高危操作确认，请核对参数：</div>
-              <div class="interrupt-global-btns" v-if="hasPendingDecisions(m)">
-                <button class="btn approve-all" @click="onApproveAll(m.id)">✅ 全部允许</button>
-              </div>
-              <div v-for="(a, i) in m.interruptActions" :key="i" class="interrupt-action" :class="getActionDecisionClass(m, i)">
-                <div class="interrupt-action-header">
-                  <span class="interrupt-action-index">#{{ i + 1 }}</span>
-                  <span class="interrupt-action-name">{{ a.name }}</span>
-                  <span v-if="m.interruptDecisions?.[i]" class="interrupt-action-status">
-                    {{ m.interruptDecisions[i].type === 'approve' ? '✅ 已允许' : '❌ 已拒绝' }}
-                  </span>
+            <!-- interrupt 确认（默认折叠，与工具调用风格一致） -->
+            <details v-if="m.interruptActions?.length" class="interrupt-bar-wrapper" :open="hasPendingDecisions(m)">
+              <summary class="interrupt-bar-summary">
+                ️ 需要高危操作确认，请核对参数：
+                <span class="interrupt-bar-arrow">▶</span>
+              </summary>
+              <div class="interrupt-bar">
+                <div class="interrupt-global-btns" v-if="hasPendingDecisions(m)">
+                  <button class="btn approve-all" @click="onApproveAll(m.id)">✅ 全部允许</button>
                 </div>
-                <pre class="interrupt-action-args">{{ a.argsText }}</pre>
-                <div v-if="m.interruptDecisions?.[i] === undefined" class="interrupt-action-btns">
-                  <button class="btn-sm approve" @click="onDecision(m.id, i, 'approve')">允许</button>
-                  <button class="btn-sm reject" @click="onDecision(m.id, i, 'reject')">拒绝</button>
+                <div v-for="(a, i) in m.interruptActions" :key="i" class="interrupt-action" :class="getActionDecisionClass(m, i)">
+                  <div class="interrupt-action-header">
+                    <span class="interrupt-action-index">#{{ i + 1 }}</span>
+                    <span class="interrupt-action-name">{{ a.name }}</span>
+                    <span v-if="m.interruptDecisions?.[i]" class="interrupt-action-status">
+                      {{ m.interruptDecisions[i].type === 'approve' ? '✅ 已允许' : '❌ 已拒绝' }}
+                    </span>
+                  </div>
+                  <pre class="interrupt-action-args">{{ a.argsText }}</pre>
+                  <div v-if="m.interruptDecisions?.[i] === undefined" class="interrupt-action-btns">
+                    <button class="btn-sm approve" @click="onDecision(m.id, i, 'approve')">允许</button>
+                    <button class="btn-sm reject" @click="onDecision(m.id, i, 'reject')">拒绝</button>
+                  </div>
                 </div>
+                <div v-if="!m.interruptActions?.length" class="interrupt-fallback">{{ summarizeInterrupt(m.interrupt) }}</div>
               </div>
-              <div v-if="!m.interruptActions?.length" class="interrupt-fallback">{{ summarizeInterrupt(m.interrupt) }}</div>
-            </div>
+            </details>
             <!-- 确认卡失效提示：用户在确认前发送了新消息，服务端以 respond 决策跳过挂起操作并续跑新消息 -->
             <div v-if="m.interruptExpired" class="interrupt-expired">⏹ 新消息已发送，未确认的操作已跳过</div>
             <div v-if="m.error" class="msg-error">{{ m.error }}</div>
@@ -345,7 +350,11 @@ function summarizeInterrupt(payload) {
 
 // 判断消息是否还有未确认的操作
 function hasPendingDecisions(m) {
-  if (!m.interruptDecisions || !m.interruptActions) return false
+  // 没有待确认的操作
+  if (!m.interruptActions || !m.interruptActions.length) return false
+  // 有操作但决策记录为空数组或 null，说明全部待确认
+  if (!m.interruptDecisions || m.interruptDecisions.length === 0) return true
+  // 检查是否有未决策的操作
   return m.interruptDecisions.some((d, i) => d === undefined && i < m.interruptActions.length)
 }
 
@@ -583,8 +592,14 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .tool-result-body { margin: 4px 0 0; padding: 6px 8px; background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; color: #94a3b8; font-size: 11px; font-family: Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; }
 .tool-args { margin: 4px 0 0; padding: 6px 8px; background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; color: #7dd3fc; font-size: 11px; font-family: Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; }
 
-.interrupt-bar { margin-top: 8px; background: #451a03; border: 1px solid #b45309; border-radius: 8px; padding: 10px 12px; color: #fbbf24; font-size: 13px; }
-.interrupt-title { font-weight: 600; margin-bottom: 8px; }
+/* 高危操作确认折叠容器 */
+.interrupt-bar-wrapper { margin-top: 8px; background: #0f172a80; border: 1px solid #b45309; border-radius: 8px; overflow: hidden; }
+.interrupt-bar-summary { cursor: pointer; padding: 8px 12px; color: #fbbf24; font-size: 13px; font-weight: 600; user-select: none; list-style: none; display: flex; align-items: center; justify-content: space-between; transition: background 0.15s; }
+.interrupt-bar-summary::-webkit-details-marker { display: none; }
+.interrupt-bar-summary:hover { background: #451a03; }
+.interrupt-bar-arrow { font-size: 10px; transition: transform 0.2s; }
+.interrupt-bar-wrapper[open] > .interrupt-bar-summary .interrupt-bar-arrow { transform: rotate(90deg); }
+.interrupt-bar { background: #451a03; border: none; border-radius: 0; padding: 10px 12px; color: #fbbf24; font-size: 13px; }
 .interrupt-global-btns { margin-bottom: 10px; display: flex; gap: 8px; }
 .btn.approve-all { background: #065f46; color: #6ee7b7; padding: 6px 16px; font-weight: 600; }
 .interrupt-action { margin-top: 6px; background: #0f172a; border: 1px solid #78350f; border-radius: 6px; padding: 6px 10px; transition: border-color 0.2s, opacity 0.2s; }
