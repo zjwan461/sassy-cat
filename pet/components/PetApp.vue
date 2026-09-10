@@ -13,7 +13,7 @@
         <div v-if="bubbleActionsVisible" class="bubble-actions">
           <button v-if="!bubbleExpanded && bubbleOverflows" class="bbtn" @click.stop="expandBubble">▾ 展开</button>
           <button v-if="bubbleExpanded" class="bbtn" @click.stop="collapseBubble">▴ 收起</button>
-          <button v-if="bubbleTruncated || bubbleExpanded" class="bbtn" @click.stop="openFullChat">💬 完整对话</button>
+          <button v-if="bubbleTruncated || bubbleExpanded || state === 'talk'" class="bbtn" @click.stop="openFullChat">💬 完整对话</button>
           <button v-if="bubbleExpanded" class="bbtn bbtn-x" title="关闭" @click.stop="hideBubble">✕</button>
         </div>
       </div>
@@ -32,11 +32,13 @@
     <div
       ref="spriteRef"
       class="pet-sprite"
-      :class="[state, { flip: facingLeft }]"
+      :class="[state, { flip: facingLeft, happy: mood === 'happy', annoyed: mood === 'annoyed', dizzy: mood === 'dizzy' }]"
       @mousedown="onMouseDown"
       @click="onClick"
-      @dblclick="onDblClick"
       @contextmenu.prevent="onContextMenu"
+      @mouseenter="onMouseEnter"
+      @mouseleave="onMouseLeave"
+      @wheel.prevent="onWheel"
     >
       <svg viewBox="0 0 120 110" width="120" height="110">
         <path :d="tailPath" fill="none" stroke="#334155" stroke-width="8" stroke-linecap="round"/>
@@ -46,7 +48,35 @@
         <path d="M40 33 L45 21 L51 31 Z" fill="#f9a8d4"/>
         <path d="M80 33 L75 21 L69 31 Z" fill="#f9a8d4"/>
         <circle cx="60" cy="46" r="26" fill="#64748b"/>
-        <template v-if="eyesClosed">
+        <!-- 表情：开心（眯眼笑） -->
+        <template v-if="mood === 'happy'">
+          <path d="M46 42 q6 -4 12 0" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <path d="M62 42 q6 -4 12 0" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <path d="M52 54 q8 6 16 0" stroke="#1e293b" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+        </template>
+        <!-- 表情：不满（斜眼） -->
+        <template v-else-if="mood === 'annoyed'">
+          <path d="M46 40 l12 4" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <path d="M74 40 l-12 4" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <circle cx="51" cy="45" r="3" fill="#1e293b"/>
+          <circle cx="69" cy="45" r="3" fill="#1e293b"/>
+          <path d="M54 56 q6 -2 12 0" stroke="#1e293b" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+        </template>
+        <!-- 表情：头晕（螺旋眼） -->
+        <template v-else-if="mood === 'dizzy'">
+          <path d="M48 42 q3 -3 6 0 q3 3 6 0" stroke="#1e293b" stroke-width="2" fill="none" stroke-linecap="round" class="spin-eye"/>
+          <path d="M64 42 q3 -3 6 0 q3 3 6 0" stroke="#1e293b" stroke-width="2" fill="none" stroke-linecap="round" class="spin-eye"/>
+          <path d="M55 55 q5 3 10 0" stroke="#1e293b" stroke-width="2" fill="none" stroke-linecap="round"/>
+        </template>
+        <!-- 表情：撸猫中（享受） -->
+        <template v-else-if="mood === 'purring'">
+          <path d="M46 44 q6 5 12 0" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <path d="M62 44 q6 5 12 0" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <path d="M53 54 q7 5 14 0" stroke="#1e293b" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+          <text x="88" y="30" font-size="10" fill="#f472b6" class="float-heart">♥</text>
+        </template>
+        <!-- 默认表情 -->
+        <template v-else-if="eyesClosed">
           <path d="M46 44 q6 5 12 0" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
           <path d="M62 44 q6 5 12 0" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
         </template>
@@ -56,11 +86,13 @@
           <circle cx="52.5" cy="41.5" r="1.4" fill="#fff"/>
           <circle cx="70.5" cy="41.5" r="1.4" fill="#fff"/>
         </template>
-        <path v-if="state === 'talk'" d="M55 54 q5 6 10 0 q-5 8 -10 0" fill="#be185d"/>
-        <path v-else d="M55 54 q5 4 10 0" stroke="#1e293b" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+        <path v-if="state === 'talk' && mood !== 'happy' && mood !== 'annoyed' && mood !== 'dizzy' && mood !== 'purring'" d="M55 54 q5 6 10 0 q-5 8 -10 0" fill="#be185d"/>
+        <path v-else-if="mood !== 'happy' && mood !== 'annoyed' && mood !== 'dizzy' && mood !== 'purring'" d="M55 54 q5 4 10 0" stroke="#1e293b" stroke-width="2.4" fill="none" stroke-linecap="round"/>
         <path d="M30 48 h12 M31 55 l11 -3 M90 48 h-12 M89 55 l-11 -3" stroke="#1e293b" stroke-width="1.6" stroke-linecap="round"/>
         <text v-if="state === 'think'" x="90" y="16" font-size="16" fill="#a5b4fc" class="float-q">?</text>
         <text v-if="state === 'sleep'" x="86" y="18" font-size="13" fill="#94a3b8" class="float-q">z z z</text>
+        <!-- 长按撸猫提示 -->
+        <text v-if="longPressing && mood !== 'purring'" x="50" y="12" font-size="10" fill="#fbbf24" class="float-q">喵~</text>
       </svg>
     </div>
   </div>
@@ -85,6 +117,7 @@ const QUICK_PHRASES = [
 ]
 
 const state = ref('idle') // idle|walk|drag|react|think|talk|sleep|remind
+const mood = ref('') // happy|annoyed|dizzy|purring
 const bubbleText = ref('')
 const bubbleExpanded = ref(false)
 const bubbleOverflows = ref(false)
@@ -98,21 +131,34 @@ const spriteRef = ref(null)
 const quickInputRef = ref(null)
 const bubbleWrapRef = ref(null)
 const bubbleTextRef = ref(null)
+const longPressing = ref(false)
+const clickCount = ref(0)
 
-const bubbleActionsVisible = computed(() =>
-  !!bubbleText.value && (bubbleOverflows.value || bubbleTruncated.value || bubbleExpanded.value)
-)
+const bubbleActionsVisible = computed(() => {
+  if (!bubbleText.value) return false
+  if (bubbleOverflows.value || bubbleTruncated.value || bubbleExpanded.value) return true
+  // AI 流式输出期间直接显示操作按钮，无需等 overflow 检测
+  if (state.value === 'talk') return true
+  return false
+})
 
 let timers = {}
 let dragging = false
+let longPressTimer = null
+let moodTimer = null
+let clickTimer = null
 
 // ---------- 帧驱动 ----------
 const eyesClosed = computed(() => {
   if (state.value === 'sleep') return true
   return frameIdx.value % 8 === 6 // 周期眨眼
 })
+const mouseHovering = ref(false)
 const tailPath = computed(() => {
-  const w = Math.sin(frameIdx.value * 0.9) * 12
+  // 鼠标悬停时尾巴摇得更快更欢
+  const speed = mouseHovering.value ? 1.6 : 0.9
+  const amp = mouseHovering.value ? 16 : 12
+  const w = Math.sin(frameIdx.value * speed) * amp
   return `M92 84 q20 ${-8 + w} ${16 + w * 0.4} -26`
 })
 
@@ -129,20 +175,35 @@ function setState(s, holdMs = 0) {
 
 function walkAround() {
   if (state.value === 'drag' || !window.petAPI) { setState('idle'); return }
-  setState('walk')
-  const total = Math.round((Math.random() - 0.5) * 240)
-  facingLeft.value = total < 0
-  const step = total / 12
-  let moved = 0
-  clearInterval(timers.walk)
-  timers.walk = setInterval(() => {
-    window.petAPI.moveDelta(step, 0)
-    if (++moved >= 12) {
-      clearInterval(timers.walk)
-      setState('idle')
-      scheduleNext()
-    }
-  }, 45)
+  // 获取当前位置和屏幕尺寸，限制移动范围
+  window.petAPI.getPosition().then((pos) => {
+    if (!pos) { setState('idle'); return }
+    const screenW = window.screen.width
+    const petW = 120 // SVG 宽度
+    const margin = 20 // 安全边距
+    // 计算可移动范围
+    const maxLeft = -(pos.x - margin) // 向左最多走到 margin
+    const maxRight = screenW - pos.x - petW - margin // 向右最多走到 screenW - margin
+    // 随机目标距离，限制在安全范围内
+    const maxDist = Math.min(240, Math.max(60, Math.min(Math.abs(maxLeft), Math.abs(maxRight))))
+    const total = Math.round((Math.random() - 0.5) * 2 * maxDist)
+    // 确保不越界
+    const clampedTotal = Math.max(maxLeft, Math.min(maxRight, total))
+    if (Math.abs(clampedTotal) < 10) { setState('idle'); scheduleNext(); return }
+    facingLeft.value = clampedTotal < 0
+    const step = clampedTotal / 12
+    let moved = 0
+    setState('walk')
+    clearInterval(timers.walk)
+    timers.walk = setInterval(() => {
+      window.petAPI.moveDelta(step, 0)
+      if (++moved >= 12) {
+        clearInterval(timers.walk)
+        setState('idle')
+        scheduleNext()
+      }
+    }, 45)
+  }).catch(() => { setState('idle') })
 }
 
 function scheduleNext() {
@@ -153,13 +214,92 @@ function scheduleNext() {
 }
 
 // ---------- 交互 ----------
-function onClick() {
-  if (dragMoved) return
-  setState('react', 1000)
-  if (Math.random() < 0.4) showBubble(QUICK_PHRASES[Math.floor(Math.random() * QUICK_PHRASES.length)], 2600)
+function setMood(m, durationMs = 0) {
+  clearTimeout(moodTimer)
+  mood.value = m
+  if (durationMs > 0) {
+    moodTimer = setTimeout(() => {
+      if (mood.value === m) mood.value = ''
+    }, durationMs)
+  }
 }
 
-function onDblClick() { window.petAPI && window.petAPI.showChat() }
+function onMouseUp() {
+  clearTimeout(longPressTimer)
+  if (longPressing.value) {
+    longPressing.value = false
+    if (mood.value === 'purring') {
+      setMood('happy', 2000)
+      showBubble('好舒服喵～ 下次还要！ 😽', 2500)
+    }
+  }
+}
+
+function onClick() {
+  if (dragMoved) return
+  // 连击检测
+  clickCount.value++
+  clearTimeout(clickTimer)
+  clickTimer = setTimeout(() => {
+    if (clickCount.value >= 5) {
+      // 连点5次以上：头晕
+      setMood('dizzy', 3000)
+      setState('react', 1200)
+      showBubble('别戳了别戳了！本喵要晕了… 😵', 3000)
+    } else if (clickCount.value >= 3) {
+      // 连点3次：不满
+      setMood('annoyed', 2500)
+      setState('react', 1000)
+      showBubble('喂！你当本喵是解压玩具吗？ 😾', 2500)
+    } else {
+      setState('react', 1000)
+      if (Math.random() < 0.7) showBubble(QUICK_PHRASES[Math.floor(Math.random() * QUICK_PHRASES.length)], 2600)
+    }
+    clickCount.value = 0
+  }, 400)
+}
+
+function onMouseEnter() {
+  mouseHovering.value = true
+  if (state.value === 'sleep') {
+    // 睡觉时被吵醒
+    setMood('annoyed', 1500)
+    showBubble('哼… 谁吵醒本喵了… 😾', 2000)
+    setState('idle')
+  } else if (state.value === 'idle' && !dragging) {
+    // 注意到鼠标
+    if (Math.random() < 0.4) {
+      showBubble('喵？ 你来了呀～', 1800)
+    }
+  }
+}
+
+function onMouseLeave() {
+  mouseHovering.value = false
+  clearTimeout(longPressTimer)
+  longPressing.value = false
+  if (mood.value === 'purring') {
+    mood.value = ''
+  }
+}
+
+function onWheel(e) {
+  // 滚轮：向上摸头（开心），向下戳（不满）
+  if (state.value === 'drag') return
+  if (e.deltaY < 0) {
+    // 向上滚动：摸头
+    setMood('happy', 1500)
+    setState('react', 800)
+    const phrases = ['喵～ 摸头好舒服！', '嘿嘿，再摸摸嘛～', '本喵允许你摸头！']
+    showBubble(phrases[Math.floor(Math.random() * phrases.length)], 2000)
+  } else {
+    // 向下滚动：戳/推
+    setMood('annoyed', 1500)
+    setState('react', 600)
+    const phrases = ['别推本喵！', '哼！讨厌！', '你干嘛！ 😾']
+    showBubble(phrases[Math.floor(Math.random() * phrases.length)], 2000)
+  }
+}
 
 function onContextMenu() {
   window.petAPI && window.petAPI.popupMenu([
@@ -222,7 +362,10 @@ function syncWindow() {
   }
   window.petAPI.resize({ height: h, width: w })
 }
+let typingActive = false
 function scheduleSync() {
+  // 打字机运行期间跳过 resize，避免窗口高频调整导致气泡抖动
+  if (typingActive) return
   if (syncPending) return
   syncPending = true
   requestAnimationFrame(async () => {
@@ -289,21 +432,40 @@ let streamTarget = ''
 let typer = null
 function typewriteStart() {
   streamBuf = ''; streamTarget = ''
+  typingActive = true
   clearInterval(typer)
   typer = setInterval(() => {
     if (streamBuf.length < streamTarget.length) {
       streamBuf = streamTarget.slice(0, Math.min(streamBuf.length + 2, BUBBLE_MAX_CHARS))
       bubbleText.value = streamBuf
-      scheduleSync()
+      // 打字机期间不触发 scheduleSync，避免窗口频繁 resize 导致气泡抖动
     }
   }, 40)
 }
-function typewriteStop() { clearInterval(typer); typer = null }
+function typewriteStop() {
+  clearInterval(typer); typer = null
+  if (typingActive) {
+    typingActive = false
+    // 打字结束后统一调整一次窗口尺寸
+    scheduleSync()
+  }
+}
 
 // ---------- 拖动（增量移动，主进程节流） ----------
 let dragMoved = false
 function onMouseDown(e) {
   if (e.button !== 0 || !window.petAPI) return
+  // 长按检测（撸猫）
+  longPressing.value = false
+  clearTimeout(longPressTimer)
+  longPressTimer = setTimeout(() => {
+    if (!dragging && !dragMoved) {
+      longPressing.value = true
+      setMood('purring', 0) // 持续直到松手
+      showBubble('呼噜噜… 再摸摸嘛～ 😻', 3000)
+    }
+  }, 600)
+  // 拖动逻辑
   dragging = true
   dragMoved = false
   let lastX = e.screenX, lastY = e.screenY
@@ -312,6 +474,9 @@ function onMouseDown(e) {
     lastX = me.screenX; lastY = me.screenY
     if (Math.abs(ddx) + Math.abs(ddy) > 0) {
       dragMoved = true
+      // 拖动时取消长按
+      clearTimeout(longPressTimer)
+      longPressing.value = false
       if (state.value !== 'drag') setState('drag')
       window.petAPI.moveDelta(ddx, ddy)
     }
@@ -319,8 +484,13 @@ function onMouseDown(e) {
   const upHandler = () => {
     document.removeEventListener('mousemove', moveHandler)
     document.removeEventListener('mouseup', upHandler)
+    clearTimeout(longPressTimer)
     dragging = false
-    if (dragMoved && state.value === 'drag') { setState('idle'); scheduleNext() }
+    // 调用 onMouseUp 统一处理撸猫结束逻辑
+    onMouseUp()
+    if (dragMoved && state.value === 'drag') {
+      setState('idle'); scheduleNext()
+    }
     setTimeout(() => { dragMoved = false }, 50)
   }
   document.addEventListener('mousemove', moveHandler)
@@ -422,12 +592,22 @@ onBeforeUnmount(() => {
 .pet-sprite.think svg { animation: breathe 1.6s ease-in-out infinite; }
 .pet-sprite.sleep svg { animation: breathe 4s ease-in-out infinite; }
 .pet-sprite.flip { transform: translateX(-50%) scaleX(-1); }
+.pet-sprite.happy svg { animation: purr .5s ease-in-out infinite; }
+.pet-sprite.annoyed svg { animation: shake .3s 2; }
+.pet-sprite.dizzy svg { animation: sway .6s ease-in-out infinite; }
 @keyframes bob { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-4px) } }
 @keyframes breathe { 0%,100% { transform: scale(1,1) } 50% { transform: scale(1.02,.98) } }
 @keyframes bounce { 0%,100% { transform: translateY(0) } 40% { transform: translateY(-10px) } }
 @keyframes wiggle { 0%,100% { transform: rotate(0) } 25% { transform: rotate(-6deg) } 75% { transform: rotate(6deg) } }
+@keyframes purr { 0%,100% { transform: scale(1,1) } 50% { transform: scale(1.04,.96) } }
+@keyframes shake { 0%,100% { transform: translateX(0) } 25% { transform: translateX(-3px) } 75% { transform: translateX(3px) } }
+@keyframes sway { 0%,100% { transform: rotate(0) } 25% { transform: rotate(-8deg) } 75% { transform: rotate(8deg) } }
 .float-q { animation: floatq 1.2s ease-in-out infinite; }
 @keyframes floatq { 0%,100% { opacity: .5 } 50% { opacity: 1 } }
+.float-heart { animation: floatHeart 1.4s ease-in-out infinite; }
+@keyframes floatHeart { 0%,100% { opacity: .4; transform: translateY(0) } 50% { opacity: 1; transform: translateY(-4px) } }
+.spin-eye { animation: spinEye 0.6s linear infinite; transform-origin: center; }
+@keyframes spinEye { 0% { transform: rotate(0deg) } 100% { transform: rotate(360deg) } }
 
 .bubble-wrap { position: absolute; bottom: 118px; left: 50%; transform: translateX(-50%); width: 280px; z-index: 10; }
 .bubble {

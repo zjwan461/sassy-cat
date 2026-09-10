@@ -757,9 +757,6 @@ function savePetPosition() {
   });
 }
 
-// 拖动节流：16ms 合并一次
-let moveAccum = { dx: 0, dy: 0 }, moveTimer = null;
-
 ipcMain.handle('pet:set-interactive', (event, interactive) => {
   if (!petWindow || petWindow.isDestroyed()) return { success: false };
   petWindow.setIgnoreMouseEvents(!interactive, { forward: true });
@@ -768,15 +765,8 @@ ipcMain.handle('pet:set-interactive', (event, interactive) => {
 
 ipcMain.on('pet:move-delta', (event, { dx, dy }) => {
   if (!petWindow || petWindow.isDestroyed()) return;
-  moveAccum.dx += dx; moveAccum.dy += dy;
-  if (moveTimer) return;
-  moveTimer = setTimeout(() => {
-    moveTimer = null;
-    if (!petWindow || petWindow.isDestroyed()) return;
-    const [x, y] = petWindow.getPosition();
-    petWindow.setPosition(Math.round(x + moveAccum.dx), Math.round(y + moveAccum.dy));
-    moveAccum = { dx: 0, dy: 0 };
-  }, 16);
+  const [x, y] = petWindow.getPosition();
+  petWindow.setPosition(Math.round(x + dx), Math.round(y + dy));
 });
 
 ipcMain.handle('pet:get-position', () => {
