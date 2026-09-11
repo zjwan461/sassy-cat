@@ -28,12 +28,10 @@ class Message(Base):
     reasoning = Column(Text)                           # AI 思考内容 (仅 assistant)
     tool_calls = Column(Text)                          # 工具调用名称列表 JSON，如 ["search", "run_cmd"] (仅 assistant)
     tool_call_args = Column(Text)                      # 工具调用参数 JSON，如 {"search": {"q": "..."}} (仅 assistant)
-    tool_call_id = Column(String)                      # 工具结果关联 ID (仅 tool)
-    tool_name = Column(String)                         # 工具名称 (仅 tool)
-    tool_status = Column(String)                       # 工具执行状态 (仅 tool)
     created_at = Column(BigInteger, nullable=False, index=True)  # 创建时间戳 (毫秒)
     interrupt_actions = Column(Text)                   # 中断请求（需要人工审核的工具执行请求）
-    interrupt_decisions = Column(Text)                 # 中断请求，人工审核的决定。approve，reject
+    interrupt_decisions = Column(Text)                 # 人工审核的工具记录
+    tool_call_result = Column(Text)                    # 工具调用结果
     # 关系
     attachments = relationship(
         "Attachment",

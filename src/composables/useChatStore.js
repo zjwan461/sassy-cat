@@ -295,7 +295,12 @@ export function decideInterrupt(msgId, index, decision) {
 
   const allDecided = m.interruptDecisions.every((d) => d !== undefined)
   if (allDecided) {
-    const decisions = m.interruptDecisions.map((d) => ({ type: d }))
+    const decisions = m.interruptDecisions.map((d) => {
+      if (!d.type) {
+        return { type: d }
+      }
+      return d
+    })
     send('tool.confirm', { sessionId: chat.convId || socketState.sessionId, decisions, msgId: msgId })
     chat.generating = true
     m.interruptActions = null
@@ -322,19 +327,33 @@ export function approveAllInterrupt(msgId) {
  * 前端需要按时间正序显示（旧的在上、新的在下），所以加载后要反转。
  */
 function transformMessage(item) {
-  // 构建工具调用列表（合并 toolCalls 和 toolCallArgs）
-  // toolCallArgs 现在是列表，与 toolCalls 一一对应
+  // 构建工具调用列表（合并 toolCalls、toolCallArgs、toolCallResult）
+  // toolCalls 现在是对象数组（[{tool_call_id, tool_name}]），与 toolCallArgs 一一对应
   const tools = []
   if (item.toolCalls && Array.isArray(item.toolCalls)) {
     const args = item.toolCallArgs || []
+    // toolCallResult 数据库里是 JSON 字符串（[{tool_call_id, tool_name, text}]），
+    // 接口可能原样返回字符串也可能已解析为数组，两种都兼容
+    let results = []
+    if (Array.isArray(item.toolCallResult)) {
+      results = item.toolCallResult
+    } else if (item.toolCallResult) {
+      try { results = JSON.parse(item.toolCallResult) || [] } catch { results = [] }
+    }
     for (let i = 0; i < item.toolCalls.length; i++) {
-      const name = item.toolCalls[i]
+      const name = item.toolCalls[i].tool_name
+      const toolCallId = item.toolCalls[i].tool_call_id
       const rawArgs = args[i]
+      // 按 tool_call_id 匹配对应的执行结果；无 id 时回退按下标取
+      const matched = toolCallId
+        ? results.find((r) => r.tool_call_id === toolCallId)
+        : results[i]
       tools.push({
+        toolCallId,
         name,
         done: true,
         args: rawArgs ? prettyArgs(typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs)) : '',
-        result: '',
+        result: matched?.text ? prettyArgs(matched.text) : '',
       })
     }
   }

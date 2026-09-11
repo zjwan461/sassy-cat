@@ -45,6 +45,7 @@ async def _send(ws: WebSocket, frame: dict):
     if ws.client_state == WebSocketState.CONNECTED:
         await ws.send_json(frame)
 
+
 async def _reject_last_assistant_decisions(last_msg_id: str):
     """安全地把上一条assistant消息的decision全改为拒绝。适用于AI返回的interrupt请求，但是没有选择同意、拒绝直接发送新的消息的情况"""
     try:
@@ -52,8 +53,12 @@ async def _reject_last_assistant_decisions(last_msg_id: str):
         if message and message is not None:
             interrupt_actions = message.get("interruptActions") or []
             if interrupt_actions:
-                reject_decisions = [{"type": "reject"} for i in range(len(interrupt_actions))]
-                await update_message(id=last_msg_id, interrupt_decisions=reject_decisions)
+                reject_decisions = [
+                    {"type": "reject"} for _ in range(len(interrupt_actions))
+                ]
+                await update_message(
+                    id=last_msg_id, interrupt_decisions=reject_decisions
+                )
     except Exception as e:
         logger.warning(f"更新一条assistant消息decision为拒绝失败 (不影响聊天): {e}")
 
@@ -119,13 +124,15 @@ async def _save_user_message_safe(
         logger.warning(f"用户消息保存失败 (不影响聊天): {e}")
 
 
-async def _save_or_update_assistant_message_sage(session_id: str,
+async def _save_or_update_assistant_message_sage(
+    session_id: str,
     msg_id: str,
     content: str,
     reasoning: str | None = None,
     tool_calls: list | None = None,
     tool_call_args: list | None = None,
     interrupt_actions: list | None = None,
+    tool_call_result: list | None = None,
 ):
     """安全地保存或更新 AI 消息到数据库，失败不影响聊天"""
     try:
@@ -135,8 +142,15 @@ async def _save_or_update_assistant_message_sage(session_id: str,
             content = (message.get("content") or "") + (content or "")
             reasoning = (message.get("reasoning") or "") + (reasoning or "")
             tool_calls = (message.get("toolCalls") or []) + (tool_calls or [])
-            tool_call_args = (message.get("toolCallArgs") or []) + (tool_call_args or [])
-            interrupt_actions = (message.get("interruptActions") or []) + (interrupt_actions or [])
+            tool_call_args = (message.get("toolCallArgs") or []) + (
+                tool_call_args or []
+            )
+            interrupt_actions = (message.get("interruptActions") or []) + (
+                interrupt_actions or []
+            )
+            tool_call_result = (message.get("toolCallResult") or []) + (
+                tool_call_result or []
+            )
             await update_message(
                 id=msg_id,
                 content=content,
@@ -144,6 +158,7 @@ async def _save_or_update_assistant_message_sage(session_id: str,
                 tool_calls=tool_calls,
                 tool_call_args=tool_call_args,
                 interrupt_actions=interrupt_actions,
+                tool_call_result=tool_call_result,
             )
             logger.debug(f"AI 消息已更新: id={msg_id}")
         else:
@@ -157,6 +172,7 @@ async def _save_or_update_assistant_message_sage(session_id: str,
                 tool_calls=tool_calls,
                 tool_call_args=tool_call_args,
                 interrupt_actions=interrupt_actions,
+                tool_call_result=tool_call_result,
             )
             logger.debug(f"AI 消息已保存: id={msg_id}")
     except Exception as e:
@@ -201,11 +217,14 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     # 用于持久化的累积数据
     content_parts = []
     reasoning_parts = []
-    tool_call_names = []  # 工具调用名称列表
-    tool_call_args_list = []  # 工具调用参数列表，与 tool_call_names 一一对应
+    tool_call = []  # 工具调用列表
+    tool_call_args_list = []  # 工具调用参数列表，与 tool_call 一一对应
     current_tool_index = None  # 当前正在收集参数的工具索引
     interrupt_actions = []  # 要求中断的请求
-    tool_call_id_names = {}  # tool_call_id -> 工具名（供 tool_result 附带名称，前端回退匹配）
+    tool_call_id_names = (
+        {}
+    )  # tool_call_id -> 工具名（供 tool_result 附带名称，前端回退匹配）
+    tool_call_result = []  # 工具调用的结果
 
     async def flush():
         nonlocal buffer, args_buffer, last_flush
@@ -250,11 +269,11 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 await flush()
                 tool_name = event.get("name")
                 phase = event.get("phase")
+                call_id = event.get("tool_call_id")
                 if phase == "start" and tool_name:
-                    tool_call_names.append(tool_name)
+                    tool_call.append({"tool_call_id": call_id, "tool_name": tool_name})
                     tool_call_args_list.append("")  # 为本次调用创建独立的参数槽位
-                    current_tool_index = len(tool_call_names) - 1
-                    call_id = event.get("tool_call_id")
+                    current_tool_index = len(tool_call) - 1
                     if call_id:
                         tool_call_id_names[call_id] = tool_name
                 await emit(
@@ -285,12 +304,20 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 # 前端按 toolCallId（或回退工具名）回填对应工具步骤并标记完成
                 await flush()
                 call_id = event.get("tool_call_id")
+                toolName = tool_call_id_names.get(call_id) if call_id else None
+                tool_call_result.append(
+                    {
+                        "tool_call_id": call_id,
+                        "tool_name": toolName,
+                        "text": event.get("text"),
+                    }
+                )
                 await emit(
                     "agent.tool_result",
                     {
                         "msgId": msg_id,
                         "toolCallId": call_id,
-                        "toolName": tool_call_id_names.get(call_id) if call_id else None,
+                        "toolName": toolName,
                         "text": event.get("text", ""),
                     },
                 )
@@ -305,12 +332,15 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                         msg_id=msg_id,
                         content=final_text or "".join(content_parts),
                         reasoning="".join(reasoning_parts) if reasoning_parts else None,
-                        tool_calls=tool_call_names if tool_call_names else None,
+                        tool_calls=tool_call if tool_call else None,
                         tool_call_args=(
                             tool_call_args_list if tool_call_args_list else None
                         ),
                         interrupt_actions=(
                             interrupt_actions if interrupt_actions else None
+                        ),
+                        tool_call_result=(
+                            tool_call_result if tool_call_result else None
                         ),
                     )
                 )

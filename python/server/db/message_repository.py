@@ -26,12 +26,10 @@ async def save_message(
     reasoning: Optional[str] = None,
     tool_calls: Optional[list] = None,
     tool_call_args: Optional[dict] = None,
-    tool_call_id: Optional[str] = None,
-    tool_name: Optional[str] = None,
-    tool_status: Optional[str] = None,
     created_at: Optional[int] = None,
     interrupt_actions: Optional[list] = None,
     interrupt_decisions: Optional[list] = None,
+    tool_call_result: Optional[list] = None,
 ) -> bool:
     """
     保存消息到数据库。
@@ -44,9 +42,6 @@ async def save_message(
         reasoning: AI 思考内容 (仅 assistant)
         tool_calls: 工具调用名称列表 (仅 assistant)
         tool_call_args: 工具调用参数映射 (仅 assistant)
-        tool_call_id: 工具结果关联 ID (仅 tool)
-        tool_name: 工具名称 (仅 tool)
-        tool_status: 工具执行状态 (仅 tool)
         created_at: 创建时间戳 (毫秒)，默认当前时间
     
     Returns:
@@ -64,12 +59,10 @@ async def save_message(
                 reasoning=reasoning,
                 tool_calls=json.dumps(tool_calls, ensure_ascii=False) if tool_calls else None,
                 tool_call_args=json.dumps(tool_call_args, ensure_ascii=False) if tool_call_args else None,
-                tool_call_id=tool_call_id,
-                tool_name=tool_name,
-                tool_status=tool_status,
                 created_at=created_at or int(time.time() * 1000),
                 interrupt_actions=json.dumps(interrupt_actions, ensure_ascii=False) if interrupt_actions else None,
                 interrupt_decisions=json.dumps(interrupt_decisions, ensure_ascii=False) if interrupt_decisions else None,
+                tool_call_result=json.dumps(tool_call_result, ensure_ascii=False) if tool_call_result else None,
             )
             session.add(msg)
             await session.commit()
@@ -88,11 +81,9 @@ async def update_message(
     reasoning: Optional[str] = None,
     tool_calls: Optional[list] = None,
     tool_call_args: Optional[dict] = None,
-    tool_call_id: Optional[str] = None,
-    tool_name: Optional[str] = None,
-    tool_status: Optional[str] = None,
     interrupt_actions: Optional[list] = None,
     interrupt_decisions: Optional[list] = None,
+    tool_call_result: Optional[list] = None,
 ) -> bool:
     """
     更新消息到数据库。
@@ -138,16 +129,12 @@ async def update_message(
                 msg.tool_calls = json.dumps(tool_calls, ensure_ascii=False)
             if tool_call_args is not None:
                 msg.tool_call_args = json.dumps(tool_call_args, ensure_ascii=False)
-            if tool_call_id is not None:
-                msg.tool_call_id = tool_call_id
-            if tool_name is not None:
-                msg.tool_name = tool_name
-            if tool_status is not None:
-                msg.tool_status = tool_status
             if interrupt_actions is not None:
                 msg.interrupt_actions = json.dumps(interrupt_actions, ensure_ascii=False)
             if interrupt_decisions is not None:
                 msg.interrupt_decisions = json.dumps(interrupt_decisions, ensure_ascii=False)
+            if tool_call_result is not None:
+                msg.tool_call_result = json.dumps(tool_call_result, ensure_ascii=False)
             
             await session.commit()
             logger.debug(f"消息已更新: id={id}")
@@ -260,12 +247,10 @@ async def get_messages_by_session(
                     "reasoning": msg.reasoning,
                     "toolCalls": json.loads(msg.tool_calls) if msg.tool_calls else None,
                     "toolCallArgs": json.loads(msg.tool_call_args) if msg.tool_call_args else None,
-                    "toolCallId": msg.tool_call_id,
-                    "toolName": msg.tool_name,
-                    "toolStatus": msg.tool_status,
                     "createdAt": msg.created_at,
                     "interruptActions": msg.interrupt_actions,
                     "interruptDecisions": msg.interrupt_decisions,
+                    "toolCallResult": msg.tool_call_result,
                     "attachments": [
                         {
                             "id": att.id,
@@ -339,12 +324,10 @@ async def get_message_by_id(msg_id: str) -> Optional[dict]:
                 "reasoning": msg.reasoning,
                 "toolCalls": json.loads(msg.tool_calls) if msg.tool_calls else None,
                 "toolCallArgs": json.loads(msg.tool_call_args) if msg.tool_call_args else None,
-                "toolCallId": msg.tool_call_id,
-                "toolName": msg.tool_name,
-                "toolStatus": msg.tool_status,
                 "createdAt": msg.created_at,
                 "interruptActions": json.loads(msg.interrupt_actions) if msg.interrupt_actions else None,
                 "interruptDecisions": json.loads(msg.interrupt_decisions) if msg.interrupt_decisions else None,
+                "toolCallResult": json.loads(msg.tool_call_result) if msg.tool_call_result else None,
                 "attachments": [
                     {
                         "id": att.id,
