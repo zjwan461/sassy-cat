@@ -149,7 +149,9 @@ function ensureStarted() {
   on('agent.tool_call', (p) => {
     const m = chat.messages.find((x) => x.id === p.msgId)
     if (m && p.phase === 'start') {
-      m.tools.push({ name: p.name, done: false, args: '' })
+      // 保存 toolCallId：供 tool_result 精准回填结果到对应步骤
+      // （无 id 时回退为"最近未完成步骤"匹配，见 agent.tool_result）
+      m.tools.push({ toolCallId: p.toolCallId, name: p.name, done: false, args: '' })
     }
   })
   on('agent.tool_args', (p) => {
@@ -159,6 +161,21 @@ function ensureStarted() {
     const active = [...m.tools].reverse().find((t) => !t.done)
     if (active) {
       active.args = prettyArgs((active.args || '') + (p.args || ''))
+    }
+  })
+  on('agent.tool_result', (p) => {
+    // 工具执行结果：优先按 toolCallId 精准匹配；无 id 时回退到
+    // 最近一个未完成（或名称匹配）的步骤，标记完成并回填执行结果
+    const m = chat.messages.find((x) => x.id === p.msgId)
+    if (!m || !m.tools || !m.tools.length) return
+    let t = null
+    if (p.toolCallId) t = m.tools.find((x) => x.toolCallId === p.toolCallId)
+    if (!t && p.toolCallId) t = [...m.tools].reverse().find((x) => x.name === p.toolName && !x.done)
+    if (!t) t = [...m.tools].reverse().find((x) => !x.done)
+    if (t) {
+      t.done = true
+      t.status = 'success'
+      t.result = prettyArgs(p.text || '')
     }
   })
   on('agent.interrupt', (p) => {

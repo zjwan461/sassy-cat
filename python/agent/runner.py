@@ -59,7 +59,8 @@ def _extract_item(item: dict, msg_chunk):
                 return []
             return [{"kind": "reasoning", "text": text}]
     elif isinstance(msg_chunk, ToolMessage):
-        # todo 处理 toolmessage。前端还没处理和渲染这种kind类型
+        # 工具执行结果：ws_agent 转发为 agent.tool_result，
+        # 前端按 toolCallId 回填到对应工具步骤并渲染执行结果
         return [
             {
                 "kind": "tool_message",

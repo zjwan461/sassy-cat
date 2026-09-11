@@ -205,6 +205,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     tool_call_args_list = []  # 工具调用参数列表，与 tool_call_names 一一对应
     current_tool_index = None  # 当前正在收集参数的工具索引
     interrupt_actions = []  # 要求中断的请求
+    tool_call_id_names = {}  # tool_call_id -> 工具名（供 tool_result 附带名称，前端回退匹配）
 
     async def flush():
         nonlocal buffer, args_buffer, last_flush
@@ -253,12 +254,18 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                     tool_call_names.append(tool_name)
                     tool_call_args_list.append("")  # 为本次调用创建独立的参数槽位
                     current_tool_index = len(tool_call_names) - 1
+                    call_id = event.get("tool_call_id")
+                    if call_id:
+                        tool_call_id_names[call_id] = tool_name
                 await emit(
                     "agent.tool_call",
                     {
                         "msgId": msg_id,
                         "name": tool_name,
                         "phase": phase,
+                        # runner 端 tool_call_chunk 首块携带的工具调用 id，供前端
+                        # 把 tool_args / tool_result 精准关联到对应步骤
+                        "toolCallId": event.get("tool_call_id"),
                     },
                 )
             elif kind == "interrupt":
@@ -271,6 +278,20 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                         "msgId": msg_id,
                         "callId": uuid.uuid4().hex[:8],
                         "actions": actions,
+                    },
+                )
+            elif kind == "tool_message":
+                # 工具执行结果（ToolMessage）：转发为 agent.tool_result，
+                # 前端按 toolCallId（或回退工具名）回填对应工具步骤并标记完成
+                await flush()
+                call_id = event.get("tool_call_id")
+                await emit(
+                    "agent.tool_result",
+                    {
+                        "msgId": msg_id,
+                        "toolCallId": call_id,
+                        "toolName": tool_call_id_names.get(call_id) if call_id else None,
+                        "text": event.get("text", ""),
                     },
                 )
             elif kind == "done":
