@@ -10,6 +10,10 @@ deepagents==0.7.10
 tavily-python==0.7.27
 langgraph-sdk>=0.4.4
 langsmith>=0.11.2
+chromadb==1.5.9
+langchain-chroma==1.1.0
+langchain-huggingface==1.2.2
+langchain-community==0.4.2
 python-dotenv>=1.0.1
 fastapi==0.141.1
 uvicorn==0.52.4
@@ -19,7 +23,7 @@ pynvml==11.5.3
 wmi==1.5.1
 pywin32>=310 ; sys_platform == 'win32'
 docling[rapidocr]==2.85.0
-langchain-community==0.4.2
+sentence-transformers==6.0.1
 unstructured==0.18.21
 msoffcrypto-tool==5.4.2
 xlrd==2.0.1
