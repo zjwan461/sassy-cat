@@ -18,6 +18,7 @@ import threading
 
 import janus
 from langgraph.types import Command
+from langchain.messages import AIMessageChunk, ToolMessage
 
 import config_loader
 from agent.engine import holder
@@ -34,26 +35,38 @@ def _recursion_limit() -> int:
         return 50
 
 
-def _extract_item(item: dict):
-    """从单个 content_block 解析事件，返回 list[dict]（可能为空）"""
-    t = item.get("type")
-    if t == "text":
-        return [{"kind": "delta", "text": item.get("text", "")}]
-    if t == "tool_call_chunk":
-        events = []
-        if item.get("id"):  # 每个工具调用的首块携带 id 与 name
-            events.append({"kind": "tool", "name": item.get("name"), "phase": "start"})
-        # 后续块携带 args 增量片段（不完整的 JSON 字符串分片），透传给前端流式拼接
-        args_part = item.get("args")
-        if args_part:
-            events.append({"kind": "tool_args", "args": args_part})
-        return events
-    if t == "reasoning":
-        text = item.get("reasoning") or ""
-        # langchain 对 reasoning_content 仅判 is not None，正文阶段会产出空串块，过滤之
-        if not text.strip():
-            return []
-        return [{"kind": "reasoning", "text": text}]
+def _extract_item(item: dict, msg_chunk):
+    if isinstance(msg_chunk, AIMessageChunk):
+        """从单个 content_block 解析事件，返回 list[dict]（可能为空）"""
+        t = item.get("type")
+        if t == "text":
+            return [{"kind": "delta", "text": item.get("text", "")}]
+        if t == "tool_call_chunk":
+            events = []
+            if item.get("id"):  # 每个工具调用的首块携带 id 与 name
+                events.append(
+                    {"kind": "tool", "name": item.get("name"), "phase": "start", "tool_call_id": item.get("id")}
+                )
+            # 后续块携带 args 增量片段（不完整的 JSON 字符串分片），透传给前端流式拼接
+            args_part = item.get("args")
+            if args_part:
+                events.append({"kind": "tool_args", "args": args_part})
+            return events
+        if t == "reasoning":
+            text = item.get("reasoning") or ""
+            # langchain 对 reasoning_content 仅判 is not None，正文阶段会产出空串块，过滤之
+            if not text.strip():
+                return []
+            return [{"kind": "reasoning", "text": text}]
+    elif isinstance(msg_chunk, ToolMessage):
+        # todo 处理 toolmessage。前端还没处理和渲染这种kind类型
+        return [
+            {
+                "kind": "tool_message",
+                "text": item.get("text", ""),
+                "tool_call_id": msg_chunk.tool_call_id,
+            }
+        ]
     return []
 
 
@@ -77,7 +90,7 @@ def _worker_stream(
             if not cb:
                 continue
             for item in cb:  # 遍历全部块，避免同帧多块时丢事件
-                for event in _extract_item(item):
+                for event in _extract_item(item, msg_chunk):
                     if event["kind"] == "delta":
                         final_parts.append(event["text"])
                     q.sync_q.put(event)
@@ -110,7 +123,10 @@ async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event
     """发起新一轮对话，异步产出事件"""
     version, agent = holder.get()
     q = janus.Queue()
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": _recursion_limit()}
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": _recursion_limit(),
+    }
     payload = {"messages": [{"role": "user", "content": user_text}]}
     thread = threading.Thread(
         target=_worker_stream,
@@ -128,7 +144,9 @@ async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event
         q.close()
 
 
-async def resume_turn(thread_id: str, decisions: list[dict], cancel_event: threading.Event):
+async def resume_turn(
+    thread_id: str, decisions: list[dict], cancel_event: threading.Event
+):
     """用户对 interrupt 确认后恢复执行（仅对当前仍挂起的 thread 有效）。
 
     decisions: 决策数组，每个元素为 {"type": "approve"|"reject"|"respond"}，
@@ -138,7 +156,10 @@ async def resume_turn(thread_id: str, decisions: list[dict], cancel_event: threa
     """
     version, agent = holder.get()
     q = janus.Queue()
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": _recursion_limit()}
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": _recursion_limit(),
+    }
     payload = Command(resume={"decisions": decisions})
     thread = threading.Thread(
         target=_worker_stream,
