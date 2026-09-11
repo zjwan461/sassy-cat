@@ -101,6 +101,14 @@
           </div>
           <span class="hint">单轮对话 Agent 可执行的最大步数（含工具调用），过小会提前中断（默认 50）</span>
         </div>
+        <div class="field">
+          <label>Tavily API Key（网络搜索工具）</label>
+          <div class="key-row">
+            <input v-model="form.tavilyApiKey" :type="showTavilyKey ? 'text' : 'password'" placeholder="tvly-..." />
+            <button class="mini" @click="showTavilyKey = !showTavilyKey">{{ showTavilyKey ? '隐藏' : '显示' }}</button>
+          </div>
+          <span class="hint">用于 internet_search 工具，留空则无法使用网络搜索功能</span>
+        </div>
         <div class="actions">
           <button class="btn" @click="togglePreview">{{ preview ? '隐藏完整提示词' : '预览完整提示词' }}</button>
           <button class="btn" @click="resetPersona">恢复默认人设</button>
@@ -193,12 +201,14 @@ const agentProfiles = ref({})
 const form = reactive({
   provider: 'openai', baseUrl: '', apiKey: '', model: '', extraParamsText: '{}',
   persona: '', memoryWindow: 50, recursionLimit: 50, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
-  quickAskShortcut: 'Alt+Shift+Q'
+  quickAskShortcut: 'Alt+Shift+Q',
+  tavilyApiKey: ''
 })
 const recordingKey = ref(false)
 const hotkeyError = ref('')
 const hotkeyStatus = ref(null)
 const showKey = ref(false)
+const showTavilyKey = ref(false)
 const extraError = ref('')
 const testing = ref(false)
 const testResult = ref(null)
@@ -265,6 +275,9 @@ async function loadConfig() {
   form.idleThreshold = cfg.pet?.idleReminder?.thresholdMinutes ?? 30
   form.idleQuiet = cfg.pet?.idleReminder?.quietPeriodMinutes ?? 10
   form.quickAskShortcut = cfg.pet?.quickAsk?.shortcut ?? 'Alt+Shift+Q'
+  // Tavily API Key：掩码处理
+  const tavilyKey = cfg.agent?.tavilyApiKey || ''
+  form.tavilyApiKey = tavilyKey.length > 3 ? '***' + tavilyKey.slice(-3) : tavilyKey
 }
 
 // ---------- 快捷键录制 ----------
@@ -454,6 +467,10 @@ async function saveAll() {
   // 仅在用户实际编辑过 key（非掩码）时写入
   if (!String(form.apiKey).startsWith('***')) {
     patches.push({ path: `${llmPrefix}.apiKey`, value: form.apiKey.trim() })
+  }
+  // Tavily API Key：仅在非掩码时写入
+  if (!String(form.tavilyApiKey).startsWith('***')) {
+    patches.push({ path: 'agent.tavilyApiKey', value: form.tavilyApiKey.trim() })
   }
   const res = await api.setConfigMany(patches)
   if (!res.success) return showToast('保存失败: ' + (res.message || ''))

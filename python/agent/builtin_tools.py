@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from agent.models import OwnerProfile
 from agent.constant import USER_ID
+import config_loader
 
 
 @tool(description="获取当前时间日期")
@@ -19,10 +20,6 @@ def get_date_time():
     return now.strftime("%Y-%m-%d %H:%M:%S")
 
 
-tavily_api_key = os.getenv("TAVILY_API_KEY")
-tavily_client = TavilyClient(api_key=tavily_api_key)
-
-
 @tool
 def internet_search(
     query: str,
@@ -31,7 +28,13 @@ def internet_search(
     include_raw_content: bool = False,
 ):
     """运行网络搜索"""
-    return tavily_client.search(
+    # 从配置中获取 Tavily API Key（支持热更新）
+    cfg = config_loader.current()
+    tavily_api_key = cfg.get("agent.tavilyApiKey", "")
+    if not tavily_api_key:
+        return "错误：未配置 Tavily API Key，请在设置中配置 agent.tavilyApiKey"
+    client = TavilyClient(api_key=tavily_api_key)
+    return client.search(
         query,
         max_results=max_results,
         include_raw_content=include_raw_content,

@@ -41,6 +41,7 @@ DEFAULTS = {
         # 保留顶层字段作为兼容旧配置的 fallback
         "skillsEnabled": True,
         "maxToolRounds": 10,
+        "tavilyApiKey": "",              # Tavily 网络搜索 API Key
     },
     "server": {
         "wsPort": 8790,
@@ -76,6 +77,8 @@ def _env_overrides(cfg: dict) -> dict:
         profile["apiKey"] = os.environ["LLM_API_KEY"]
     if os.getenv("LLM_MODEL_NAME"):
         profile["model"] = os.environ["LLM_MODEL_NAME"]
+    if os.getenv("TAVILY_API_KEY"):
+        cfg["agent"]["tavilyApiKey"] = os.environ["TAVILY_API_KEY"]
     return cfg
 
 
