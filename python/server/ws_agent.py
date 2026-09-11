@@ -66,8 +66,8 @@ async def _reject_last_assistant_decisions(last_msg_id: str):
 async def _update_interrupt_decisions(msg_id: str, decisions: list):
     """安全地更新中断操作的decision到数据库，失败不影响聊天"""
     try:
-        message = await get_message_by_id(msg_id=msg_id)
-        decisions = (message.get("interruptDecisions") or []) + decisions
+        # message = await get_message_by_id(msg_id=msg_id)
+        # decisions = (message.get("interruptDecisions") or []) + decisions
         # 保存用户消息
         await update_message(id=msg_id, interrupt_decisions=decisions)
     except Exception as e:
@@ -519,8 +519,13 @@ async def _handle_tool_confirm(ws, payload: dict):
     msg_id = payload.get("msgId")
     # 新协议：前端直接发送 decisions 数组
     decisions = payload.get("decisions")
+    message = await get_message_by_id(msg_id=msg_id)
+    last_dec = message.get("interruptDecisions") or []
     # 更新interrupt decisions
     await _update_interrupt_decisions(msg_id=msg_id, decisions=decisions)
+    if len(decisions) > len(last_dec):
+        # 截取decisions超过last_dec的部分重新赋值decisions，只把新增部分交给 resume
+        decisions = decisions[len(last_dec):]
     # 校验线程是否仍挂起于 interrupt：正常流程下新消息已在
     # _handle_chat_send 中以 respond 决策续跑并消费掉挂起中断，
     # 此处主要防御多窗口（桌宠/主窗口）确认卡不同步的竞态，
