@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from agent import engine as agent_engine
 from monitor import service as monitor_service
 from ocr.ocr_service import do_ocr
-from proactive import scheduler
+from proactive import reminder_runner, scheduler
 from server.bus import hub
 from server.protocol import envelope
 from server.ws_agent import ws_agent_endpoint
@@ -52,13 +52,17 @@ async def lifespan(app: FastAPI):
     stop_event = asyncio.Event()
     monitor_task = asyncio.create_task(_monitor_loop())
     proactive_task = asyncio.create_task(scheduler.run_forever(stop_event))
-    logger.info("后台任务已启动：monitor_loop / proactive_scheduler")
+    reminder_task = asyncio.create_task(reminder_runner.run_forever(stop_event))
+    logger.info("后台任务已启动：monitor_loop / proactive_scheduler / reminder_runner")
     yield
     stop_event.set()
     _metrics_stop.set()
     monitor_task.cancel()
     proactive_task.cancel()
-    await asyncio.gather(monitor_task, proactive_task, return_exceptions=True)
+    reminder_task.cancel()
+    await asyncio.gather(
+        monitor_task, proactive_task, reminder_task, return_exceptions=True
+    )
     await asyncio.to_thread(monitor_service.shutdown_sync)
     await asyncio.to_thread(agent_engine.close_db)
     await close_message_db()

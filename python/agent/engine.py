@@ -26,6 +26,12 @@ from agent.builtin_tools import (
     run_python,
     save_user_info,
 )
+from agent.reminder_tools import (
+    create_reminder,
+    list_reminders,
+    complete_reminder,
+    cancel_reminder,
+)
 from agent.constant import DB_URL, WORK_DIR
 from agent.middlewares import trim_messages, inject_base_info
 
@@ -112,7 +118,17 @@ class AgentHolder:
             name="SassyCat",
             model=llm,
             skills=["/skills"],
-            tools=[get_date_time, internet_search, run_command, run_python, save_user_info],
+            tools=[
+                get_date_time,
+                internet_search,
+                run_command,
+                run_python,
+                save_user_info,
+                create_reminder,
+                list_reminders,
+                complete_reminder,
+                cancel_reminder,
+            ],
             interrupt_on={
                 "run_command": True,
                 "run_python": True,

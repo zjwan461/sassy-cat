@@ -53,6 +53,10 @@ DEFAULTS = {
             "thresholdMinutes": 30,
             "quietPeriodMinutes": 10,
         },
+        "reminders": {
+            "pollIntervalSeconds": 5,   # 提醒轮询间隔（秒），3~30，默认 5
+            "bubbleDurationMs": 8000,   # 提醒气泡显示时长（毫秒），3000~30000，默认 8000
+        },
     },
 }
 

@@ -544,6 +544,11 @@ onMounted(() => {
     else if (p.action === 'idle' && !dragging) { setState('idle'); scheduleNext() }
   })
   on('proactive.message', (p) => { setState('remind', 8000); showBubble(p.text, 8000) })
+  on('proactive.reminder', (p) => {
+    const ms = p.durationMs || 8000
+    setState('remind', ms)
+    showBubble(p.text, ms)
+  })
 })
 
 onBeforeUnmount(() => {

@@ -156,6 +156,30 @@
       </div>
     </section>
 
+    <!-- 提醒事项 -->
+    <section class="card">
+      <div class="card-header">提醒事项</div>
+      <div class="card-body form">
+        <div class="field">
+          <label>检查间隔（秒）</label>
+          <div class="stepper">
+            <button type="button" class="step-btn" @click="step('reminderPoll', -1, 3, 30)" :disabled="form.reminderPoll <= 3">−</button>
+            <input type="number" v-model.number="form.reminderPoll" min="3" max="30" class="step-input"
+              @blur="clamp('reminderPoll', 3, 30, 5)" />
+            <button type="button" class="step-btn" @click="step('reminderPoll', 1, 3, 30)" :disabled="form.reminderPoll >= 30">+</button>
+          </div>
+          <span class="hint">后台检查提醒是否到点的频率，范围 3~30 秒（默认 5 秒，越小触发越及时）</span>
+        </div>
+        <div class="field">
+          <label>气泡显示时长（秒）</label>
+          <select v-model.number="form.reminderDuration">
+            <option v-for="d in reminderDurationOptions" :key="d" :value="d">{{ d }} 秒</option>
+          </select>
+          <span class="hint">提醒弹出时桌宠气泡的停留时长，可选 3~30 秒（默认 8 秒）</span>
+        </div>
+      </div>
+    </section>
+
     <!-- 桌宠 -->
     <section class="card">
       <div class="card-header">桌宠</div>
@@ -231,10 +255,14 @@ const activeProfile = ref('default')
 const profiles = ref({})
 const activeAgentProfile = ref('default')
 const agentProfiles = ref({})
+// 提醒气泡显示时长可选值（秒），范围 3~30
+const reminderDurationOptions = [3, 5, 8, 10, 15, 20, 30]
+
 const form = reactive({
   provider: 'openai', baseUrl: '', apiKey: '', model: '', extraParamsText: '{}',
   persona: '', memoryWindow: 50, recursionLimit: 50, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
   quickAskShortcut: 'Alt+Shift+Q',
+  reminderPoll: 5, reminderDuration: 8,
   tavilyApiKey: '',
   proxyEnabled: false, proxyHttp: '', proxyHttps: '', proxyNoProxy: ''
 })
@@ -308,6 +336,12 @@ async function loadConfig() {
   form.idleThreshold = cfg.pet?.idleReminder?.thresholdMinutes ?? 30
   form.idleQuiet = cfg.pet?.idleReminder?.quietPeriodMinutes ?? 10
   form.quickAskShortcut = cfg.pet?.quickAsk?.shortcut ?? 'Alt+Shift+Q'
+  // 提醒事项
+  form.reminderPoll = cfg.pet?.reminders?.pollIntervalSeconds ?? 5
+  const durSec = Math.round((cfg.pet?.reminders?.bubbleDurationMs ?? 8000) / 1000)
+  form.reminderDuration = reminderDurationOptions.includes(durSec)
+    ? durSec
+    : reminderDurationOptions.reduce((a, b) => Math.abs(b - durSec) < Math.abs(a - durSec) ? b : a)
   // 网络代理
   form.proxyEnabled = cfg.network?.proxy?.enabled === true
   form.proxyHttp = cfg.network?.proxy?.http || ''
@@ -500,6 +534,8 @@ async function saveAll() {
     { path: 'pet.idleReminder.enabled', value: form.idleEnabled },
     { path: 'pet.idleReminder.thresholdMinutes', value: form.idleThreshold },
     { path: 'pet.idleReminder.quietPeriodMinutes', value: form.idleQuiet },
+    { path: 'pet.reminders.pollIntervalSeconds', value: Number(form.reminderPoll) || 5 },
+    { path: 'pet.reminders.bubbleDurationMs', value: (Number(form.reminderDuration) || 8) * 1000 },
     { path: 'pet.quickAsk.shortcut', value: form.quickAskShortcut },
     { path: 'network.proxy.enabled', value: !!form.proxyEnabled },
     { path: 'network.proxy.http', value: form.proxyHttp.trim() },

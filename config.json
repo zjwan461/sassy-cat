@@ -13,6 +13,10 @@
   "pet": {
     "quickAsk": {
       "shortcut": "Alt+Shift+Q"
+    },
+    "reminders": {
+      "pollIntervalSeconds": 5,
+      "bubbleDurationMs": 8000
     }
   },
   "network": {
