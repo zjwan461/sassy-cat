@@ -57,12 +57,16 @@ function interruptActions(payload) {
 // 点下去会触发无效的 tool.confirm，造成消息错乱
 function expirePendingInterrupts() {
   for (const m of chat.messages) {
-    if (m.interruptActions?.length) {
-      m.interruptActions = null
-      m.interruptDecisions = null
-      m.interrupt = null
-      m.interruptExpired = true
-    }
+    if (!m.interruptActions?.length) continue
+    // 已全部确认的卡片保留展示（决策已送出/已入库），只失效仍有待确认项的卡片，
+    // 否则 resume 竞态广播 expired 会把刚点完的确认卡错误替换成"已跳过"
+    const hasPending = !(m.interruptDecisions || []).slice(0, m.interruptActions.length)
+      .every((d) => d !== undefined)
+    if (!hasPending) continue
+    m.interruptActions = null
+    m.interruptDecisions = null
+    m.interrupt = null
+    m.interruptExpired = true
   }
 }
 
@@ -83,19 +87,27 @@ function ensureStarted() {
   on('chat.started', (p) => {
     currentMsgId = p.msgId
     // 检测是否在工具调用/中断后继续输出：若最后一条助手消息有工具或曾中断，则复用该消息而非创建新消息
-    // resuming：确认中断后本地已清空 interruptActions，需靠标记识别"确认后即将续跑"
+    // resuming：确认卡已全部决策并送出后 interruptDecisions 已无待确认项，
+    // 需靠标记识别"确认后即将续跑"
     const last = chat.messages[chat.messages.length - 1]
     const hasTools = last?.tools && last.tools.length > 0
-    const wasInterrupted = last?.interruptActions || last?.interruptExpired || last?.resuming
+    const wasResuming = !!last?.resuming
+    const hasPending = !!(last?.interruptActions?.length &&
+      (last.interruptDecisions || []).some((d) => d === undefined))
+    const wasInterrupted = hasPending || last?.interruptExpired || wasResuming
     if (last) last.resuming = false
     if (last && last.role === 'assistant' && (hasTools || wasInterrupted)) {
       // 复用现有消息：更新 id 以匹配新的 msgId，保持 tools 和内容
       last.id = p.msgId
       last.streaming = true
       last.thinking = false
-      // 清除中断状态，因为现在继续输出了
-      last.interruptActions = null
-      last.interruptDecisions = null
+      // 卡片已无待确认项则保留展示（与历史回填行为一致）；
+      // 仍有待确认项却续跑了，说明是其他窗口/新消息消费的确认，本窗口卡片失效
+      if (hasPending && !wasResuming) {
+        last.interruptActions = null
+        last.interruptDecisions = null
+        last.interruptExpired = true
+      }
       last.interrupt = null
       // 中断确认后续跑属于新一轮思考，即使消息已有正文也要重新展开深度思考区；
       // 工具调用后正常续跑则不重置 reasoningOpen，保留用户之前的折叠状态
@@ -187,8 +199,19 @@ function ensureStarted() {
     const m = chat.messages.find((x) => x.id === p.msgId)
     if (m) {
       m.interrupt = p
-      m.interruptActions = interruptActions(p)
-      m.interruptDecisions = new Array(m.interruptActions.length).fill(undefined)
+      // 同一助手消息可能多轮 interrupt：服务端把各轮 actions 累积进同一条
+      // 记录，且 tool.confirm 期望收到全量 decisions（服务端按已存数量截取
+      // 增量交给 resume）。前端必须同步累积 actions/decisions，否则第二轮
+      // 只显示新 action，送出的 decisions 数量也与服务端对不上
+      const newActions = interruptActions(p)
+      const prevActions = Array.isArray(m.interruptActions) ? m.interruptActions : []
+      const prevDecisions = Array.isArray(m.interruptDecisions) ? m.interruptDecisions : []
+      // decisions 补齐至与已累积 actions 等长（防御历史回填偏短的情况）
+      const padded = prevDecisions.concat(
+        new Array(Math.max(0, prevActions.length - prevDecisions.length)).fill(undefined)
+      )
+      m.interruptActions = prevActions.concat(newActions)
+      m.interruptDecisions = padded.concat(new Array(newActions.length).fill(undefined))
       m.streaming = false
     }
     if (p.msgId === currentMsgId) chat.generating = false
@@ -295,11 +318,12 @@ export function stopGeneration() {
 export function decideInterrupt(msgId, index, decision) {
   const m = chat.messages.find((x) => x.id === msgId)
   if (!m) return
-  if (!m.interruptDecisions) m.interruptDecisions = new Array(m.interruptActions.length).fill(undefined)
+  if (!Array.isArray(m.interruptDecisions)) m.interruptDecisions = new Array(m.interruptActions.length).fill(undefined)
   m.interruptDecisions[index] = decision
 
   const allDecided = m.interruptDecisions.every((d) => d !== undefined)
   if (allDecided) {
+    // 送全量决策（含此前轮次已确认项）：服务端按已存数量截取增量交给 resume
     const decisions = m.interruptDecisions.map((d) => {
       if (!d.type) {
         return { type: d }
@@ -308,22 +332,25 @@ export function decideInterrupt(msgId, index, decision) {
     })
     send('tool.confirm', { sessionId: chat.convId || socketState.sessionId, decisions, msgId: msgId })
     chat.generating = true
-    // 标记续跑：chat.started 到达前本地 interruptActions 已清空，
-    // 靠此标记让续跑分支识别中断场景并重新展开深度思考区
+    // 标记续跑：卡片保留展示但已无待确认项，
+    // 靠此标记让 chat.started 续跑分支识别中断场景并重新展开深度思考区
     m.resuming = true
-    m.interruptActions = null
-    m.interruptDecisions = null
   }
 }
 
-/** 一键全部允许 */
+/** 一键全部允许（保留此前轮次已确认的决策，未决策项全部置为允许） */
 export function approveAllInterrupt(msgId) {
   const m = chat.messages.find((x) => x.id === msgId)
-  if (!m) return
-  const decisions = m.interruptActions.map(() => ({ type: 'approve' }))
+  if (!m || !m.interruptActions?.length) return
+  const prev = Array.isArray(m.interruptDecisions) ? m.interruptDecisions : []
+  const decisions = m.interruptActions.map((_, i) => {
+    const d = prev[i]
+    return d && d.type ? d : { type: d || 'approve' }
+  })
+  // 决策写回本地：卡片保留展示，UI 靠 interruptDecisions 实时更新
+  // "已允许/已拒绝"状态与折叠，只发不写会导致点击后界面不变
+  m.interruptDecisions = decisions
   m.resuming = true
-  m.interruptActions = null
-  m.interruptDecisions = null
   send('tool.confirm', { sessionId: chat.convId || socketState.sessionId, decisions, msgId: msgId })
   chat.generating = true
 }
@@ -390,8 +417,10 @@ function transformMessage(item) {
     argsText: item.args,
   }))
 
-  // 转换interruptDecisions
+  // 转换interruptDecisions：decisions 只含已送出轮次，可能短于累积的
+  // actions，补齐 undefined 槽位保证等长（待确认项才能正常渲染按钮）
   const interruptDecisions = (JSON.parse(item.interruptDecisions) || [])
+  while (interruptDecisions.length < interruptActions.length) interruptDecisions.push(undefined)
 
   console.log(item)
 
