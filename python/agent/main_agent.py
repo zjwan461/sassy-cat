@@ -40,7 +40,7 @@ def read_image_as_base64(file_path):
 
 
 def main():
-    load_config("C:\\Users\\1\\AppData\\Roaming\\sassy-cat\\config.user.json")
+    load_config("C:\\Users\\89712\\AppData\\Roaming\\sassy-cat\\config.user.json")
     user_prompt = sys.argv[1] if len(sys.argv) > 1 else "hi"
     version, agent = holder.get()
     print(f"[Agent version={version}] user: {user_prompt}")
@@ -67,6 +67,10 @@ def main():
     ):
         msg_chunk = chunk[0]
         metadata = chunk[1]
+        if isinstance(msg_chunk, AIMessageChunk):
+            usage_metadata = msg_chunk.usage_metadata
+            if usage_metadata and usage_metadata is not None:
+                print(usage_metadata)
         cb = msg_chunk.content_blocks
         lc_agent_name = metadata.get("lc_agent_name", "")
         if current_agent != lc_agent_name:
@@ -84,8 +88,6 @@ def main():
                         print()
                         in_tool_args = False
                     print(item.get(t) or "", end="", flush=True)
-                    if not item.get(t):
-                        print(item)
                 elif t == "tool_call_chunk":
                     if item.get("id"):  # 新工具调用开始
                         if in_tool_args:
