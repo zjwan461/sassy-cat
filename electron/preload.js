@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 事件监听
   onNavigateChat: (callback) => ipcRenderer.on('navigate-chat', () => callback()),
   onStatusUpdate: (callback) => ipcRenderer.on('status-update', (event, status) => callback(status)),
+  offStatusUpdate: (callback) => ipcRenderer.removeListener('status-update', callback),
   onLogOutput: (callback) => ipcRenderer.on('log-output', (event, log) => callback(log)),
   onLogUpdate: (callback) => ipcRenderer.on('log-update', (event, log) => callback(log)),
   onMetricsUpdate: (callback) => ipcRenderer.on('metrics-update', (event, metrics) => callback(metrics)),

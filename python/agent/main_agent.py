@@ -45,7 +45,7 @@ def main():
     version, agent = holder.get()
     print(f"[Agent version={version}] user: {user_prompt}")
 
-    base64_str, mime_type = read_image_as_base64(r"C:\Users\1\Pictures\2.png")
+    # base64_str, mime_type = read_image_as_base64(r"C:\Users\1\Pictures\2.png")
 
     current_agent = ""
     in_tool_args = False  # 是否正处于工具参数流式输出中（用于结束换行）
@@ -56,7 +56,7 @@ def main():
                     "role": "user",
                     "content": [
                         {"type": "text", "text": user_prompt},
-                        {"type": "image", "base64": base64_str, "mime_type": mime_type},
+                        # {"type": "image", "base64": base64_str, "mime_type": mime_type},
                     ],
                 }
             ]
@@ -84,6 +84,8 @@ def main():
                         print()
                         in_tool_args = False
                     print(item.get(t) or "", end="", flush=True)
+                    if not item.get(t):
+                        print(item)
                 elif t == "tool_call_chunk":
                     if item.get("id"):  # 新工具调用开始
                         if in_tool_args:

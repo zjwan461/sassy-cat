@@ -8,7 +8,11 @@
     <!-- 全局操作 -->
     <div class="global-actions">
       <button class="btn primary" @click="saveAll">保存设置</button>
-      <button class="btn warn" @click="restartAgent">重启服务进程</button>
+      <button class="btn warn" @click="restartAgent" :disabled="restarting">
+        <span v-if="restarting" class="btn-spinner"></span>
+        <span v-else-if="restartDone" class="btn-check">✓</span>
+        <span v-else>重启服务进程</span>
+      </button>
     </div>
 
     <div class="settings-grid">
@@ -215,9 +219,13 @@
 <script setup>
 import { reactive, ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useAgentSocket } from '../composables/useAgentSocket'
+import { useRestartState } from '../composables/useRestartState'
 
 const { connect, send, on } = useAgentSocket()
 const api = window.electronAPI
+
+// 模块级单例状态：切换 tab 导致组件卸载/重新挂载时，重启进度与提示不丢失
+const { restarting, restartDone, toast } = useRestartState()
 
 const activeProfile = ref('default')
 const profiles = ref({})
@@ -239,7 +247,6 @@ const extraError = ref('')
 const testing = ref(false)
 const testResult = ref(null)
 const preview = ref('')
-const toast = ref('')
 const keyRevealed = ref(false)
 const showAddProfile = ref(false)
 const newProfileName = ref('')
@@ -526,8 +533,42 @@ function resetPersona() {
 }
 
 async function restartAgent() {
+  if (restarting.value) return
+  restarting.value = true
+  restartDone.value = false
+
   const res = await api.restartAgent()
-  showToast(res.message || '重启中…')
+  if (!res.success) {
+    restarting.value = false
+    showToast('重启失败: ' + (res.message || ''))
+    return
+  }
+
+  // 等待 Python 服务实际启动完成（主进程发送 status-update running:true）
+  const started = await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      api.offStatusUpdate?.(onStarted)
+      resolve(false)
+    }, 30000) // 30s 超时
+
+    const onStarted = (status) => {
+      if (status && status.running) {
+        clearTimeout(timer)
+        api.offStatusUpdate?.(onStarted)
+        resolve(true)
+      }
+    }
+    api.onStatusUpdate?.(onStarted)
+  })
+
+  restarting.value = false
+  if (started) {
+    restartDone.value = true
+    showToast('服务重启成功 ✓')
+    setTimeout(() => { restartDone.value = false }, 2500)
+  } else {
+    showToast('服务启动超时，请检查日志')
+  }
 }
 
 async function testConnection() {
@@ -654,7 +695,14 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: #6366f1
 .hint.bad { color: #f87171; }
 .global-actions { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
 .actions { display: flex; gap: 10px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
-.btn { background: #334155; border: none; color: #e2e8f0; border-radius: 9px; padding: 9px 18px; font-size: 14px; cursor: pointer; }
+.btn { background: #334155; border: none; color: #e2e8f0; border-radius: 9px; padding: 9px 18px; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+.btn-check { color: #34d399; font-weight: 700; font-size: 16px; }
+.btn-spinner {
+  width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.25);
+  border-top-color: #fff; border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg) } }
 .btn.primary { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; }
 .btn.warn { background: #7f1d1d; color: #fca5a5; }
 .btn:disabled { opacity: 0.5; }
