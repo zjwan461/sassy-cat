@@ -300,11 +300,28 @@ export function submitMessage(text, attachments = []) {
     .filter(att => att.type === 'image')
     .map(att => `data:${att.mimeType};base64,${att.data}`)
 
+  // 提取文档附件用于前端渲染（与历史回填 transformMessage 的格式保持一致：
+  // type='document' + fileName/fileExt/markdownContent，供 DocumentAttachment 渲染图标）
+  const docs = attachments
+    .filter(att => att.type === 'text')
+    .map((att, i) => {
+      const fileName = att.name || '文件'
+      const dot = fileName.lastIndexOf('.')
+      return {
+        id: 'att-local-' + Date.now() + '-' + i,
+        type: 'document',
+        fileName,
+        fileExt: dot > -1 ? fileName.slice(dot) : '',
+        markdownContent: att.content,
+      }
+    })
+
   chat.messages.push({
     id: 'u-' + Date.now(),
     role: 'user',
     content: text,
     images: images.length ? images : undefined,
+    attachments: docs.length ? docs : undefined,
   })
 
   const len = chat.messages.length
