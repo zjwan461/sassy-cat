@@ -15,6 +15,14 @@
       "shortcut": "Alt+Shift+Q"
     }
   },
+  "network": {
+    "proxy": {
+      "enabled": false,
+      "http": "",
+      "https": "",
+      "noProxy": ""
+    }
+  },
   "links": [
     { "label": "项目主页", "url": "https://gitee.com/zjwan461/sassy-cat" },
     { "label": "使用文档", "url": "https://gitee.com/zjwan461/sassy-cat/blob/master/README.md" },

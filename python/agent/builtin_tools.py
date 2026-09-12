@@ -28,19 +28,21 @@ def internet_search(
     include_raw_content: bool = False,
 ):
     """运行网络搜索"""
-    # 从配置中获取 Tavily API Key（支持热更新）
-    cfg = config_loader.current()
-    tavily_api_key = cfg.get("agent.tavilyApiKey", "")
-    if not tavily_api_key:
-        return "错误：未配置 Tavily API Key，请在设置中配置 agent.tavilyApiKey"
-    client = TavilyClient(api_key=tavily_api_key)
-    return client.search(
-        query,
-        max_results=max_results,
-        include_raw_content=include_raw_content,
-        topic=topic,
-    )
-
+    try:
+        # 从配置中获取 Tavily API Key（支持热更新）
+            cfg = config_loader.current()
+            tavily_api_key = cfg.get("agent.tavilyApiKey", "")
+            if not tavily_api_key:
+                return "错误：未配置 Tavily API Key，请在设置中配置 agent.tavilyApiKey"
+            client = TavilyClient(api_key=tavily_api_key)
+            return client.search(
+                query,
+                max_results=max_results,
+                include_raw_content=include_raw_content,
+                topic=topic,
+            )
+    except Exception as e:
+        return f"查询失败：{e}"
 
 # 项目根目录（builtin_tools.py 位于 python/agent/ 下，向上两级）
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

@@ -117,6 +117,31 @@
       </div>
     </section>
 
+    <!-- 网络代理 -->
+    <section class="card">
+      <div class="card-header">网络代理</div>
+      <div class="card-body form">
+        <div class="field">
+          <label class="check"><input type="checkbox" v-model="form.proxyEnabled" /> 启用 HTTP / HTTPS 代理</label>
+          <span class="hint">保存后 Electron 立即生效；Python Agent 需在启用/停用后点击顶部「重启服务进程」以刷新代理环境变量</span>
+        </div>
+        <div class="field">
+          <label>HTTP 代理</label>
+          <input v-model="form.proxyHttp" placeholder="http://127.0.0.1:7890" :disabled="!form.proxyEnabled" />
+          <span class="hint">支持 http:// 或 socks5:// 前缀，例如 http://127.0.0.1:7890</span>
+        </div>
+        <div class="field">
+          <label>HTTPS 代理</label>
+          <input v-model="form.proxyHttps" placeholder="留空则与 HTTP 代理相同" :disabled="!form.proxyEnabled" />
+        </div>
+        <div class="field">
+          <label>绕过代理（NO_PROXY）</label>
+          <input v-model="form.proxyNoProxy" placeholder="localhost,127.0.0.1,*.example.com" :disabled="!form.proxyEnabled" />
+          <span class="hint">逗号分隔的主机名单，命中这些地址的请求不走代理</span>
+        </div>
+      </div>
+    </section>
+
     <!-- 闲置提醒 -->
     <section class="card">
       <div class="card-header">闲置提醒</div>
@@ -202,7 +227,8 @@ const form = reactive({
   provider: 'openai', baseUrl: '', apiKey: '', model: '', extraParamsText: '{}',
   persona: '', memoryWindow: 50, recursionLimit: 50, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
   quickAskShortcut: 'Alt+Shift+Q',
-  tavilyApiKey: ''
+  tavilyApiKey: '',
+  proxyEnabled: false, proxyHttp: '', proxyHttps: '', proxyNoProxy: ''
 })
 const recordingKey = ref(false)
 const hotkeyError = ref('')
@@ -275,6 +301,11 @@ async function loadConfig() {
   form.idleThreshold = cfg.pet?.idleReminder?.thresholdMinutes ?? 30
   form.idleQuiet = cfg.pet?.idleReminder?.quietPeriodMinutes ?? 10
   form.quickAskShortcut = cfg.pet?.quickAsk?.shortcut ?? 'Alt+Shift+Q'
+  // 网络代理
+  form.proxyEnabled = cfg.network?.proxy?.enabled === true
+  form.proxyHttp = cfg.network?.proxy?.http || ''
+  form.proxyHttps = cfg.network?.proxy?.https || ''
+  form.proxyNoProxy = cfg.network?.proxy?.noProxy || ''
   // Tavily API Key：掩码处理
   const tavilyKey = cfg.agent?.tavilyApiKey || ''
   form.tavilyApiKey = tavilyKey.length > 3 ? '***' + tavilyKey.slice(-3) : tavilyKey
@@ -463,7 +494,15 @@ async function saveAll() {
     { path: 'pet.idleReminder.thresholdMinutes', value: form.idleThreshold },
     { path: 'pet.idleReminder.quietPeriodMinutes', value: form.idleQuiet },
     { path: 'pet.quickAsk.shortcut', value: form.quickAskShortcut },
+    { path: 'network.proxy.enabled', value: !!form.proxyEnabled },
+    { path: 'network.proxy.http', value: form.proxyHttp.trim() },
+    { path: 'network.proxy.https', value: form.proxyHttps.trim() },
+    { path: 'network.proxy.noProxy', value: form.proxyNoProxy.trim() },
   ]
+  // 代理启用时做简单格式校验
+  if (form.proxyEnabled && !form.proxyHttp.trim() && !form.proxyHttps.trim()) {
+    return showToast('已启用代理，请至少填写 HTTP 或 HTTPS 代理地址')
+  }
   // 仅在用户实际编辑过 key（非掩码）时写入
   if (!String(form.apiKey).startsWith('***')) {
     patches.push({ path: `${llmPrefix}.apiKey`, value: form.apiKey.trim() })
@@ -496,13 +535,25 @@ async function testConnection() {
   testResult.value = null
 
   const baseUrl = form.baseUrl.trim()
-  const apiKey = form.apiKey.trim()
+  let apiKey = form.apiKey.trim()
   const model = form.model.trim()
 
   if (!baseUrl || !apiKey || !model) {
     testing.value = false
     testResult.value = { ok: false, text: '请先填写 Base URL、API Key 和模型名称' }
     return
+  }
+
+  // 如果 apiKey 是掩码值（***开头），先从后端获取真实 key
+  if (apiKey.startsWith('***')) {
+    const res = await api.getRawProfileKey(activeProfile.value)
+    if (res.success) {
+      apiKey = res.apiKey
+    } else {
+      testing.value = false
+      testResult.value = { ok: false, text: '无法获取真实 API Key，请先点击「显示」按钮' }
+      return
+    }
   }
 
   try {

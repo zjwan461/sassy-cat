@@ -2,8 +2,14 @@ const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, shell, powerMonitor, gl
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const dns = require('dns');
 const PythonEnvChecker = require('./python-env-checker');
 const { ConfigStore } = require('./config-store');
+
+// Windows 下 Chromium 默认将 localhost 解析为 IPv6 ::1，
+// 而 Python 服务通常只监听 IPv4 127.0.0.1，导致 fetch 失败。
+// 强制优先使用 IPv4 解析。
+dns.setDefaultResultOrder('ipv4first');
 
 let mainWindow;
 let setupWindow;
@@ -30,12 +36,63 @@ function initConfigStore() {
     if (Object.prototype.hasOwnProperty.call(diff, 'pet.quickAsk.shortcut')) {
       broadcastShortcutStatus(applyQuickAskShortcut());
     }
+    // 网络代理配置变更 -> 热更新 Electron 会话代理（Python 侧需重启服务进程生效）
+    if (Object.keys(diff).some((k) => k.startsWith('network.proxy'))) {
+      applyNetworkProxy().catch((e) => console.warn('[proxy] 应用失败:', e.message));
+    }
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         win.webContents.send('config:changed', { diff });
       }
     }
   });
+}
+
+// ---------- 网络代理（http / https） ----------
+// 读取 network.proxy 配置；未启用或无地址时返回 null
+function getProxyConfig() {
+  const p = configStore ? configStore.merged.network?.proxy : null;
+  if (!p || !p.enabled) return null;
+  const http = String(p.http || '').trim();
+  const https = String(p.https || '').trim() || http;
+  if (!http && !https) return null;
+  return { http, https, noProxy: String(p.noProxy || '').trim() };
+}
+
+// 将代理写入 Electron 默认会话（影响渲染进程与主进程 fetch）
+async function applyNetworkProxy() {
+  const { session } = require('electron');
+  const p = getProxyConfig();
+  if (!p) {
+    // 禁用代理：使用 direct 模式直连
+    await session.defaultSession.setProxy({ mode: 'direct' });
+    console.log('[proxy] 已禁用代理（直连）');
+    return;
+  }
+  const rules = [];
+  if (p.http) rules.push(`http=${p.http}`);
+  if (p.https) rules.push(`https=${p.https}`);
+  await session.defaultSession.setProxy({
+    mode: 'fixed_servers',
+    proxyRules: rules.join(';'),
+    proxyBypassRules: p.noProxy || '<local>',
+  });
+  console.log(`[proxy] 已应用代理: ${rules.join('; ')}${p.noProxy ? ` (绕过: ${p.noProxy})` : ''}`);
+}
+
+// 生成 Python 子进程的代理环境变量（httpx/requests 等默认读取，重启服务后生效）
+function buildProxyEnv() {
+  const p = getProxyConfig();
+  if (!p) return {};
+  const env = {};
+  const setPair = (name, value) => {
+    env[name] = value;
+    env[name.toLowerCase()] = value;
+  };
+  if (p.http) setPair('HTTP_PROXY', p.http);
+  if (p.https) setPair('HTTPS_PROXY', p.https);
+  if (p.noProxy) setPair('NO_PROXY', p.noProxy);
+  return env;
 }
 
 // 获取资源路径（开发/打包环境兼容）
@@ -244,7 +301,7 @@ function startPythonService() {
     // --data-dir：会话元数据与 checkpoint 等用户数据的存放目录（Python 侧 paths.py 消费）
     pythonProcess = spawn(pyPath, [pythonScriptPath, '--config', userConfigPath, '--data-dir', userDataPath], {
       cwd: getAssetPath('.'),
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8', ...buildProxyEnv() },
       stdio: ['ignore', 'pipe', 'pipe']
     });
 
@@ -490,7 +547,10 @@ ipcMain.handle('test-llm-connection', async (event, params) => {
   if (!baseUrl || !apiKey || !model) {
     return { ok: false, error: '请填写完整的 Base URL、API Key 和模型名称' };
   }
-  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  // Windows 下 Chromium fetch 可能将 localhost 解析为 IPv6 ::1，
+  // 而 Python 服务通常只监听 127.0.0.1，兜底替换为 IPv4 地址。
+  const safeUrl = baseUrl.replace(/\/$/, '').replace(/\/\/localhost(:|\/|$)/i, '//127.0.0.1$1');
+  const url = `${safeUrl}/chat/completions`;
   const startTime = Date.now();
   try {
     const resp = await fetch(url, {
@@ -844,6 +904,9 @@ app.whenReady().then(async () => {
 
   // 初始化配置存储（依赖 userData 路径）
   initConfigStore();
+
+  // 应用网络代理配置（http/https，来自 network.proxy）
+  await applyNetworkProxy().catch((e) => console.warn('[proxy] 初始应用失败:', e.message));
 
   // OS 级用户活动信号 -> 广播到各渲染窗口（渲染层经 WS 转发 client.event:user_activity）
   const pingActivity = (event) => {
