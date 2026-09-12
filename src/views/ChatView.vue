@@ -119,10 +119,10 @@
                 </div>
               </div>
             </details>
-            <!-- interrupt 确认（默认折叠，与工具调用风格一致） -->
+            <!-- interrupt 确认（存在待确认项时自动展开；全部处理完则折叠并切换为已完成文案） -->
             <details v-if="m.interruptActions?.length" class="interrupt-bar-wrapper" :open="hasPendingDecisions(m)">
               <summary class="interrupt-bar-summary">
-                ️ 需要高危操作确认，请核对参数：
+                {{ hasPendingDecisions(m) ? '⚠️ 需要高危操作确认，请核对参数：' : `📋 高危操作确认（已处理 ${m.interruptActions.length}/${m.interruptActions.length}）` }}
                 <span class="interrupt-bar-arrow">▶</span>
               </summary>
               <div class="interrupt-bar">
@@ -133,12 +133,12 @@
                   <div class="interrupt-action-header">
                     <span class="interrupt-action-index">#{{ i + 1 }}</span>
                     <span class="interrupt-action-name">{{ a.name }}</span>
-                    <span v-if="m.interruptDecisions?.[i]" class="interrupt-action-status">
-                      {{ m.interruptDecisions[i].type === 'approve' ? '✅ 已允许' : '❌ 已拒绝' }}
+                    <span v-if="decisionType(m, i)" class="interrupt-action-status">
+                      {{ decisionType(m, i) === 'approve' ? '✅ 已允许' : '❌ 已拒绝' }}
                     </span>
                   </div>
                   <pre class="interrupt-action-args">{{ a.argsText }}</pre>
-                  <div v-if="m.interruptDecisions?.[i] === undefined" class="interrupt-action-btns">
+                  <div v-if="!decisionType(m, i)" class="interrupt-action-btns">
                     <button class="btn-sm approve" @click="onDecision(m.id, i, 'approve')">允许</button>
                     <button class="btn-sm reject" @click="onDecision(m.id, i, 'reject')">拒绝</button>
                   </div>
@@ -348,20 +348,29 @@ function summarizeInterrupt(payload) {
   } catch { return '未知操作' }
 }
 
-// 判断消息是否还有未确认的操作
+// 统一决策记录的形态差异：
+// - 本地实时点击存的是字符串（'approve' | 'reject'）
+// - 数据库历史回填的是对象（{ type: 'approve' }），且 JSON 序列化后
+//   未决策项可能为 null；decisions 数组还可能短于 actions（服务端把
+//   多轮 interrupt 的 actions 累积到同一条消息，decisions 只含已确认部分）
+function decisionType(m, i) {
+  const d = m.interruptDecisions?.[i]
+  if (!d) return null
+  return (typeof d === 'string' ? d : d.type) || null
+}
+
+// 判断消息是否还有未确认的操作（以 actions 长度为基准逐项检查，
+// 避免 decisions 数组偏短时漏判新增的待确认项）
 function hasPendingDecisions(m) {
-  // 没有待确认的操作
   if (!m.interruptActions || !m.interruptActions.length) return false
-  // 有操作但决策记录为空数组或 null，说明全部待确认
-  if (!m.interruptDecisions || m.interruptDecisions.length === 0) return true
-  // 检查是否有未决策的操作
-  return m.interruptDecisions.some((d, i) => d === undefined && i < m.interruptActions.length)
+  return m.interruptActions.some((_, i) => !decisionType(m, i))
 }
 
 // 获取操作的样式类（已允许/已拒绝/待确认）
 function getActionDecisionClass(m, i) {
-  if (m.interruptDecisions?.[i] === 'approve') return 'action-approved'
-  if (m.interruptDecisions?.[i] === 'reject') return 'action-rejected'
+  const t = decisionType(m, i)
+  if (t === 'approve') return 'action-approved'
+  if (t === 'reject') return 'action-rejected'
   return 'action-pending'
 }
 

@@ -83,9 +83,11 @@ function ensureStarted() {
   on('chat.started', (p) => {
     currentMsgId = p.msgId
     // 检测是否在工具调用/中断后继续输出：若最后一条助手消息有工具或曾中断，则复用该消息而非创建新消息
+    // resuming：确认中断后本地已清空 interruptActions，需靠标记识别"确认后即将续跑"
     const last = chat.messages[chat.messages.length - 1]
     const hasTools = last?.tools && last.tools.length > 0
-    const wasInterrupted = last?.interruptActions || last?.interruptExpired
+    const wasInterrupted = last?.interruptActions || last?.interruptExpired || last?.resuming
+    if (last) last.resuming = false
     if (last && last.role === 'assistant' && (hasTools || wasInterrupted)) {
       // 复用现有消息：更新 id 以匹配新的 msgId，保持 tools 和内容
       last.id = p.msgId
@@ -95,8 +97,9 @@ function ensureStarted() {
       last.interruptActions = null
       last.interruptDecisions = null
       last.interrupt = null
-      // 不重置 reasoningOpen，保留用户之前的折叠状态
-      if (!last.content && !last.reasoning) {
+      // 中断确认后续跑属于新一轮思考，即使消息已有正文也要重新展开深度思考区；
+      // 工具调用后正常续跑则不重置 reasoningOpen，保留用户之前的折叠状态
+      if ((!last.content && !last.reasoning) || wasInterrupted) {
         last.thinking = true
         last.reasoningOpen = true
       }
@@ -120,8 +123,10 @@ function ensureStarted() {
     const m = chat.messages.find((x) => x.id === p.msgId)
     if (m) {
       m.reasoning = (m.reasoning || '') + (p.text || '')
-      // 正文守卫：一旦消息已开始输出正文，reasoning 只静默追加，不再点亮"思考中"或展开思考区
-      if (!m.content) {
+      // 思考阶段进行中（chat.started 已点亮 thinking，如中断续跑场景）时保持展开；
+      // 否则沿用正文守卫：一旦消息已开始输出正文，reasoning 只静默追加，
+      // 不再点亮"思考中"或展开思考区
+      if (!m.content || m.thinking) {
         m.thinking = true
       } else {
         m.thinking = false
@@ -303,6 +308,9 @@ export function decideInterrupt(msgId, index, decision) {
     })
     send('tool.confirm', { sessionId: chat.convId || socketState.sessionId, decisions, msgId: msgId })
     chat.generating = true
+    // 标记续跑：chat.started 到达前本地 interruptActions 已清空，
+    // 靠此标记让续跑分支识别中断场景并重新展开深度思考区
+    m.resuming = true
     m.interruptActions = null
     m.interruptDecisions = null
   }
@@ -313,6 +321,7 @@ export function approveAllInterrupt(msgId) {
   const m = chat.messages.find((x) => x.id === msgId)
   if (!m) return
   const decisions = m.interruptActions.map(() => ({ type: 'approve' }))
+  m.resuming = true
   m.interruptActions = null
   m.interruptDecisions = null
   send('tool.confirm', { sessionId: chat.convId || socketState.sessionId, decisions, msgId: msgId })
