@@ -107,11 +107,16 @@ export async function handleFiles(files) {
       
       try {
         const markdown = await callOcrApi(file)
-        docEntry.markdown = markdown
-        docEntry.status = 'done'
+        // 替换数组元素而非原地修改，确保 Vue 响应式能检测到变化
+        const idx = pendingDocs.value.findIndex(d => d.id === docId)
+        if (idx !== -1) {
+          pendingDocs.value[idx] = { ...docEntry, markdown, status: 'done' }
+        }
       } catch (e) {
-        docEntry.status = 'error'
-        docEntry.error = e.message
+        const idx = pendingDocs.value.findIndex(d => d.id === docId)
+        if (idx !== -1) {
+          pendingDocs.value[idx] = { ...docEntry, status: 'error', error: e.message }
+        }
         console.error(`OCR 处理 ${file.name} 失败:`, e)
       }
     }
