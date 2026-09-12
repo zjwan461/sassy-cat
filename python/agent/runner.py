@@ -45,7 +45,12 @@ def _extract_item(item: dict, msg_chunk):
             events = []
             if item.get("id"):  # 每个工具调用的首块携带 id 与 name
                 events.append(
-                    {"kind": "tool", "name": item.get("name"), "phase": "start", "tool_call_id": item.get("id")}
+                    {
+                        "kind": "tool",
+                        "name": item.get("name"),
+                        "phase": "start",
+                        "tool_call_id": item.get("id"),
+                    }
                 )
             # 后续块携带 args 增量片段（不完整的 JSON 字符串分片），透传给前端流式拼接
             args_part = item.get("args")
@@ -87,6 +92,10 @@ def _worker_stream(
                 logger.info("收到取消信号，终止流")
                 break
             msg_chunk = chunk[0]
+            if isinstance(msg_chunk, AIMessageChunk):
+                usage_metadata = msg_chunk.usage_metadata
+                if usage_metadata and usage_metadata is not None:
+                    q.sync_q.put({"kind": "usage", "usage_metadata": usage_metadata})
             cb = msg_chunk.content_blocks
             if not cb:
                 continue

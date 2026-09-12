@@ -195,6 +195,14 @@ function ensureStarted() {
       t.result = prettyArgs(p.text || '')
     }
   })
+  on('agent.usage', (p) => {
+    // 每个 AI 消息块都可能携带 usage_metadata（通常最后一块才是完整累计值），
+    // 直接覆盖存储，前端取最终值展示；字段可能为空串/空对象，统一忽略
+    const m = chat.messages.find((x) => x.id === p.msgId)
+    if (m && p.usage_metadata && Object.keys(p.usage_metadata).length) {
+      m.usage = p.usage_metadata
+    }
+  })
   on('agent.interrupt', (p) => {
     const m = chat.messages.find((x) => x.id === p.msgId)
     if (m) {

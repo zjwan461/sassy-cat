@@ -119,6 +119,37 @@
                 </div>
               </div>
             </details>
+            <!-- Token 用量统计：来自 agent.usage 事件（仅助手消息，可折叠） -->
+            <details v-if="isAssistant(m) && hasUsage(m.usage)" class="usage-block">
+              <summary class="usage-summary">
+                <span class="usage-title">⚡ Token 统计</span>
+                <span class="usage-inline">{{ usageSummary(m.usage) }}</span>
+                <span class="usage-arrow">▶</span>
+              </summary>
+              <div class="usage-body">
+                <div class="usage-row">
+                  <span class="usage-label">输入 tokens</span>
+                  <span class="usage-value">{{ fmtTokens(m.usage.input_tokens) }}</span>
+                  <span v-if="m.usage.input_token_details" class="usage-detail">
+                    <span v-if="m.usage.input_token_details.cache_read != null">缓存读 {{ fmtTokens(m.usage.input_token_details.cache_read) }}</span>
+                    <span v-if="m.usage.input_token_details.cache_creation != null">缓存写 {{ fmtTokens(m.usage.input_token_details.cache_creation) }}</span>
+                    <span v-if="usageCacheRate(m.usage) != null" class="usage-cache-rate">命中 {{ usageCacheRate(m.usage).toFixed(1) }}%</span>
+                  </span>
+                </div>
+                <div class="usage-row">
+                  <span class="usage-label">输出 tokens</span>
+                  <span class="usage-value">{{ fmtTokens(m.usage.output_tokens) }}</span>
+                  <span v-if="m.usage.output_token_details" class="usage-detail">
+                    <span v-if="m.usage.output_token_details.reasoning != null">推理 {{ fmtTokens(m.usage.output_token_details.reasoning) }}</span>
+                    <span v-if="m.usage.output_token_details.reasoning_tokens != null">推理 {{ fmtTokens(m.usage.output_token_details.reasoning_tokens) }}</span>
+                  </span>
+                </div>
+                <div class="usage-row usage-total">
+                  <span class="usage-label">总计 tokens</span>
+                  <span class="usage-value">{{ fmtTokens(m.usage.total_tokens) }}</span>
+                </div>
+              </div>
+            </details>
             <!-- interrupt 确认（存在待确认项时自动展开；全部处理完则折叠并切换为已完成文案） -->
             <details v-if="m.interruptActions?.length" class="interrupt-bar-wrapper" :open="hasPendingDecisions(m)">
               <summary class="interrupt-bar-summary">
@@ -346,6 +377,32 @@ function summarizeInterrupt(payload) {
     const names = actions.flatMap(a => (a?.action_requests || []).map(r => r.name))
     return names.length ? names.join(', ') : JSON.stringify(actions).slice(0, 120)
   } catch { return '未知操作' }
+}
+
+// ---------- Token 用量统计（agent.usage） ----------
+// usage_metadata 缺失部分字段（如纯缓存读、无推理 token）时只显示已有的，兼容多种模型返回
+function hasUsage(u) {
+  return !!u && (u.total_tokens != null || u.input_tokens != null || u.output_tokens != null)
+}
+function fmtTokens(n) {
+  return n == null ? '0' : Number(n).toLocaleString()
+}
+function usageSummary(u) {
+  if (!u) return ''
+  const parts = []
+  if (u.total_tokens != null) parts.push(`总计 ${fmtTokens(u.total_tokens)}`)
+  if (u.input_tokens != null) parts.push(`输入 ${fmtTokens(u.input_tokens)}`)
+  if (u.output_tokens != null) parts.push(`输出 ${fmtTokens(u.output_tokens)}`)
+  return parts.join(' · ')
+}
+
+// 缓存命中率：命中读取（cache_read）的 token 占输入 token 的比例
+function usageCacheRate(u) {
+  if (!u) return null
+  const inp = u.input_tokens
+  const read = u.input_token_details?.cache_read
+  if (inp == null || read == null || inp <= 0) return null
+  return Math.min(100, (read / inp) * 100)
 }
 
 // 统一决策记录的形态差异：
@@ -600,6 +657,23 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .tool-result[open] > .tool-result-summary::before { transform: rotate(90deg); }
 .tool-result-body { margin: 4px 0 0; padding: 6px 8px; background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; color: #94a3b8; font-size: 11px; font-family: Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; }
 .tool-args { margin: 4px 0 0; padding: 6px 8px; background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; color: #7dd3fc; font-size: 11px; font-family: Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; }
+
+/* Token 用量统计折叠容器 */
+.usage-block { margin-top: 6px; background: #0f172a80; border: 1px solid #334155; border-radius: 8px; overflow: hidden; }
+.usage-summary { cursor: pointer; padding: 6px 12px; color: #94a3b8; font-size: 12px; user-select: none; list-style: none; display: flex; align-items: center; gap: 8px; transition: background 0.15s; }
+.usage-summary::-webkit-details-marker { display: none; }
+.usage-summary:hover { background: #1e293b; }
+.usage-arrow { font-size: 10px; transition: transform 0.2s; color: #64748b; }
+.usage-block[open] > .usage-summary .usage-arrow { transform: rotate(90deg); }
+.usage-inline { color: #34d399; font-size: 11px; margin-left: auto; }
+.usage-body { padding: 0 12px 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.usage-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; color: #94a3b8; }
+.usage-label { color: #64748b; min-width: 76px; }
+.usage-value { color: #e2e8f0; font-family: Consolas, Monaco, monospace; font-weight: 600; }
+.usage-detail { color: #64748b; font-size: 11px; display: flex; gap: 10px; }
+.usage-cache-rate { color: #34d399; font-weight: 600; }
+.usage-total { border-top: 1px dashed #334155; padding-top: 6px; margin-top: 2px; }
+.usage-total .usage-value { color: #34d399; }
 
 /* 高危操作确认折叠容器 */
 .interrupt-bar-wrapper { margin-top: 8px; background: #0f172a80; border: 1px solid #b45309; border-radius: 8px; overflow: hidden; }

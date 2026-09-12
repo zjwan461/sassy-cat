@@ -221,7 +221,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     tool_call_args_list = []  # 工具调用参数列表，与 tool_call 一一对应
     current_tool_index = None  # 当前正在收集参数的工具索引
     interrupt_actions = []  # 要求中断的请求
-    
+
     tool_call_result = []  # 工具调用的结果
 
     async def flush():
@@ -312,6 +312,16 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                         "msgId": msg_id,
                         "toolCallId": call_id,
                         "text": event.get("text", ""),
+                    },
+                )
+            elif kind == "usage":
+                await flush()
+                await emit(
+                    "agent.usage",
+                    {
+                        # 携带 msgId，供前端把 token 用量精准关联到当前消息
+                        "msgId": msg_id,
+                        "usage_metadata": event.get("usage_metadata", {}),
                     },
                 )
             elif kind == "done":
@@ -452,7 +462,6 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
             envelope("conv.list.result", {"items": conversations.list_sorted()})
         )
     conversations.touch(session_id)
-    conversations.touch(session_id)
     cancel = threading.Event()
     # 同一 session 已有进行中的轮次 -> 先取消
     old = _session_cancel.get(session_id)
@@ -518,7 +527,7 @@ async def _handle_tool_confirm(ws, payload: dict):
     await _update_interrupt_decisions(msg_id=msg_id, decisions=decisions)
     if len(decisions) > len(last_dec):
         # 截取decisions超过last_dec的部分重新赋值decisions，只把新增部分交给 resume
-        decisions = decisions[len(last_dec):]
+        decisions = decisions[len(last_dec) :]
     # 校验线程是否仍挂起于 interrupt：正常流程下新消息已在
     # _handle_chat_send 中以 respond 决策续跑并消费掉挂起中断，
     # 此处主要防御多窗口（桌宠/主窗口）确认卡不同步的竞态，
