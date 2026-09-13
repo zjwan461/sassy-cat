@@ -7,7 +7,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 import paths
 
-model_name = "BAAI/bge-large-zh-v1.5"
+model_name = "BAAI/bge-small-zh-v1.5"
 # 本地已下载模型就填本地路径："./models/bge-large-zh-v1.5"
 
 import torch

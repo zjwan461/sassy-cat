@@ -58,6 +58,18 @@ DEFAULTS = {
             "bubbleDurationMs": 8000,   # 提醒气泡显示时长（毫秒），3000~30000，默认 8000
         },
     },
+    "ocr": {
+        "engine": "markitdown", # ocr引擎，默认markitdown(快速),可选docling(更精细可识图)
+    },
+    "rag": {
+        "autoEmbedding": True, # 普通聊天上传文件自动embedding到默认知识库
+        "embeddingModel": {
+            "type": "local",  # 使用本地embedding model, 还可选remote（OpenAIEmbeddings）
+            "model": "BAAI/bge-small-zh-v1.5", # embedding model name
+            "baseUrl": "",  #本地向量模型无
+            "apiKey": "", #本地向量模型无
+        }
+    }
 }
 
 
