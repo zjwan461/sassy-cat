@@ -1,6 +1,6 @@
 import config_loader
 from config_loader import AppConfig
-from ocr_service import do_ocr as do_docling_ocr
+from ocr.ocr_service import do_ocr as do_docling_ocr
 from markitdown_service import do_ocr as do_markitdown_ocr
 
 
