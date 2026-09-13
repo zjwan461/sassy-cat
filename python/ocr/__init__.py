@@ -1,3 +1,3 @@
-from ocr_engine import do_ocr
+from ocr.ocr_engine import do_ocr
 
 __all__ = ["do_ocr"]
