@@ -38,3 +38,4 @@ Thumbs.db
 runtime/*
 !runtime/skills/
 .cospec
+code-review_result

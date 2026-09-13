@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from agent import engine as agent_engine
 from monitor import service as monitor_service
-from ocr.ocr_service import do_ocr
+from ocr.ocr_engine import do_ocr
 from proactive import reminder_runner, scheduler
 from server.bus import hub
 from server.protocol import envelope
@@ -91,7 +91,7 @@ def create_app() -> FastAPI:
         if len(file_bytes) > MAX_SIZE:
             raise HTTPException(status_code=413, detail="文件大小超过 20MB 限制")
         try:
-            result = await do_ocr(file.filename or "unknown", file_bytes)
+            result = await do_ocr("chat", file.filename or "unknown", file_bytes)
             return {
                 "status": "success",
                 "filename": file.filename,

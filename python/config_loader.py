@@ -33,15 +33,16 @@ DEFAULTS = {
         "activeProfile": "default",
         "profiles": {
             "default": {
-                "persona": "",           # 空字符串表示使用内置默认人设（见 agent/prompts.py）
+                "persona": "",  # 空字符串表示使用内置默认人设（见 agent/prompts.py）
                 "memoryWindow": 50,
-                "recursionLimit": 50,    # langgraph 单轮最大递归步数（见 agent/runner.py）
+                "recursionLimit": 50,  # langgraph 单轮最大递归步数（见 agent/runner.py）
             }
         },
         # 保留顶层字段作为兼容旧配置的 fallback
         "skillsEnabled": True,
         "maxToolRounds": 10,
-        "tavilyApiKey": "",              # Tavily 网络搜索 API Key
+        "tavilyApiKey": "",  # Tavily 网络搜索 API Key
+        "ocrEngine": "markitdown",  # agent对话时的ocr引擎，默认markitdown(快速),可选docling(更精细可识图)
     },
     "server": {
         "wsPort": 8790,
@@ -54,22 +55,20 @@ DEFAULTS = {
             "quietPeriodMinutes": 10,
         },
         "reminders": {
-            "pollIntervalSeconds": 5,   # 提醒轮询间隔（秒），3~30，默认 5
-            "bubbleDurationMs": 8000,   # 提醒气泡显示时长（毫秒），3000~30000，默认 8000
+            "pollIntervalSeconds": 5,  # 提醒轮询间隔（秒），3~30，默认 5
+            "bubbleDurationMs": 8000,  # 提醒气泡显示时长（毫秒），3000~30000，默认 8000
         },
     },
-    "ocr": {
-        "engine": "markitdown", # ocr引擎，默认markitdown(快速),可选docling(更精细可识图)
-    },
     "rag": {
-        "autoEmbedding": True, # 普通聊天上传文件自动embedding到默认知识库
+        "autoEmbedding": True,  # 普通聊天上传文件自动embedding到默认知识库（异步）
         "embeddingModel": {
             "type": "local",  # 使用本地embedding model, 还可选remote（OpenAIEmbeddings）
-            "model": "BAAI/bge-small-zh-v1.5", # embedding model name
-            "baseUrl": "",  #本地向量模型无
-            "apiKey": "", #本地向量模型无
-        }
-    }
+            "model": "BAAI/bge-small-zh-v1.5",  # embedding model name
+            "baseUrl": "",  # 本地向量模型无
+            "apiKey": "",  # 本地向量模型无
+        },
+        "ocrEngine": "docling"  # rag库维护上传文本使用的ocr引擎
+    },
 }
 
 
@@ -86,7 +85,9 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 def _env_overrides(cfg: dict) -> dict:
     """环境变量 fallback（开发调试用），仅覆盖默认 profile 的连接参数"""
-    profile = cfg["llm"]["profiles"]["default"] = dict(cfg["llm"]["profiles"]["default"])
+    profile = cfg["llm"]["profiles"]["default"] = dict(
+        cfg["llm"]["profiles"]["default"]
+    )
     if os.getenv("LLM_BASE_URL"):
         profile["baseUrl"] = os.environ["LLM_BASE_URL"]
     if os.getenv("LLM_API_KEY"):
