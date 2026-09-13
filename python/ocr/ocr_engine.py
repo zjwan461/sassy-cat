@@ -16,8 +16,8 @@ def get_ocr_strategy(scene: str):
 async def do_ocr(scene: str, x_filename: str, file_bytes: bytes):
     strategy = get_ocr_strategy(scene)
     if strategy == "docling":
-        return do_docling_ocr(x_filename, file_bytes)
+        return await do_docling_ocr(x_filename, file_bytes)
     elif strategy == "markitdown":
-        return do_markitdown_ocr(x_filename, file_bytes)
+        return await do_markitdown_ocr(x_filename, file_bytes)
     else:
         raise ValueError(f"unsupported ocr strategy: {strategy}")
