@@ -30,6 +30,7 @@ async def save_message(
     interrupt_actions: Optional[list] = None,
     interrupt_decisions: Optional[list] = None,
     tool_call_result: Optional[list] = None,
+    usage_metadata: Optional[dict] = None,
 ) -> bool:
     """
     保存消息到数据库。
@@ -43,6 +44,7 @@ async def save_message(
         tool_calls: 工具调用名称列表 (仅 assistant)
         tool_call_args: 工具调用参数映射 (仅 assistant)
         created_at: 创建时间戳 (毫秒)，默认当前时间
+        usage_metadata: token 用量 (仅 assistant)
     
     Returns:
         bool: 是否保存成功
@@ -63,8 +65,8 @@ async def save_message(
                 interrupt_actions=json.dumps(interrupt_actions, ensure_ascii=False) if interrupt_actions else None,
                 interrupt_decisions=json.dumps(interrupt_decisions, ensure_ascii=False) if interrupt_decisions else None,
                 tool_call_result=json.dumps(tool_call_result, ensure_ascii=False) if tool_call_result else None,
+                usage_metadata=json.dumps(usage_metadata, ensure_ascii=False) if usage_metadata else None,
             )
-            session.add(msg)
             await session.commit()
             logger.debug(f"消息已保存: id={id}, role={role}")
             return True
@@ -84,6 +86,7 @@ async def update_message(
     interrupt_actions: Optional[list] = None,
     interrupt_decisions: Optional[list] = None,
     tool_call_result: Optional[list] = None,
+    usage_metadata: Optional[dict] = None,
 ) -> bool:
     """
     更新消息到数据库。
@@ -135,6 +138,8 @@ async def update_message(
                 msg.interrupt_decisions = json.dumps(interrupt_decisions, ensure_ascii=False)
             if tool_call_result is not None:
                 msg.tool_call_result = json.dumps(tool_call_result, ensure_ascii=False)
+            if usage_metadata is not None:
+                msg.usage_metadata = json.dumps(usage_metadata, ensure_ascii=False)
             
             await session.commit()
             logger.debug(f"消息已更新: id={id}")
@@ -251,6 +256,7 @@ async def get_messages_by_session(
                     "interruptActions": msg.interrupt_actions,
                     "interruptDecisions": msg.interrupt_decisions,
                     "toolCallResult": msg.tool_call_result,
+                    "usageMetadata": json.loads(msg.usage_metadata) if msg.usage_metadata else None,
                     "attachments": [
                         {
                             "id": att.id,
@@ -328,6 +334,7 @@ async def get_message_by_id(msg_id: str) -> Optional[dict]:
                 "interruptActions": json.loads(msg.interrupt_actions) if msg.interrupt_actions else None,
                 "interruptDecisions": json.loads(msg.interrupt_decisions) if msg.interrupt_decisions else None,
                 "toolCallResult": json.loads(msg.tool_call_result) if msg.tool_call_result else None,
+                "usageMetadata": json.loads(msg.usage_metadata) if msg.usage_metadata else None,
                 "attachments": [
                     {
                         "id": att.id,

@@ -133,6 +133,7 @@ async def _save_or_update_assistant_message_sage(
     tool_call_args: list | None = None,
     interrupt_actions: list | None = None,
     tool_call_result: list | None = None,
+    usage_metadata: dict | None = None,
 ):
     """安全地保存或更新 AI 消息到数据库，失败不影响聊天"""
     try:
@@ -151,6 +152,9 @@ async def _save_or_update_assistant_message_sage(
             tool_call_result = (message.get("toolCallResult") or []) + (
                 tool_call_result or []
             )
+            usage_metadata = (message.get("usageMetadata") or {}) | (
+                usage_metadata or {}
+            )
             await update_message(
                 id=msg_id,
                 content=content,
@@ -159,6 +163,7 @@ async def _save_or_update_assistant_message_sage(
                 tool_call_args=tool_call_args,
                 interrupt_actions=interrupt_actions,
                 tool_call_result=tool_call_result,
+                usage_metadata=usage_metadata,
             )
             logger.debug(f"AI 消息已更新: id={msg_id}")
         else:
@@ -173,6 +178,7 @@ async def _save_or_update_assistant_message_sage(
                 tool_call_args=tool_call_args,
                 interrupt_actions=interrupt_actions,
                 tool_call_result=tool_call_result,
+                usage_metadata=usage_metadata,
             )
             logger.debug(f"AI 消息已保存: id={msg_id}")
     except Exception as e:
@@ -223,6 +229,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     interrupt_actions = []  # 要求中断的请求
 
     tool_call_result = []  # 工具调用的结果
+    usage_metadata = None  # token 用量（流式过程中累积，done 时随消息落库）
 
     async def flush():
         nonlocal buffer, args_buffer, last_flush
@@ -316,6 +323,9 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 )
             elif kind == "usage":
                 await flush()
+                # 流式中可能多次携带 usage（每个 chunk 的累计值），取最后一个完整值，
+                # 待 done 时随 AI 消息一起写入 DB
+                usage_metadata = event.get("usage_metadata") or usage_metadata
                 await emit(
                     "agent.usage",
                     {
@@ -345,6 +355,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                         tool_call_result=(
                             tool_call_result if tool_call_result else None
                         ),
+                        usage_metadata=usage_metadata,
                     )
                 )
             elif kind == "error":

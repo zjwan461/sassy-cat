@@ -32,6 +32,7 @@ class Message(Base):
     interrupt_actions = Column(Text)                   # 中断请求（需要人工审核的工具执行请求）
     interrupt_decisions = Column(Text)                 # 人工审核的工具记录
     tool_call_result = Column(Text)                    # 工具调用结果
+    usage_metadata = Column(Text)                      # token 用量 JSON，如 {"input_tokens":..,"output_tokens":..,"total_tokens":..} (仅 assistant)
     # 关系
     attachments = relationship(
         "Attachment",
