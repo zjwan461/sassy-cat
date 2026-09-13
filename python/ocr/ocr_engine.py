@@ -1,11 +1,10 @@
 import config_loader
-from config_loader import AppConfig
 from ocr.ocr_service import do_ocr as do_docling_ocr
 from ocr.markitdown_service import do_ocr as do_markitdown_ocr
 
 
 def get_ocr_strategy(scene: str):
-    config: AppConfig = config_loader.current
+    config = config_loader.current()
     if scene == "chat":
         return config.get("agent.ocrEngine", "markitdown")
     elif scene == "rag":
