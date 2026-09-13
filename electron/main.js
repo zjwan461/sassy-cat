@@ -105,7 +105,7 @@ function getAssetPath(relativePath) {
 
 // 读取项目配置（config.json）
 function loadAppConfig() {
-  const defaults = { name: '臭屁猫', version: '1.0.0' };
+  const defaults = { name: '优墨', version: '1.0.0' };
   try {
     const configPath = getAssetPath('config.json');
     if (fs.existsSync(configPath)) {

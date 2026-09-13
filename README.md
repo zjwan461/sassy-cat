@@ -1,4 +1,4 @@
-# 🐱 臭屁猫（Sassy Cat）
+# 🐱 优墨（Sassy Cat）
 
 一只傲娇但可靠的桌面猫咪助手 —— 基于 Electron + Vue 3 + Python 构建的 AI 桌宠应用。
 
@@ -178,7 +178,7 @@ npm run electron:build:linux
 ```json
 {
   "app": {
-    "name": "臭屁猫",
+    "name": "优墨",
     "description": "结合AI Agent能力的桌宠",
     "version": "1.0.0"
   },

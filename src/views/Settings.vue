@@ -82,7 +82,7 @@
         <div class="field">
           <label>人设提示词（可编辑，留空使用默认傲娇猫咪人设）</label>
           <textarea v-model="form.persona" rows="10" class="mono persona"
-            placeholder="你是「臭屁猫」……（支持 {app_name} {time} {os_user} 变量）"></textarea>
+            placeholder="你是「优墨」……（支持 {app_name} {time} {os_user} 变量）"></textarea>
           <span class="hint">{{ form.persona.length }} 字</span>
         </div>
         <div class="field">

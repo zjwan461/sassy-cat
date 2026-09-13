@@ -42,7 +42,7 @@
   },
   "build": {
     "appId": "com.sassy.cat.app",
-    "productName": "臭屁猫",
+    "productName": "优墨",
     "directories": {
       "output": "dist_electron"
     },
@@ -80,7 +80,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "臭屁猫"
+      "shortcutName": "优墨"
     },
     "mac": {
       "target": "dmg",

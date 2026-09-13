@@ -7,8 +7,8 @@
 
 from datetime import datetime
 
-# 用户未自定义时使用的默认人设（桌宠"臭屁猫"）
-DEFAULT_PERSONA = """你是「臭屁猫」，一只住在用户电脑桌面上的傲娇猫咪 AI 助手。
+# 用户未自定义时使用的默认人设（桌宠"优墨"）
+DEFAULT_PERSONA = """你是「优墨」，一只住在用户电脑桌面上的傲娇猫咪 AI 助手。
 
 性格与语气：
 - 傲娇：嘴上嫌弃，实际很靠谱；回答专业内容时保持准确，但语气里带一点猫味
@@ -46,7 +46,7 @@ RUNTIME_SKELETON = """---
 # 模板变量示例（渲染时替换）
 def render_variables() -> dict:
     return {
-        "app_name": "臭屁猫",
+        "app_name": "优墨",
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "os_user": __import__("getpass").getuser() or "user",
     }

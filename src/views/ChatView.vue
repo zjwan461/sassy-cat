@@ -3,7 +3,7 @@
     <header class="page-header">
       <h1 class="page-title">AI 聊天</h1>
       <p class="page-subtitle">
-        与臭屁猫对话
+        与优墨对话
         <span class="conn" :class="connClass">{{ connText }}</span>
       </p>
     </header>
