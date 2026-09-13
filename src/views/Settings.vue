@@ -113,11 +113,66 @@
           </div>
           <span class="hint">用于 internet_search 工具，留空则无法使用网络搜索功能</span>
         </div>
+        <div class="field">
+          <label>对话文档解析引擎（OCR）</label>
+          <select v-model="form.agentOcrEngine">
+            <option value="markitdown">MarkItDown（快速）</option>
+            <option value="docling">Docling（更精细，支持图片识别）</option>
+          </select>
+          <span class="hint">Agent 对话中解析上传文档所使用的引擎，默认 MarkItDown</span>
+        </div>
         <div class="actions">
           <button class="btn" @click="togglePreview">{{ preview ? '隐藏完整提示词' : '预览完整提示词' }}</button>
           <button class="btn" @click="resetPersona">恢复默认人设</button>
         </div>
         <pre v-if="preview" class="preview-box">{{ preview }}</pre>
+      </div>
+    </section>
+
+    <!-- 知识库（RAG） -->
+    <section class="card">
+      <div class="card-header">知识库（RAG）</div>
+      <div class="card-body form">
+        <div class="field">
+          <label class="check"><input type="checkbox" v-model="form.ragAutoEmbedding" /> 聊天上传文件自动入库</label>
+          <span class="hint">开启后，普通对话中上传的文件将异步自动 Embedding 到默认知识库</span>
+        </div>
+        <div class="field">
+          <label>Embedding 模型来源</label>
+          <select v-model="form.ragEmbedType">
+            <option value="local">本地模型（Local）</option>
+            <option value="remote">远程 API（OpenAI-Compatible）</option>
+          </select>
+          <span class="hint">本地模式无需 Base URL / API Key，首次使用时自动下载模型</span>
+        </div>
+        <div class="field">
+          <label>Embedding 模型名称</label>
+          <input v-model="form.ragEmbedModel" :placeholder="form.ragEmbedType === 'local' ? 'BAAI/bge-small-zh-v1.5' : 'text-embedding-3-small'" />
+          <span class="hint">本地模式填 HuggingFace 模型名（默认 BAAI/bge-small-zh-v1.5）；远程模式填服务商模型名</span>
+        </div>
+        <div class="field">
+          <label>Base URL</label>
+          <input v-model="form.ragEmbedBaseUrl" placeholder="https://api.openai.com/v1" :disabled="form.ragEmbedType !== 'remote'" />
+        </div>
+        <div class="field">
+          <label>API Key</label>
+          <div class="key-row">
+            <input v-model="form.ragEmbedApiKey" :type="showRagKey ? 'text' : 'password'" placeholder="sk-..." :disabled="form.ragEmbedType !== 'remote'" />
+            <button class="mini" @click="showRagKey = !showRagKey">{{ showRagKey ? '隐藏' : '显示' }}</button>
+          </div>
+          <span class="hint">仅远程模式需要</span>
+        </div>
+        <div class="field">
+          <label>知识库文档解析引擎（OCR）</label>
+          <select v-model="form.ragOcrEngine">
+            <option value="docling">Docling（更精细，支持图片识别）</option>
+            <option value="markitdown">MarkItDown（快速）</option>
+          </select>
+          <span class="hint">知识库维护上传时解析文档所使用的引擎，默认 Docling</span>
+        </div>
+        <div class="actions">
+          <span class="hint">RAG 后端功能尚未上线，当前保存的配置将在功能启用后生效</span>
+        </div>
       </div>
     </section>
 
@@ -257,20 +312,24 @@ const activeAgentProfile = ref('default')
 const agentProfiles = ref({})
 // 提醒气泡显示时长可选值（秒），范围 3~30
 const reminderDurationOptions = [3, 5, 8, 10, 15, 20, 30]
-
 const form = reactive({
   provider: 'openai', baseUrl: '', apiKey: '', model: '', extraParamsText: '{}',
   persona: '', memoryWindow: 50, recursionLimit: 50, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
   quickAskShortcut: 'Alt+Shift+Q',
   reminderPoll: 5, reminderDuration: 8,
   tavilyApiKey: '',
+  agentOcrEngine: 'markitdown',
+  ragAutoEmbedding: true, ragEmbedType: 'local', ragEmbedModel: 'BAAI/bge-small-zh-v1.5',
+  ragEmbedBaseUrl: '', ragEmbedApiKey: '', ragOcrEngine: 'docling',
   proxyEnabled: false, proxyHttp: '', proxyHttps: '', proxyNoProxy: ''
 })
+
 const recordingKey = ref(false)
 const hotkeyError = ref('')
 const hotkeyStatus = ref(null)
 const showKey = ref(false)
 const showTavilyKey = ref(false)
+const showRagKey = ref(false)
 const extraError = ref('')
 const testing = ref(false)
 const testResult = ref(null)
@@ -350,6 +409,16 @@ async function loadConfig() {
   // Tavily API Key：掩码处理
   const tavilyKey = cfg.agent?.tavilyApiKey || ''
   form.tavilyApiKey = tavilyKey.length > 3 ? '***' + tavilyKey.slice(-3) : tavilyKey
+  // 对话 OCR 引擎
+  form.agentOcrEngine = cfg.agent?.ocrEngine === 'docling' ? 'docling' : 'markitdown'
+  // 知识库（RAG）
+  form.ragAutoEmbedding = cfg.rag?.autoEmbedding !== false
+  form.ragEmbedType = cfg.rag?.embeddingModel?.type === 'remote' ? 'remote' : 'local'
+  form.ragEmbedModel = cfg.rag?.embeddingModel?.model || ''
+  form.ragEmbedBaseUrl = cfg.rag?.embeddingModel?.baseUrl || ''
+  const ragKey = cfg.rag?.embeddingModel?.apiKey || ''
+  form.ragEmbedApiKey = ragKey.length > 3 ? '***' + ragKey.slice(-3) : ragKey
+  form.ragOcrEngine = cfg.rag?.ocrEngine === 'markitdown' ? 'markitdown' : 'docling'
 }
 
 // ---------- 快捷键录制 ----------
@@ -541,7 +610,17 @@ async function saveAll() {
     { path: 'network.proxy.http', value: form.proxyHttp.trim() },
     { path: 'network.proxy.https', value: form.proxyHttps.trim() },
     { path: 'network.proxy.noProxy', value: form.proxyNoProxy.trim() },
+    { path: 'agent.ocrEngine', value: form.agentOcrEngine === 'docling' ? 'docling' : 'markitdown' },
+    { path: 'rag.autoEmbedding', value: !!form.ragAutoEmbedding },
+    { path: 'rag.embeddingModel.type', value: form.ragEmbedType === 'remote' ? 'remote' : 'local' },
+    { path: 'rag.embeddingModel.model', value: form.ragEmbedModel.trim() },
+    { path: 'rag.embeddingModel.baseUrl', value: form.ragEmbedBaseUrl.trim() },
+    { path: 'rag.ocrEngine', value: form.ragOcrEngine === 'markitdown' ? 'markitdown' : 'docling' },
   ]
+  // 远程模式下才写入 embedding apiKey（非掩码时）；本地模式清空
+  if (form.ragEmbedType === 'remote' && !String(form.ragEmbedApiKey).startsWith('***')) {
+    patches.push({ path: 'rag.embeddingModel.apiKey', value: form.ragEmbedApiKey.trim() })
+  }
   // 代理启用时做简单格式校验
   if (form.proxyEnabled && !form.proxyHttp.trim() && !form.proxyHttps.trim()) {
     return showToast('已启用代理，请至少填写 HTTP 或 HTTPS 代理地址')
@@ -557,8 +636,8 @@ async function saveAll() {
   const res = await api.setConfigMany(patches)
   if (!res.success) return showToast('保存失败: ' + (res.message || ''))
   keyRevealed.value = false
-  // 通知 Python 热重建 agent
-  send('config.invalidate', { paths: ['llm', 'agent'] })
+  // 通知 Python 热重建 agent（同时让 agent.ocrEngine / rag 配置热重载）
+  send('config.invalidate', { paths: ['llm', 'agent', 'rag'] })
   showToast('已保存，配置热生效 ✓')
   await loadConfig()
 }

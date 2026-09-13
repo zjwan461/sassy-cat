@@ -8,7 +8,18 @@
   },
   "agent": {
     "memoryWindow": 50,
-    "recursionLimit": 50
+    "recursionLimit": 50,
+    "ocrEngine": "markitdown"
+  },
+  "rag": {
+    "autoEmbedding": true,
+    "embeddingModel": {
+      "type": "local",
+      "model": "BAAI/bge-small-zh-v1.5",
+      "baseUrl": "",
+      "apiKey": ""
+    },
+    "ocrEngine": "docling"
   },
   "pet": {
     "quickAsk": {

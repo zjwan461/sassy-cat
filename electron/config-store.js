@@ -53,6 +53,11 @@ function maskSecrets(data) {
       }
     }
   }
+  const ragKey = clone?.rag?.embeddingModel?.apiKey;
+  if (typeof ragKey === 'string' && ragKey.length > 0) {
+    clone.rag.embeddingModel.apiKey = `***${ragKey.slice(-3)}`;
+    clone.rag.embeddingModel.apiKeyMasked = true;
+  }
   return clone;
 }
 
