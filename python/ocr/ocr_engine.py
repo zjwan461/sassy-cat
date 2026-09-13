@@ -1,7 +1,7 @@
 import config_loader
 from config_loader import AppConfig
 from ocr.ocr_service import do_ocr as do_docling_ocr
-from markitdown_service import do_ocr as do_markitdown_ocr
+from ocr.markitdown_service import do_ocr as do_markitdown_ocr
 
 
 def get_ocr_strategy(scene: str):
