@@ -10,7 +10,7 @@ async def do_ocr(x_filename: str, file_bytes: bytes):
     ext = os.path.splitext(filename)[-1]
     md_text = md.convert_stream(io.BytesIO(file_bytes))
     return {
-        "page_content": md_text,
+        "page_content": md_text.markdown,
         "metadata": {
             "filename": x_filename,
             "ext": ext,
