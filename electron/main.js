@@ -540,6 +540,67 @@ ipcMain.handle('open-external', async (event, url) => {
   }
   return { success: false, message: '无效的链接地址' };
 });
+// ---------- HTML 预览：落盘 + 应用内 Electron 窗口打开 ----------
+// 预览目录：开发环境用项目 runtime/preview（agent sandbox 工作区）；
+// 打包后 resources 可能只读，回退到 userData/preview
+function getPreviewDir() {
+  const base = app.isPackaged ? app.getPath('userData') : getAssetPath('runtime');
+  const dir = path.join(base, 'preview');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// 预览窗口（单例复用：再次预览时同一窗口加载新内容）
+let htmlPreviewWindow = null;
+
+// 渲染进程把 markdown 中的 html 代码块内容发过来：写入临时 .html 文件，
+// 在应用内独立 BrowserWindow 中打开（file:// 协议，脚本、样式完整可运行，
+// 不注入 preload、禁用 node，与主应用隔离）
+ipcMain.handle('html-preview:open', async (event, html) => {
+  if (typeof html !== 'string' || !html.trim()) {
+    return { success: false, message: '预览内容为空' };
+  }
+  try {
+    const dir = getPreviewDir();
+    const file = path.join(dir, `preview-${Date.now()}.html`);
+    fs.writeFileSync(file, html, 'utf-8');
+
+    if (htmlPreviewWindow && !htmlPreviewWindow.isDestroyed()) {
+      await htmlPreviewWindow.loadFile(file);
+      if (!htmlPreviewWindow.isVisible()) htmlPreviewWindow.show();
+      htmlPreviewWindow.focus();
+      return { success: true, filePath: file };
+    }
+
+    htmlPreviewWindow = new BrowserWindow({
+      width: 1000,
+      height: 720,
+      minWidth: 400,
+      minHeight: 300,
+      backgroundColor: '#ffffff',
+      title: 'HTML 预览',
+      icon: getAssetPath('assets/icon.png'),
+      autoHideMenuBar: true,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        // 不注入任何 preload，预览页面与主应用完全隔离
+      },
+    });
+    htmlPreviewWindow.on('closed', () => { htmlPreviewWindow = null; });
+    // 预览页内的外链跳转交回系统浏览器，避免占用预览窗口
+    htmlPreviewWindow.webContents.setWindowOpenHandler(({ url }) => {
+      if (/^https?:\/\//i.test(url)) {
+        shell.openExternal(url);
+      }
+      return { action: 'deny' };
+    });
+    await htmlPreviewWindow.loadFile(file);
+    return { success: true, filePath: file };
+  } catch (e) {
+    return { success: false, message: e.message };
+  }
+});
 
 // 测试 LLM 连接（主进程发起，无 CORS 限制）
 ipcMain.handle('test-llm-connection', async (event, params) => {

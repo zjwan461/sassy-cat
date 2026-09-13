@@ -1,5 +1,17 @@
 <template>
   <div class="markdown-body" ref="rootRef" v-html="html" @click="onClick"></div>
+  <!-- HTML 代码块预览弹窗：iframe 沙箱渲染（allow-scripts 但不含 allow-same-origin，隔离宿主环境） -->
+  <Teleport to="body">
+    <div v-if="previewVisible" class="md-preview-modal" @click.self="closePreview" @keydown.esc="closePreview">
+      <div class="md-preview-panel" tabindex="-1" ref="previewPanelRef">
+        <div class="md-preview-head">
+          <span class="md-preview-title">🌐 HTML 预览</span>
+          <button class="md-preview-close" type="button" title="关闭" @click="closePreview">✕</button>
+        </div>
+        <iframe class="md-preview-frame" :srcdoc="previewContent" sandbox="allow-scripts" frameborder="0"></iframe>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <script setup>
@@ -48,11 +60,16 @@ md.use(texmath, {
   classesForModern: false,
 })
 
-// 自定义 fence：代码块加语言标签 + 复制按钮；mermaid 特殊处理
+// 自定义 fence：代码块加语言标签 + 复制按钮；html 代码块额外提供预览按钮；mermaid 特殊处理
 md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   const token = tokens[idx]
   const lang = (token.info || '').trim().split(/\s+/)[0].toLowerCase()
   const code = token.content
+  // html/htm 代码块：右上角提供“预览”按钮，点击后在沙箱 iframe 中渲染
+  const isHtmlBlock = lang === 'html' || lang === 'htm'
+  const previewBtn = isHtmlBlock
+    ? `<button class="md-preview" type="button" title="在弹窗中预览 HTML">🌐 预览</button>`
+    : ''
 
   // Mermaid：完成后渲染为图占位（由 renderMermaid 异步替换为 SVG），流式期间按普通代码展示
   if (lang === 'mermaid') {
@@ -69,7 +86,7 @@ md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   return (
     `<div class="md-code">` +
     `<div class="md-code-head"><span class="md-code-lang">${escapeHtml(lang || 'text')}</span>` +
-    `<button class="md-copy" type="button" title="复制代码">📋 复制</button></div>` +
+    `<span class="md-code-btns">${previewBtn}<button class="md-copy" type="button" title="复制代码">📋 复制</button></span></div>` +
     `<pre><code class="hljs${lang ? ' language-' + escapeHtml(lang) : ''}">${body}</code></pre>` +
     `</div>`
   )
@@ -169,8 +186,45 @@ onMounted(() => {
   nextTick(renderMermaidBlocks)
 })
 
-// 复制按钮（事件委托，v-html 内容无法直接绑定 Vue 事件）
+// ---------- HTML 代码块预览 ----------
+// 优先方案（Electron 环境）：把代码块内容保存到 runtime/preview 目录下的 .html 文件，
+// 由主进程在应用内独立 Electron 预览窗口打开 —— 脚本/样式/外部资源完整可运行。
+// 回退方案（纯浏览器开发环境）：应用内 iframe 沙箱弹窗（sandbox="allow-scripts"，
+// 不含 allow-same-origin，与宿主页面隔离，防 XSS）。
+const previewVisible = ref(false)
+const previewContent = ref('')
+const previewPanelRef = ref(null)
+
+async function openPreview(code) {
+  const api = window.electronAPI
+  if (api && typeof api.openHtmlPreview === 'function') {
+    try {
+      const res = await api.openHtmlPreview(code)
+      if (res && res.success) return
+      // 落盘/打开失败时回退到内置弹窗，保证功能可用
+      console.warn('[md-preview] 外部预览失败，回退内置弹窗:', res && res.message)
+    } catch (e) {
+      console.warn('[md-preview] 外部预览异常，回退内置弹窗:', e)
+    }
+  }
+  previewContent.value = code
+  previewVisible.value = true
+  nextTick(() => previewPanelRef.value?.focus())
+}
+
+function closePreview() {
+  previewVisible.value = false
+  previewContent.value = ''
+}
+
+// 预览/复制按钮（事件委托，v-html 内容无法直接绑定 Vue 事件）
 async function onClick(e) {
+  const pv = e.target.closest('.md-preview')
+  if (pv) {
+    const codeEl = pv.closest('.md-code')?.querySelector('pre code')
+    if (codeEl) openPreview(codeEl.textContent || '')
+    return
+  }
   const btn = e.target.closest('.md-copy')
   if (!btn) return
   const codeEl = btn.closest('.md-code')?.querySelector('pre code')
@@ -253,13 +307,17 @@ async function onClick(e) {
   padding: 4px 10px; background: #1e293b; border-bottom: 1px solid #334155;
 }
 .markdown-body .md-code-lang { font-size: 12px; color: #64748b; text-transform: lowercase; }
-.markdown-body .md-copy {
+.markdown-body .md-code-btns { display: flex; align-items: center; gap: 6px; }
+.markdown-body .md-copy,
+.markdown-body .md-preview {
   border: 1px solid #334155; background: transparent; color: #94a3b8;
   font-size: 12px; padding: 2px 10px; border-radius: 5px; cursor: pointer;
   opacity: 0; transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
-.markdown-body .md-code:hover .md-copy { opacity: 1; }
-.markdown-body .md-copy:hover { background: #334155; color: #e2e8f0; }
+.markdown-body .md-code:hover .md-copy,
+.markdown-body .md-code:hover .md-preview { opacity: 1; }
+.markdown-body .md-copy:hover,
+.markdown-body .md-preview:hover { background: #334155; color: #e2e8f0; }
 .markdown-body .md-copy.copied { opacity: 1; color: #34d399; border-color: #065f46; }
 .markdown-body .md-copy.copy-fail { opacity: 1; color: #f87171; border-color: #7f1d1d; }
 .markdown-body .md-code pre {
@@ -284,4 +342,28 @@ async function onClick(e) {
 .markdown-body .katex { font-size: 1.06em; }
 .markdown-body .katex-display { margin: 0.7em 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
 .markdown-body .texmath { color: #e2e8f0; }
+
+/* HTML 预览弹窗（Teleport 到 body，非 scoped） */
+.md-preview-modal {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.6); display: flex;
+  align-items: center; justify-content: center; z-index: 1100;
+}
+.md-preview-panel {
+  width: min(860px, 92vw); height: min(640px, 86vh);
+  display: flex; flex-direction: column; background: #1e293b;
+  border: 1px solid #334155; border-radius: 12px; overflow: hidden;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); outline: none;
+}
+.md-preview-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px; background: #172033; border-bottom: 1px solid #334155; flex-shrink: 0;
+}
+.md-preview-title { color: #e2e8f0; font-size: 13px; font-weight: 600; }
+.md-preview-close {
+  border: none; background: transparent; color: #94a3b8; cursor: pointer;
+  font-size: 14px; padding: 4px 8px; border-radius: 6px;
+}
+.md-preview-close:hover { background: #334155; color: #e2e8f0; }
+.md-preview-frame { flex: 1; width: 100%; border: none; background: #fff; }
 </style>

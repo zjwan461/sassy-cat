@@ -46,5 +46,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
 
   // 用系统默认浏览器打开外部链接
-  openExternal: (url) => ipcRenderer.invoke('open-external', url)
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+
+  // HTML 代码块预览：保存到 runtime/preview 并在应用内 Electron 预览窗口打开
+  openHtmlPreview: (html) => ipcRenderer.invoke('html-preview:open', html)
 });
