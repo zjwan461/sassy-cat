@@ -83,3 +83,17 @@ export function fetchChunks(kbId, page = 1, pageSize = 20, docId = '') {
   if (docId) params.set('doc_id', docId)
   return request(`/api/kb/${kbId}/chunks?${params}`)
 }
+
+/** 编辑分块内容（后端重新 embedding 后写回） */
+export function updateChunk(kbId, chunkId, content) {
+  return request(`/api/kb/${kbId}/chunks/${chunkId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  })
+}
+
+/** 删除单个分块（向量一并清理） */
+export function deleteChunk(kbId, chunkId) {
+  return request(`/api/kb/${kbId}/chunks/${chunkId}`, { method: 'DELETE' })
+}

@@ -26,19 +26,47 @@
     <main class="content">
       <router-view />
     </main>
+
+    <!-- 知识库后台上传悬浮指示（全局渲染：任意 tab 均可见，点击回到详情页展开进度窗） -->
+    <div
+      v-if="kbUploading"
+      class="upload-fab"
+      title="点击查看进度"
+      @click="revealUploadProgress"
+    >
+      <span class="upload-spinner sm"></span>
+      <span class="fab-text">处理中 {{ kbUploadDone }}/{{ kbUploadTotal }} · {{ kbUploadCurrent }}</span>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted, onBeforeUnmount, watch } from 'vue'
+import { onMounted, onBeforeUnmount, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { appConfig } from './appConfig'
 import { useAgentSocket } from './composables/useAgentSocket'
+import { useKbUploadState } from './composables/useKbUploadState'
 import logoUrl from '../assets/icon.png'
 
 const route = useRoute()
 const router = useRouter()
 const { state: socketState, connect, setPort } = useAgentSocket()
+
+// 知识库上传状态（模块级单例，与详情页共享）
+const {
+  uploading: kbUploading,
+  uploadTotal: kbUploadTotal,
+  uploadDone: kbUploadDone,
+  uploadCurrent: kbUploadCurrent,
+  maskVisible: kbUploadMask,
+  uploadKbId: kbUploadKbId,
+} = useKbUploadState()
+
+function revealUploadProgress() {
+  kbUploadMask.value = true
+  const target = `/kb/${kbUploadKbId || ''}`
+  if (route.path !== target) router.push(target)
+}
 
 // 菜单高亮：/kb 及其子路径（/kb/:kbId）均视为选中"知识库"
 function isMenuActive(path) {
@@ -217,5 +245,46 @@ const menuItems = [
 .content::-webkit-scrollbar-thumb {
   background: #334155;
   border-radius: 4px;
+}
+
+/* ===== 知识库后台上传悬浮指示 ===== */
+.upload-fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #1e293b;
+  border: 1px solid #4f46e5;
+  border-radius: 999px;
+  padding: 10px 16px;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  animation: fab-in 0.25s ease;
+}
+.upload-fab:hover { border-color: #818cf8; }
+@keyframes fab-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.upload-spinner.sm {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border: 2px solid rgba(129, 140, 248, 0.25);
+  border-top-color: #818cf8;
+  border-radius: 50%;
+  animation: fab-spin 0.9s linear infinite;
+}
+@keyframes fab-spin { to { transform: rotate(360deg); } }
+.fab-text {
+  font-size: 12px;
+  color: #cbd5e1;
+  max-width: 260px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

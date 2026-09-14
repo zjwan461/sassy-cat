@@ -35,6 +35,21 @@
       </div>
     </div>
 
+    <!-- 本地模型未下载：强制阻断弹窗（本地模式必须先下载模型，无「稍后再说」） -->
+    <div v-if="showModelWarn" class="modal-mask block-mask">
+      <div class="modal">
+        <div class="modal-title">⚠️ 尚未下载 Embedding 模型</div>
+        <p class="modal-notice">
+          当前知识库使用本地 Embedding 模型，但检测到模型尚未下载，
+          文档入库与语义检索无法工作。必须先完成模型下载才能使用知识库
+          （自动按显卡和网络选择最优方案）。
+        </p>
+        <div class="modal-actions">
+          <button class="btn-primary" @click="goModelDownload">前往下载模型</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 新建知识库弹窗 -->
     <div v-if="showCreate" class="modal-mask" @click.self="showCreate = false">
       <div class="modal">
@@ -71,6 +86,9 @@ import { useRouter } from 'vue-router'
 import { listKbs, createKb, deleteKb } from '../api/kb'
 
 const router = useRouter()
+const api = window.electronAPI
+
+const showModelWarn = ref(false)
 
 const kbs = ref([])
 const loading = ref(true)
@@ -139,7 +157,31 @@ function formatTime(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-onMounted(load)
+// 进入知识库页时检查：本地模式且模型未下载则强制阻断（弹窗无关闭入口，只能跳转下载）
+async function checkEmbeddingModel() {
+  if (!api?.getConfig) return // 非 Electron 环境无配置可查，跳过
+  try {
+    const res = await api.getConfig()
+    if (!res.success) return
+    const emb = res.config?.rag?.embeddingModel || {}
+    const type = emb.type === 'remote' ? 'remote' : 'local'
+    if (type === 'local' && emb.downloaded !== true) {
+      showModelWarn.value = true
+    }
+  } catch {
+    // 检查失败不打扰用户
+  }
+}
+
+function goModelDownload() {
+  showModelWarn.value = false
+  router.push('/settings#rag-model')
+}
+
+onMounted(() => {
+  load()
+  checkEmbeddingModel()
+})
 </script>
 
 <style scoped>
@@ -288,6 +330,12 @@ onMounted(load)
   z-index: 100;
 }
 
+/* 强制阻断层：更高透明度与层级，遮住「新建知识库」等全部操作 */
+.block-mask {
+  background: rgba(0, 0, 0, 0.75);
+  z-index: 200;
+}
+
 .modal {
   width: 400px;
   background: #1e293b;
@@ -323,6 +371,13 @@ onMounted(load)
 .modal-error {
   color: #f87171;
   font-size: 12px;
+}
+
+.modal-notice {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #94a3b8;
 }
 
 .modal-actions {

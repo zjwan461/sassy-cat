@@ -66,6 +66,8 @@ DEFAULTS = {
             "model": "BAAI/bge-small-zh-v1.5",  # embedding model name
             "baseUrl": "",  # 本地向量模型无
             "apiKey": "",  # 本地向量模型无
+            "downloaded": False,  # 本地模式：是否已通过智能下载完成模型下载（True 后设置页不再显示下载按钮）
+            "localPath": "",  # 本地模式：下载完成后模型的本地目录
         },
         "ocrEngine": "docling"  # rag库维护上传文本使用的ocr引擎
     },

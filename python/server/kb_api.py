@@ -32,6 +32,11 @@ class KbPayload(BaseModel):
     description: Optional[str] = ""
 
 
+class ChunkUpdatePayload(BaseModel):
+    content: str
+    metadata: Optional[dict] = None
+
+
 # ==================== 知识库 CRUD ====================
 
 @router.get("")
@@ -183,3 +188,59 @@ async def list_chunks(
             "metadata": meta,
         })
     return {"items": items, "total": total, "page": page, "pageSize": page_size}
+
+
+# ==================== 分块编辑 / 删除 ====================
+
+async def _get_chunk_belongs_to_kb(chunk_id: str, kb_id: str) -> dict:
+    """校验分块属于指定知识库，返回该分块的 metadata；不属于则抛 404"""
+    rag = get_rag_service()
+    docs = await asyncio.to_thread(rag.get_by_ids, [chunk_id])
+    if not docs:
+        raise HTTPException(status_code=404, detail="分块不存在")
+    meta = docs[0].metadata or {}
+    if meta.get("kb_id") != kb_id:
+        raise HTTPException(status_code=404, detail="分块不属于该知识库")
+    return meta
+
+
+@router.put("/{kb_id}/chunks/{chunk_id}")
+async def update_chunk(kb_id: str, chunk_id: str, payload: ChunkUpdatePayload):
+    """编辑分块内容：重新 embedding 后写回向量库"""
+    if not await kb_repo.get_kb(kb_id):
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    content = (payload.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="分块内容不能为空")
+
+    try:
+        meta = await _get_chunk_belongs_to_kb(chunk_id, kb_id)
+        # 保留原有 kb_id / doc_id / source，避免分块脱离所属文档
+        meta.update(payload.metadata or {})
+        await asyncio.to_thread(
+            get_rag_service().update_chunk, chunk_id, content, meta
+        )
+        logger.info(f"分块 {chunk_id} 已更新")
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"分块更新失败: {e}")
+        raise HTTPException(status_code=500, detail=f"分块更新失败: {e}")
+
+
+@router.delete("/{kb_id}/chunks/{chunk_id}")
+async def delete_chunk(kb_id: str, chunk_id: str):
+    """删除单个分块（向量一并清理）"""
+    if not await kb_repo.get_kb(kb_id):
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    try:
+        await _get_chunk_belongs_to_kb(chunk_id, kb_id)
+        await asyncio.to_thread(get_rag_service().delete_by_ids, [chunk_id])
+        logger.info(f"分块 {chunk_id} 已删除")
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"分块删除失败: {e}")
+        raise HTTPException(status_code=500, detail=f"分块删除失败: {e}")

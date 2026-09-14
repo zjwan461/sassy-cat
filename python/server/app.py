@@ -13,6 +13,7 @@ from fastapi import FastAPI, WebSocket, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent import engine as agent_engine
+from agent.rag import model_download
 from monitor import service as monitor_service
 from ocr.ocr_engine import do_ocr
 from proactive import reminder_runner, scheduler
@@ -27,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 METRICS_INTERVAL = 2.0
 _metrics_stop = asyncio.Event()
+
+# RAG 本地嵌入模型下载：同一时刻仅允许一个下载任务
+_rag_download_busy = False
 
 
 async def _monitor_loop():
@@ -103,6 +107,27 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.exception(f"OCR 处理失败: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+    @app.post("/api/rag/model/download")
+    async def rag_model_download():
+        """下载 RAG 本地 embedding 模型（smart_download：智能选镜像 + 智能选大小模型）。
+
+        snapshot_download 为阻塞式网络 IO，放入线程池避免卡住事件循环。
+        注意：模型体积较大，下载耗时可达分钟级，前端 fetch 不设超时即可。
+        返回 model（实际下载的模型仓库 id）与 path（本地目录），供前端写回配置。
+        """
+        global _rag_download_busy
+        if _rag_download_busy:
+            raise HTTPException(status_code=409, detail="已有下载任务正在进行，请稍候")
+        _rag_download_busy = True
+        try:
+            result = await asyncio.to_thread(model_download.smart_download)
+            logger.info(f"RAG embedding 模型下载完成: {result}")
+            return {"status": "success", **result}
+        except Exception as e:
+            logger.exception("RAG embedding 模型下载失败")
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            _rag_download_busy = False
 
     @app.get("/api/messages")
     async def api_messages(

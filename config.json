@@ -17,7 +17,9 @@
       "type": "local",
       "model": "BAAI/bge-small-zh-v1.5",
       "baseUrl": "",
-      "apiKey": ""
+      "apiKey": "",
+      "downloaded": false,
+      "localPath": ""
     },
     "ocrEngine": "docling"
   },

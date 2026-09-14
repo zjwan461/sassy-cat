@@ -84,8 +84,25 @@
               <span class="chunk-index">#{{ i + 1 }}</span>
               <span class="chunk-source">📄 {{ c.source || '未知来源' }}</span>
               <span class="chunk-len">{{ c.content.length }} 字</span>
+              <span class="chunk-actions">
+                <button v-if="editingChunkId !== c.id" class="chunk-btn" title="编辑分块" @click="startEdit(c)">✎</button>
+                <button class="chunk-btn danger" title="删除分块" @click="confirmDeleteChunk(c)">🗑</button>
+              </span>
             </div>
-            <div class="chunk-content">{{ c.content }}</div>
+            <!-- 编辑态：文本域 + 保存/取消 -->
+            <div v-if="editingChunkId === c.id" class="chunk-edit">
+              <textarea v-model="editingContent" class="chunk-edit-textarea" rows="6"></textarea>
+              <div class="chunk-edit-actions">
+                <button class="btn-ghost btn-sm" @click="cancelEdit">取消</button>
+                <button class="btn-primary btn-sm" :disabled="savingChunk" @click="saveEdit(c)">
+                  {{ savingChunk ? '保存中…' : '保存' }}
+                </button>
+              </div>
+            </div>
+            <!-- 展示态：渲染为 Markdown -->
+            <div v-else class="chunk-content markdown-wrap">
+              <MarkdownRenderer :content="c.content" />
+            </div>
           </div>
           <div v-if="chunkLoading" class="chunk-loading">
             <span class="dot-pulse"></span> 正在加载…
@@ -97,23 +114,32 @@
       </section>
     </div>
 
-    <!-- 上传进度遮罩 -->
-    <div v-if="uploading" class="upload-mask">
+    <!-- 上传进度遮罩（可切换到后台处理，不阻塞浏览；悬浮条在 App.vue 全局渲染） -->
+    <div v-if="uploading && maskVisible" class="upload-mask">
       <div class="upload-box">
+        <div class="upload-spinner"></div>
         <div class="upload-title">正在处理文档（{{ uploadDone }}/{{ uploadTotal }}）</div>
         <div class="upload-file">{{ uploadCurrent }}</div>
-        <div class="upload-hint">OCR 解析 → 分块 → Embedding 入库，请稍候…</div>
+        <div class="upload-progress">
+          <div class="upload-progress-bar" :style="{ width: uploadPercent + '%' }"></div>
+        </div>
+        <div class="upload-hint">OCR 解析 → 分块 → Embedding 入库，请稍候…<span class="hint-dots"><i></i><i></i><i></i></span></div>
+        <div class="upload-actions">
+          <button class="btn-ghost btn-sm" @click="maskVisible = false">后台处理</button>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  listKbs, listDocuments, uploadDocument, deleteDocument, fetchChunks,
+  listKbs, listDocuments, deleteDocument, fetchChunks, updateChunk, deleteChunk,
 } from '../api/kb'
+import { useKbUploadState } from '../composables/useKbUploadState'
+import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -128,12 +154,13 @@ const docsLoading = ref(true)
 const selectedDocId = ref(null)
 const selectedDoc = computed(() => documents.value.find(d => d.id === selectedDocId.value) || null)
 
-// ---- 上传 ----
+// ---- 上传（模块级单例队列：切 tab 不中断，数量跨批次累计） ----
 const fileInput = ref(null)
-const uploading = ref(false)
-const uploadTotal = ref(0)
-const uploadDone = ref(0)
-const uploadCurrent = ref('')
+const {
+  uploading, uploadTotal, uploadDone, uploadCurrent,
+  maskVisible, uploadPercent,
+  enqueueFiles, takeFailed,
+} = useKbUploadState()
 
 // ---- 分块流 ----
 // ---- 分块信息流（滚动分页加载） ----
@@ -145,6 +172,12 @@ const chunkLoading = ref(false)
 const chunkFinished = ref(false)
 const chunkError = ref('')
 const chunkListEl = ref(null)
+
+// ---- 分块编辑 / 删除 ----
+const editingChunkId = ref(null)
+const editingContent = ref('')
+const savingChunk = ref(false)
+const deletingChunkId = ref(null)
 function statusText(s) {
   return { pending: '待处理', processing: '处理中', done: '已完成', error: '失败' }[s] || s
 }
@@ -182,32 +215,24 @@ function triggerUpload() {
   fileInput.value?.click()
 }
 
-async function onFilesSelected(ev) {
+// 每个文件完成即刷新文档列表；全部完成再刷新分块与统计
+watch(uploadDone, () => { loadDocs() })
+watch(uploading, (busy) => {
+  if (!busy) {
+    reloadChunks() // 新文档入库后刷新分块信息流
+    loadKb()       // 刷新卡片统计（文档数/分块数）
+    const failed = takeFailed()
+    if (failed.length) {
+      alert(`以下文档处理失败：\n${failed.join('\n')}`)
+    }
+  }
+})
+
+function onFilesSelected(ev) {
   const files = Array.from(ev.target.files || [])
   ev.target.value = '' // 允许重复选择同名文件
   if (!files.length) return
-
-  uploading.value = true
-  uploadTotal.value = files.length
-  uploadDone.value = 0
-  let failed = []
-  for (const file of files) {
-    uploadCurrent.value = file.name
-    try {
-      await uploadDocument(kbId, file)
-    } catch (e) {
-      failed.push(`${file.name}: ${e.message}`)
-    }
-    uploadDone.value++
-    await loadDocs()
-  }
-  uploading.value = false
-  uploadCurrent.value = ''
-  reloadChunks() // 新文档入库后刷新分块信息流
-  loadKb()       // 刷新卡片统计（文档数/分块数）
-  if (failed.length) {
-    alert(`以下文档处理失败：\n${failed.join('\n')}`)
-  }
+  enqueueFiles(kbId, files)
 }
 
 async function confirmDeleteDoc(doc) {
@@ -255,13 +280,55 @@ async function loadChunkPage(reset = false) {
     chunkLoading.value = false
   }
 }
-
 function reloadChunks() {
   loadChunkPage(true)
   nextTick(() => {
     const el = chunkListEl.value
     if (el) el.scrollTop = 0
   })
+}
+
+function startEdit(c) {
+  editingChunkId.value = c.id
+  editingContent.value = c.content
+}
+
+function cancelEdit() {
+  editingChunkId.value = null
+  editingContent.value = ''
+}
+
+async function saveEdit(c) {
+  const content = editingContent.value.trim()
+  if (!content) return alert('分块内容不能为空')
+  savingChunk.value = true
+  try {
+    await updateChunk(kbId, c.id, content)
+    editingChunkId.value = null
+    editingContent.value = ''
+    reloadChunks() // 重新拉取（内容与分块号）
+    await Promise.all([loadDocs(), loadKb()]) // 字数/统计刷新
+  } catch (e) {
+    alert(`编辑失败：${e.message}`)
+  } finally {
+    savingChunk.value = false
+  }
+}
+
+async function confirmDeleteChunk(c) {
+  if (!window.confirm(`确定删除分块 #（${c.source || ''}）？其向量数据将一并删除。`)) return
+  deletingChunkId.value = c.id
+  try {
+    await deleteChunk(kbId, c.id)
+    chunkTotal.value = Math.max(0, chunkTotal.value - 1)
+    const idx = chunks.value.findIndex(x => x.id === c.id)
+    if (idx !== -1) chunks.value.splice(idx, 1)
+    await Promise.all([loadDocs(), loadKb()]) // 文档分块数与知识库统计刷新
+  } catch (e) {
+    alert(`删除失败：${e.message}`)
+  } finally {
+    deletingChunkId.value = null
+  }
 }
 
 function onChunkScroll(ev) {
@@ -500,7 +567,6 @@ onMounted(async () => {
   border-radius: 8px;
   padding: 10px 12px;
 }
-
 .chunk-head {
   display: flex;
   align-items: center;
@@ -509,6 +575,23 @@ onMounted(async () => {
   color: #64748b;
   margin-bottom: 6px;
 }
+
+.chunk-actions { display: inline-flex; align-items: center; gap: 6px; }
+
+.chunk-btn {
+  background: transparent;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.chunk-btn:hover { color: #e2e8f0; border-color: #818cf8; background: rgba(129, 140, 248, 0.08); }
+.chunk-btn.danger:hover { color: #f87171; border-color: #f87171; background: rgba(248, 113, 113, 0.08); }
+
 
 .chunk-index { color: #818cf8; font-weight: 600; }
 .chunk-source {
@@ -527,6 +610,37 @@ onMounted(async () => {
   overflow: hidden;
 }
 .chunk-card:hover .chunk-content { max-height: none; }
+
+/* Markdown 渲染包装：让渲染器的排版与卡片一致 */
+.markdown-wrap { white-space: normal; }
+.markdown-wrap :deep(.markdown-body) {
+  font-size: 13px;
+  color: #cbd5e1;
+}
+.markdown-wrap :deep(.markdown-body p) { margin: 0 0 8px; }
+.markdown-wrap :deep(.markdown-body p:last-child) { margin-bottom: 0; }
+.markdown-wrap :deep(.markdown-body pre) { margin: 8px 0; }
+.markdown-wrap :deep(.markdown-body code) { font-size: 12px; }
+.markdown-wrap :deep(.markdown-body img) { max-width: 100%; }
+
+/* 分块编辑态 */
+.chunk-edit { display: flex; flex-direction: column; gap: 8px; }
+.chunk-edit-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: #0f172a;
+  border: 1px solid #4f46e5;
+  border-radius: 8px;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-family: Consolas, monospace;
+  line-height: 1.6;
+  padding: 10px 12px;
+  resize: vertical;
+  outline: none;
+}
+.chunk-edit-textarea:focus { border-color: #818cf8; }
+.chunk-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .chunk-loading {
   text-align: center;
@@ -575,6 +689,11 @@ onMounted(async () => {
   padding: 24px 32px;
   text-align: center;
   max-width: 420px;
+  animation: box-in 0.25s ease;
+}
+@keyframes box-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to { opacity: 1; transform: none; }
 }
 
 .upload-title { font-size: 16px; font-weight: 600; color: #f1f5f9; }
@@ -584,5 +703,65 @@ onMounted(async () => {
   color: #818cf8;
   word-break: break-all;
 }
-.upload-hint { margin-top: 8px; font-size: 12px; color: #64748b; }
+.upload-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #64748b;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 旋转加载圈 */
+.upload-spinner {
+  width: 36px;
+  height: 36px;
+  margin: 0 auto 12px;
+  border: 3px solid rgba(129, 140, 248, 0.25);
+  border-top-color: #818cf8;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+.upload-spinner.sm {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border-width: 2px;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 进度条 */
+.upload-progress {
+  margin-top: 14px;
+  height: 6px;
+  border-radius: 3px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  overflow: hidden;
+}
+.upload-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #4f46e5, #818cf8);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+/* 「请稍候…」逐点跳动 */
+.hint-dots { display: inline-flex; margin-left: 2px; }
+.hint-dots i {
+  width: 3px;
+  height: 3px;
+  margin-left: 3px;
+  border-radius: 50%;
+  background: #64748b;
+  animation: dot-blink 1.2s infinite;
+}
+.hint-dots i:nth-child(2) { animation-delay: 0.2s; }
+.hint-dots i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes dot-blink {
+  0%, 60%, 100% { opacity: 0.25; }
+  30% { opacity: 1; }
+}
+
+.upload-actions { margin-top: 16px; }
 </style>

@@ -50,12 +50,13 @@ class RAGService:
         """获取当前 embedding 配置指纹，用于检测配置是否变化"""
         cfg = config_loader.current()
         rag_cfg = cfg.get("rag.embeddingModel", {}) or {}
-        # 用 type + model + baseUrl + apiKey 组合为指纹
+        # 用 type + model + localPath + baseUrl + apiKey 组合为指纹
         parts = [
-            rag_cfg.get("type", "local"),
-            rag_cfg.get("model", ""),
-            rag_cfg.get("baseUrl", ""),
-            rag_cfg.get("apiKey", ""),
+            str(rag_cfg.get("type", "local")),
+            str(rag_cfg.get("model", "")),
+            str(rag_cfg.get("localPath", "")),
+            str(rag_cfg.get("baseUrl", "")),
+            str(rag_cfg.get("apiKey", "")),
         ]
         return "|".join(parts)
     
@@ -66,7 +67,10 @@ class RAGService:
         emb_type = emb_cfg.get("type", "local")
         
         if emb_type == "local":
-            model_name = emb_cfg.get("model", "BAAI/bge-small-zh-v1.5")
+            # 优先使用「智能下载」写入配置的本地模型目录（离线秒加载，不走网络）；
+            # 未下载时回退为 HuggingFace 仓库名（首次使用会触发在线下载）
+            local_path = emb_cfg.get("localPath") or ""
+            model_name = local_path or emb_cfg.get("model", "BAAI/bge-small-zh-v1.5")
             device = "cuda" if torch.cuda.is_available() else "cpu"
             model_kwargs = {"device": device, "trust_remote_code": True}
             encode_kwargs = {"normalize_embeddings": True}
@@ -335,6 +339,32 @@ class RAGService:
         """
         self._ensure_embeddings()
         kwargs: Dict[str, Any] = {"ids": [doc_id], "documents": [content]}
+        if metadata is not None:
+            kwargs["metadatas"] = [metadata]
+        self.vector_store._collection.update(**kwargs)
+
+    def update_chunk(
+        self,
+        chunk_id: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        按分块 ID 更新内容，并**重新 embedding**（内容变化后向量必须同步，
+        否则语义检索会命中旧向量）。
+
+        Args:
+            chunk_id: 分块（向量）ID
+            content: 新内容
+            metadata: 新 metadata（可选，不传则保留原 metadata）
+        """
+        self._ensure_embeddings()
+        embedding = self.embeddings.embed_documents([content])[0]
+        kwargs: Dict[str, Any] = {
+            "ids": [chunk_id],
+            "documents": [content],
+            "embeddings": [embedding],
+        }
         if metadata is not None:
             kwargs["metadatas"] = [metadata]
         self.vector_store._collection.update(**kwargs)

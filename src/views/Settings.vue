@@ -139,7 +139,7 @@
         </div>
         <div class="field">
           <label>Embedding 模型来源</label>
-          <select v-model="form.ragEmbedType">
+          <select v-model="form.ragEmbedType" @change="onEmbedTypeChange">
             <option value="local">本地模型（Local）</option>
             <option value="remote">远程 API（OpenAI-Compatible）</option>
           </select>
@@ -147,8 +147,9 @@
         </div>
         <div class="field">
           <label>Embedding 模型名称</label>
-          <input v-model="form.ragEmbedModel" :placeholder="form.ragEmbedType === 'local' ? 'BAAI/bge-small-zh-v1.5' : 'text-embedding-3-small'" />
-          <span class="hint">本地模式填 HuggingFace 模型名（默认 BAAI/bge-small-zh-v1.5）；远程模式填服务商模型名</span>
+          <input v-model="form.ragEmbedModel" :placeholder="form.ragEmbedType === 'local' ? '由智能下载自动确定' : 'text-embedding-3-small'"
+            :disabled="form.ragEmbedType === 'local'" @change="onEmbedModelChange" />
+          <span class="hint">本地模式下模型由「智能下载」按显卡条件自动确定（N 卡 ≥4G 显存用 bge-large，否则 bge-small），无需手动填写；远程模式填服务商模型名</span>
         </div>
         <div class="field">
           <label>Base URL</label>
@@ -169,6 +170,26 @@
             <option value="markitdown">MarkItDown（快速）</option>
           </select>
           <span class="hint">知识库维护上传时解析文档所使用的引擎，默认 Docling</span>
+        </div>
+        <div v-if="form.ragEmbedType === 'local' && !form.ragLocalDownloaded" id="rag-model" class="field">
+          <label>本地模型下载</label>
+          <div class="actions">
+            <button class="btn primary" @click="downloadModel" :disabled="downloading">
+              <span v-if="downloading" class="btn-spinner"></span>
+              <span v-else>⬇ 下载模型</span>
+              <span v-if="downloading">下载中…</span>
+            </button>
+            <span v-if="downloadResult" :class="downloadResult.ok ? 'ok' : 'bad-text'">{{ downloadResult.text }}</span>
+          </div>
+          <span class="hint">自动检测网络（不可直连时走 hf-mirror 镜像）与显卡（N 卡 ≥4G 显存下载 bge-large，否则 bge-small），模型较大请耐心等待</span>
+        </div>
+        <div v-else-if="form.ragEmbedType === 'local'" id="rag-model" class="field">
+          <label>本地模型状态</label>
+          <div class="actions">
+            <span class="ok">✓ 模型已下载{{ form.ragEmbedModel ? `：${form.ragEmbedModel}` : '' }}</span>
+            <button class="mini" @click="redownloadModel" :disabled="downloading" title="清除已下载状态并重新下载">重新下载</button>
+            <span v-if="downloadResult" :class="downloadResult.ok ? 'ok' : 'bad-text'">{{ downloadResult.text }}</span>
+          </div>
         </div>
         <div class="actions">
           <span class="hint">RAG 后端功能尚未上线，当前保存的配置将在功能启用后生效</span>
@@ -292,19 +313,41 @@
         </div>
       </div>
     </div>
+
+    <!-- 切换 Embedding 模型确认弹窗 -->
+    <div v-if="showEmbedConfirm" class="modal-overlay" @click.self="cancelEmbedChange">
+      <div class="modal">
+        <h3>确认切换 Embedding 模型？</h3>
+        <p class="hint" style="line-height: 1.6; margin: 0 0 8px;">
+          切换后，知识库中所有已入库文档的向量数据将不再匹配，需要重新 Embedding 才能继续使用。
+          <br />
+          是否确认切换？
+        </p>
+        <div class="modal-actions">
+          <button class="btn" @click="cancelEmbedChange">取消</button>
+          <button class="btn primary" @click="confirmEmbedChange">确认切换</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { reactive, ref, computed, onMounted, nextTick, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useAgentSocket } from '../composables/useAgentSocket'
 import { useRestartState } from '../composables/useRestartState'
+import { useModelDownloadState } from '../composables/useModelDownloadState'
+import { downloadEmbeddingModel } from '../api/embeddingModelDownload'
 
 const { connect, send, on } = useAgentSocket()
 const api = window.electronAPI
+const route = useRoute()
 
 // 模块级单例状态：切换 tab 导致组件卸载/重新挂载时，重启进度与提示不丢失
 const { restarting, restartDone, toast } = useRestartState()
+// 模型下载进度同样为模块级单例：下载中切换 tab 后动画与结果不丢失
+const { downloading, result: downloadResult } = useModelDownloadState()
 
 const activeProfile = ref('default')
 const profiles = ref({})
@@ -321,6 +364,7 @@ const form = reactive({
   agentOcrEngine: 'markitdown',
   ragAutoEmbedding: true, ragEmbedType: 'local', ragEmbedModel: 'BAAI/bge-small-zh-v1.5',
   ragEmbedBaseUrl: '', ragEmbedApiKey: '', ragOcrEngine: 'docling',
+  ragLocalDownloaded: false,
   proxyEnabled: false, proxyHttp: '', proxyHttps: '', proxyNoProxy: ''
 })
 
@@ -343,6 +387,13 @@ const showAddAgentProfile = ref(false)
 const newAgentProfileName = ref('')
 const newAgentProfileError = ref('')
 const agentProfileNameInput = ref(null)
+
+// Embedding 模型切换确认：记录已保存（配置中落盘）的模型来源与名称，
+// 变更时弹窗提示知识库文档需要重新 Embedding
+let savedEmbedType = 'local'
+let savedEmbedModel = ''
+const showEmbedConfirm = ref(false)
+const embedPendingChange = ref(null) // { kind: 'type' | 'model', value: 新值 }
 
 // 弹窗打开时自动聚焦输入框
 // 弹窗打开时自动聚焦输入框
@@ -415,10 +466,15 @@ async function loadConfig() {
   form.ragAutoEmbedding = cfg.rag?.autoEmbedding !== false
   form.ragEmbedType = cfg.rag?.embeddingModel?.type === 'remote' ? 'remote' : 'local'
   form.ragEmbedModel = cfg.rag?.embeddingModel?.model || ''
+  // 本地模型已下载状态（下载成功后由本页面写入配置，切换回来即不再显示下载按钮）
+  form.ragLocalDownloaded = cfg.rag?.embeddingModel?.downloaded === true
   form.ragEmbedBaseUrl = cfg.rag?.embeddingModel?.baseUrl || ''
   const ragKey = cfg.rag?.embeddingModel?.apiKey || ''
   form.ragEmbedApiKey = ragKey.length > 3 ? '***' + ragKey.slice(-3) : ragKey
   form.ragOcrEngine = cfg.rag?.ocrEngine === 'markitdown' ? 'markitdown' : 'docling'
+  // 记录已保存的 Embedding 配置，用于判断用户是否切换了模型
+  savedEmbedType = form.ragEmbedType
+  savedEmbedModel = form.ragEmbedModel
 }
 
 // ---------- 快捷键录制 ----------
@@ -613,10 +669,14 @@ async function saveAll() {
     { path: 'agent.ocrEngine', value: form.agentOcrEngine === 'docling' ? 'docling' : 'markitdown' },
     { path: 'rag.autoEmbedding', value: !!form.ragAutoEmbedding },
     { path: 'rag.embeddingModel.type', value: form.ragEmbedType === 'remote' ? 'remote' : 'local' },
-    { path: 'rag.embeddingModel.model', value: form.ragEmbedModel.trim() },
     { path: 'rag.embeddingModel.baseUrl', value: form.ragEmbedBaseUrl.trim() },
     { path: 'rag.ocrEngine', value: form.ragOcrEngine === 'markitdown' ? 'markitdown' : 'docling' },
   ]
+  // 本地模式的模型名由智能下载写入（downloadModel 内即时落盘），保存时不覆盖；
+  // 仅远程模式允许用户自定义模型名
+  if (form.ragEmbedType === 'remote') {
+    patches.push({ path: 'rag.embeddingModel.model', value: form.ragEmbedModel.trim() })
+  }
   // 远程模式下才写入 embedding apiKey（非掩码时）；本地模式清空
   if (form.ragEmbedType === 'remote' && !String(form.ragEmbedApiKey).startsWith('***')) {
     patches.push({ path: 'rag.embeddingModel.apiKey', value: form.ragEmbedApiKey.trim() })
@@ -726,6 +786,78 @@ async function testConnection() {
   }
 }
 
+// 下载逻辑不依赖组件实例：await 的 Promise 由模块级函数持有，
+// 即使下载中途切换 tab 导致本组件卸载，完成后仍会写回模块级单例状态并落盘配置
+async function downloadModel() {
+  if (downloading.value) return
+  downloading.value = true
+  downloadResult.value = null
+  try {
+    const res = await downloadEmbeddingModel()
+    // 下载成功：把实际下载的模型名与已下载状态写入配置（config.user.json），
+    // 下次进入设置页读到 downloaded=true 即不再显示下载按钮
+    const patchRes = await api.setConfigMany([
+      { path: 'rag.embeddingModel.model', value: res.model || '' },
+      { path: 'rag.embeddingModel.localPath', value: res.path || '' },
+      { path: 'rag.embeddingModel.downloaded', value: true },
+    ])
+    if (!patchRes.success) {
+      downloadResult.value = { ok: false, text: `模型已下载但写入配置失败：${patchRes.message || ''}` }
+      return
+    }
+    form.ragEmbedModel = res.model || form.ragEmbedModel
+    savedEmbedModel = form.ragEmbedModel // 模型已落盘，同步切换基线
+    form.ragLocalDownloaded = true
+    downloadResult.value = { ok: true, text: `下载完成 ✓ ${res.model || ''}` }
+    showToast('模型下载完成 ✓')
+  } catch (e) {
+    downloadResult.value = { ok: false, text: `下载失败：${e.message}` }
+  } finally {
+    downloading.value = false
+  }
+}
+
+// 清除已下载状态并重新走智能下载（例如更换显卡后想升级到大模型）
+async function redownloadModel() {
+  if (downloading.value) return
+  if (!confirm('确定要清除已下载状态并重新下载模型吗？（本地缓存的模型文件不会被删除）')) return
+  const res = await api.setConfig('rag.embeddingModel.downloaded', false)
+  if (!res.success) return showToast('清除下载状态失败: ' + (res.message || ''))
+  form.ragLocalDownloaded = false
+  await downloadModel()
+}
+
+// ---------- Embedding 模型切换确认 ----------
+function onEmbedTypeChange() {
+  if (form.ragEmbedType === savedEmbedType) return
+  embedPendingChange.value = { kind: 'type', value: form.ragEmbedType }
+  showEmbedConfirm.value = true
+}
+
+function onEmbedModelChange() {
+  if (form.ragEmbedModel === savedEmbedModel) return
+  embedPendingChange.value = { kind: 'model', value: form.ragEmbedModel }
+  showEmbedConfirm.value = true
+}
+
+// 取消：回滚为已保存的模型配置
+function cancelEmbedChange() {
+  const pending = embedPendingChange.value
+  if (pending?.kind === 'type') form.ragEmbedType = savedEmbedType
+  else if (pending?.kind === 'model') form.ragEmbedModel = savedEmbedModel
+  showEmbedConfirm.value = false
+  embedPendingChange.value = null
+}
+
+// 确认：保留新值，并同步基线，避免重复弹窗
+function confirmEmbedChange() {
+  const pending = embedPendingChange.value
+  if (pending?.kind === 'type') savedEmbedType = form.ragEmbedType
+  else if (pending?.kind === 'model') savedEmbedModel = form.ragEmbedModel
+  showEmbedConfirm.value = false
+  embedPendingChange.value = null
+}
+
 function togglePreview() {
   if (preview.value) {
     preview.value = ''
@@ -738,6 +870,14 @@ function togglePreview() {
 onMounted(() => {
   loadConfig()
   connect()
+  // 知识库页「前往下载模型」跳转过来时，滚动定位到模型下载区域
+  if (route.hash === '#rag-model') {
+    nextTick(() => {
+      setTimeout(() => {
+        document.getElementById('rag-model')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 300)
+    })
+  }
   on('prompt.preview.result', (p) => { preview.value = p.prompt })
   // 快捷键注册结果：主进程注册/重注册后经 shortcut-status 广播
   api.onShortcutStatus?.((p) => {
