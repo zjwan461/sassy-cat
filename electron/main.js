@@ -19,6 +19,9 @@ let pythonProcess = null;
 let isRunning = false;
 let envChecker = null;
 let pythonPath = null;
+let pythonStartTime = null;
+let pythonStderrBuffer = '';
+let pythonEverReady = false; // 本次启动是否收到过 [READY] 信号
 
 // Agent 服务信息（由 Python [READY] 信号解析得到）
 let agentInfo = { ready: false, port: null };
@@ -242,6 +245,7 @@ function handleProtocolLine(line) {
     } catch (e) {
       agentInfo = { ready: true, port: null };
     }
+    pythonEverReady = true; // 标记已收到就绪信号
     console.log('[main] agent ready, port =', agentInfo.port);
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
@@ -283,6 +287,11 @@ function startPythonService() {
   if (isRunning) {
     return { success: false, message: '服务已在运行中' };
   }
+
+  // 重置错误输出缓冲
+  pythonStderrBuffer = '';
+  pythonStartTime = Date.now();
+  pythonEverReady = false; // 重置就绪标记
 
   try {
     let pyPath = pythonPath;
@@ -339,16 +348,15 @@ function startPythonService() {
     pythonProcess.stdout.on('data', (data) => {
       handleOutput(data.toString());
     });
-    // 进程退出时冲刷残留缓冲
-    pythonProcess.on('close', () => {
-      if (stdoutBuffer.trim()) {
-        handleProtocolLine(stdoutBuffer.trim());
-        stdoutBuffer = '';
-      }
-    });
-
     pythonProcess.stderr.on('data', (data) => {
-      handleOutput(data.toString());
+      const text = data.toString();
+      // 收集 stderr 输出用于错误诊断
+      pythonStderrBuffer += text;
+      // 限制缓冲大小，防止内存溢出
+      if (pythonStderrBuffer.length > 50000) {
+        pythonStderrBuffer = pythonStderrBuffer.slice(-50000);
+      }
+      handleOutput(text);
     });
 
     pythonProcess.on('error', (err) => {
@@ -358,9 +366,19 @@ function startPythonService() {
         mainWindow.webContents.send('status-update', { running: false });
       }
       pushLog('error', `进程启动失败: ${err.message}`);
+      // 弹出错误对话框
+      showPythonStartError(`无法启动 Python 进程: ${err.message}`, '');
     });
 
-    pythonProcess.on('exit', (code, signal) => {
+    // close 事件在 exit 之后、所有 stdio 流关闭后触发，此时 stderr 数据已完整
+    pythonProcess.on('close', (code, signal) => {
+      // 冲刷残留缓冲
+      if (stdoutBuffer.trim()) {
+        handleProtocolLine(stdoutBuffer.trim());
+        stdoutBuffer = '';
+      }
+      
+      const wasRunning = isRunning;
       isRunning = false;
       pythonProcess = null;
       updateTrayMenu();
@@ -368,12 +386,114 @@ function startPythonService() {
         mainWindow.webContents.send('status-update', { running: false });
       }
       pushLog('info', `进程已退出 (code: ${code}, signal: ${signal})`);
+      
+      // 检测是否为启动失败：非零退出码且从未收到 [READY] 信号
+      const isStartupFailure = code !== 0 && code !== null && !pythonEverReady;
+      
+      if (isStartupFailure) {
+        const errorMsg = `Python 服务启动失败 (退出码: ${code})`;
+        const detailMsg = pythonStderrBuffer.trim() || '请检查 Python 环境和依赖是否完整。';
+        pushLog('error', errorMsg);
+        // 延迟弹出对话框，确保 UI 已就绪
+        setTimeout(() => {
+          showPythonStartError(errorMsg, detailMsg);
+        }, 500);
+      }
     });
 
     return { success: true, message: '服务启动中...' };
   } catch (error) {
     return { success: false, message: `启动失败: ${error.message}` };
   }
+}
+
+// 从 Python traceback 中提取关键错误信息并生成友好提示
+function parsePythonError(stderr) {
+  if (!stderr) return { title: 'Python 服务启动失败', hint: '请检查 Python 环境和依赖是否完整。' };
+
+  const lines = stderr.split(/\r?\n/);
+  // 找最后一行非空行（通常是错误类型和消息）
+  let lastLine = '';
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].trim()) {
+      lastLine = lines[i].trim();
+      break;
+    }
+  }
+
+  // 常见错误的友好映射
+  const friendlyHints = [
+    {
+      match: /DLL load failed.*找不到指定的模块/i,
+      title: '缺少 VC++ 运行环境',
+      hint: '请安装 Microsoft Visual C++ Redistributable 2015-2022。\n下载地址: https://aka.ms/vs/17/release/vc_redist.x64.exe'
+    },
+    {
+      match: /ModuleNotFoundError.*No module named '([^']+)'/i,
+      title: '缺少 Python 依赖',
+      hint: (m) => `缺少模块: ${m[1]}\n请在终端中运行: pip install ${m[1]}`
+    },
+    {
+      match: /ImportError.*cannot import name '([^']+)'/i,
+      title: 'Python 依赖导入失败',
+      hint: (m) => `无法导入: ${m[1]}\n请检查依赖版本是否兼容。`
+    },
+    {
+      match: /PermissionError/i,
+      title: '权限不足',
+      hint: '请以管理员身份运行程序。'
+    },
+    {
+      match: /FileNotFoundError/i,
+      title: '文件未找到',
+      hint: '请检查程序安装路径是否完整。'
+    },
+    {
+      match: /ConnectionRefusedError|ECONNREFUSED/i,
+      title: '无法连接服务',
+      hint: '请检查网络设置或防火墙配置。'
+    },
+  ];
+
+  for (const rule of friendlyHints) {
+    const m = lastLine.match(rule.match);
+    if (m) {
+      const hint = typeof rule.hint === 'function' ? rule.hint(m) : rule.hint;
+      return { title: rule.title, hint };
+    }
+  }
+
+  // 未匹配到已知模式，显示最后一行错误
+  return {
+    title: 'Python 服务启动失败',
+    hint: lastLine || '请检查 Python 环境和依赖是否完整。'
+  };
+}
+
+// 显示 Python 启动错误对话框
+function showPythonStartError(title, detail) {
+  console.error('[Python Error]', title, detail);
+
+  // 尝试在主窗口显示错误（如果窗口已创建）
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('python-start-error', { title, detail });
+  }
+
+  // 从 traceback 中提取友好的错误提示
+  const { title: friendlyTitle, hint: friendlyHint } = parsePythonError(detail);
+
+  // 优先使用异步 showMessageBox（模态对话框，带父窗口关联）
+  const parent = (mainWindow && !mainWindow.isDestroyed()) ? mainWindow : undefined;
+  dialog.showMessageBox(parent, {
+    type: 'error',
+    title: friendlyTitle,
+    message: friendlyTitle,
+    detail: friendlyHint,
+    buttons: ['确定']
+  }).catch(() => {
+    // 异步调用失败时回退到 showErrorBox
+    dialog.showErrorBox(friendlyTitle, friendlyHint);
+  });
 }
 
 // 停止Python服务
