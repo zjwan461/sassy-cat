@@ -6,11 +6,15 @@ import Logs from './views/Logs.vue'
 import About from './views/About.vue'
 import ChatView from './views/ChatView.vue'
 import Settings from './views/Settings.vue'
+import KnowledgeBase from './views/KnowledgeBase.vue'
+import KnowledgeBaseDetail from './views/KnowledgeBaseDetail.vue'
 import './styles.css'
 
 const routes = [
   { path: '/', component: Dashboard },
   { path: '/chat', component: ChatView },
+  { path: '/kb', component: KnowledgeBase },
+  { path: '/kb/:kbId', component: KnowledgeBaseDetail },
   { path: '/logs', component: Logs },
   { path: '/settings', component: Settings },
   { path: '/about', component: About }

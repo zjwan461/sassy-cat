@@ -19,6 +19,7 @@ from proactive import reminder_runner, scheduler
 from server.bus import hub
 from server.protocol import envelope
 from server.ws_agent import ws_agent_endpoint
+from server.kb_api import router as kb_router
 from server.db import init_db as init_message_db, close_db as close_message_db
 from server.db import get_messages_by_session
 
@@ -121,6 +122,8 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.exception(f"查询历史消息失败: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+    app.include_router(kb_router)
 
     @app.websocket("/ws/agent")
     async def ws_agent(websocket: WebSocket):

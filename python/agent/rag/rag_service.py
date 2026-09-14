@@ -422,6 +422,40 @@ class RAGService:
             ))
         return docs
 
+    def get_chunks_page(
+        self,
+        where: Dict[str, Any],
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[List[Document], int]:
+        """
+        按 metadata 条件分页拉取文档分块（非语义搜索，用于流式展示）
+
+        Args:
+            where: Chroma where 过滤条件，如 {"kb_id": "xxx"}
+            offset: 偏移量
+            limit: 每页数量
+
+        Returns:
+            (文档分块列表, 满足条件的总数)
+        """
+        self._ensure_embeddings()
+        collection = self.vector_store._collection
+        total = len(collection.get(where=where, include=[])["ids"])
+        results = collection.get(
+            where=where, limit=limit, offset=offset,
+            include=["documents", "metadatas"],
+        )
+        docs: List[Document] = []
+        if results and results["ids"]:
+            for i, doc_id in enumerate(results["ids"]):
+                docs.append(Document(
+                    page_content=results["documents"][i],
+                    metadata=results["metadatas"][i] if results.get("metadatas") else {},
+                    id=doc_id,
+                ))
+        return docs, total
+
     def count(self) -> int:
         """返回当前集合中的文档总数"""
         self._ensure_embeddings()

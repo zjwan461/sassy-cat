@@ -15,7 +15,7 @@
           :key="item.label"
           :to="item.path"
           class="nav-item"
-          :class="{ disabled: item.disabled, active: !item.disabled && route.path === item.path }"
+          :class="{ disabled: item.disabled, active: !item.disabled && isMenuActive(item.path) }"
         >
           <span class="nav-icon">{{ item.icon }}</span>
           <span class="nav-label">{{ item.label }}</span>
@@ -39,6 +39,12 @@ import logoUrl from '../assets/icon.png'
 const route = useRoute()
 const router = useRouter()
 const { state: socketState, connect, setPort } = useAgentSocket()
+
+// 菜单高亮：/kb 及其子路径（/kb/:kbId）均视为选中"知识库"
+function isMenuActive(path) {
+  if (path === '/') return route.path === '/'
+  return route.path === path || route.path.startsWith(path + '/')
+}
 
 // ---------- 启动 loading 消除 ----------
 // 就绪判定：WebSocket 首次连通（Agent/WS 服务已就绪）即淡出移除全屏 loading；
@@ -91,6 +97,7 @@ onBeforeUnmount(() => {
 const menuItems = [
   { path: '/', label: '系统监控', icon: '📊', disabled: false },
   { path: '/chat', label: 'AI 聊天', icon: '💬', disabled: false },
+  { path: '/kb', label: '知识库', icon: '📚', disabled: false },
   { path: '/logs', label: '日志', icon: '📋', disabled: false },
   { path: '/settings', label: '设置', icon: '🐟', disabled: false },
   { path: '/about', label: '关于', icon: 'ℹ️', disabled: false }
