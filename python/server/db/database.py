@@ -55,6 +55,7 @@ _LEGACY_BUSINESS_TABLES = {
     "attachments",
     "knowledge_bases",
     "kb_documents",
+    "conversations",
 }
 
 # 旧库 schema 对应的基线迁移版本：

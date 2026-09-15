@@ -25,7 +25,7 @@ export const chat = reactive({
   hasMore: true,
 })
 
-// 会话列表（元数据来自服务端 conversations.json，按 updatedAt 倒序）
+// 会话列表（元数据来自服务端 SQLite conversations 表，按 updatedAt 倒序）
 export const conv = reactive({
   list: [],
   loading: false

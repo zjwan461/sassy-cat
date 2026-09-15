@@ -50,7 +50,11 @@ def _alembic_version() -> str | None:
 
 
 def make_legacy_db() -> None:
-    """模拟旧库：用 create_all 建出 0001 时代的四张表（不含 system_meta，无 alembic_version）"""
+    """模拟旧库：建出 0001 时代的四张表（不含 system_meta，无 alembic_version）。
+
+    注意 kb_documents 用 0001 原始 schema（无 file_path 列，该列由 0003 迁移补加），
+    因此不能直接用当前 Base.metadata 建表。
+    """
     from sqlalchemy import create_engine
     from server.db.models import Base
 
@@ -59,11 +63,39 @@ def make_legacy_db() -> None:
         Base.metadata.tables["messages"],
         Base.metadata.tables["attachments"],
         Base.metadata.tables["knowledge_bases"],
-        Base.metadata.tables["kb_documents"],
     ]
     for t in legacy_tables:
         t.create(engine)
     engine.dispose()
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE kb_documents (
+                id VARCHAR NOT NULL,
+                kb_id VARCHAR NOT NULL,
+                file_name VARCHAR NOT NULL,
+                file_ext VARCHAR,
+                file_size INTEGER,
+                status VARCHAR NOT NULL,
+                error TEXT,
+                chunk_count INTEGER,
+                created_at BIGINT NOT NULL,
+                PRIMARY KEY (id),
+                FOREIGN KEY(kb_id) REFERENCES knowledge_bases (id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX ix_kb_documents_kb_id ON kb_documents (kb_id)"
+        )
+        conn.execute(
+            "CREATE INDEX idx_kb_documents_kb ON kb_documents (kb_id, created_at)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 async def main() -> int:
@@ -79,8 +111,8 @@ async def main() -> int:
     tables = _tables()
     print("tables:", sorted(tables))
     assert {"messages", "attachments", "knowledge_bases", "kb_documents",
-            "system_meta", "alembic_version"} <= tables, "新库表结构不完整"
-    assert _alembic_version() == "0002_system_meta", f"version={_alembic_version()}"
+            "conversations", "system_meta", "alembic_version"} <= tables, "新库表结构不完整"
+    assert _alembic_version() == "0004_conversations", f"version={_alembic_version()}"
 
     # 验证 seed 数据
     async with get_session() as session:
@@ -106,7 +138,8 @@ async def main() -> int:
     tables = _tables()
     print("tables:", sorted(tables))
     assert "system_meta" in tables, "旧库升级后应补出 system_meta"
-    assert _alembic_version() == "0002_system_meta", f"version={_alembic_version()}"
+    assert "conversations" in tables, "旧库升级后应补出 conversations"
+    assert _alembic_version() == "0004_conversations", f"version={_alembic_version()}"
     async with get_session() as session:
         row = (await session.execute(
             select(SystemMeta).where(SystemMeta.key == "schema_seed_version")

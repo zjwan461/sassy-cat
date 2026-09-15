@@ -460,7 +460,7 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
 
     # 会话以服务端激活项为唯一权威：客户端携带的 sessionId 可能是切换前的过期值
     # （桌宠窗口长期存活，最容易踩到），采信它会把消息写进错误线程
-    session_id = conversations.active_id()
+    session_id = await conversations.active_id()
     # 房间对齐：连接所在房间与实际会话不一致时迁移，否则本轮 chat.* 事件 fan-out 收不到
     if room_ref is not None and room_ref.get("id") != session_id:
         await hub.leave(room_ref.get("id"), ws)
@@ -468,11 +468,11 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
         room_ref["id"] = session_id
 
     # 新会话首条消息：截断生成标题并刷新列表（auto_title 仅在真实改名时返回）
-    if conversations.auto_title(session_id, content) is not None:
+    if await conversations.auto_title(session_id, content) is not None:
         await hub.publish_all(
-            envelope("conv.list.result", {"items": conversations.list_sorted()})
+            envelope("conv.list.result", {"items": await conversations.list_sorted()})
         )
-    conversations.touch(session_id)
+    await conversations.touch(session_id)
     cancel = threading.Event()
     # 同一 session 已有进行中的轮次 -> 先取消
     old = _session_cancel.get(session_id)
@@ -528,7 +528,7 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
 
 async def _handle_tool_confirm(ws, payload: dict):
     # 与 chat.send 一致：以服务端激活会话为权威（确认卡必然属于当前激活对话）
-    session_id = conversations.active_id()
+    session_id = await conversations.active_id()
     msg_id = payload.get("msgId")
     # 新协议：前端直接发送 decisions 数组
     decisions = payload.get("decisions")
@@ -607,13 +607,14 @@ async def _handle_conv(ws, mtype: str, payload: dict, room_ref: dict):
     """conv.* 会话管理消息路由。room_ref 持有本连接的房间 id（可变，支持切换后迁移）。"""
     if mtype == "conv.list":
         await _send(
-            ws, envelope("conv.list.result", {"items": conversations.list_sorted()})
+            ws,
+            envelope("conv.list.result", {"items": await conversations.list_sorted()}),
         )
     elif mtype == "conv.create":
-        conv = conversations.create()
+        conv = await conversations.create()
         await _activate_room(conv, room_ref)
     elif mtype == "conv.activate":
-        conv = conversations.set_active(payload.get("id") or "")
+        conv = await conversations.set_active(payload.get("id") or "")
         if conv is None:
             await _send(
                 ws, envelope("error", {"message": f"会话不存在: {payload.get('id')}"})
@@ -621,26 +622,28 @@ async def _handle_conv(ws, mtype: str, payload: dict, room_ref: dict):
             return
         await _activate_room(conv, room_ref)
     elif mtype == "conv.rename":
-        conv = conversations.rename(payload.get("id") or "", payload.get("title") or "")
+        conv = await conversations.rename(
+            payload.get("id") or "", payload.get("title") or ""
+        )
         if conv is None:
             await _send(
                 ws, envelope("error", {"message": f"会话不存在: {payload.get('id')}"})
             )
             return
         await hub.publish_all(
-            envelope("conv.list.result", {"items": conversations.list_sorted()})
+            envelope("conv.list.result", {"items": await conversations.list_sorted()})
         )
     elif mtype == "conv.delete":
         cid = payload.get("id") or ""
-        removed = conversations.delete(cid)
+        removed = await conversations.delete(cid)
         if not removed:
             await _send(ws, envelope("error", {"message": f"会话不存在: {cid}"}))
             return
         # 删除的是激活会话：active_id() 已自动回退，广播让所有窗口跟随切换
         await hub.publish_all(
-            envelope("conv.list.result", {"items": conversations.list_sorted()})
+            envelope("conv.list.result", {"items": await conversations.list_sorted()})
         )
-        active = conversations.get(conversations.active_id())
+        active = await conversations.get(await conversations.active_id())
         if active:
             await _activate_room(active, room_ref)
 
@@ -663,7 +666,7 @@ async def ws_agent_endpoint(ws: WebSocket):
     client = ws.query_params.get("client", "main")
     # 一律加入"当前激活会话"房间（服务端为权威）：客户端 query 里的 sessionId 可能是
     # 切换前的过期值，采信它会让连接落入无人认领的房间、收不到 chat.* 广播
-    session_id = conversations.active_id()
+    session_id = await conversations.active_id()
     room_ref = {"id": session_id}  # 可变引用：conv.activate 后房间随之迁移
     if client != "system":
         await hub.join(session_id, ws)

@@ -7,13 +7,15 @@
 运行时机与顺序在此维护。
 """
 
+import json
 import logging
+import os
 import time
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from server.db.database import get_session
-from server.db.models import KnowledgeBase, SystemMeta
+from server.db.models import Conversation, KnowledgeBase, SystemMeta
 
 logger = logging.getLogger(__name__)
 
@@ -89,13 +91,72 @@ async def seed_default_kb() -> None:
         logger.info(f"seed: 已创建默认知识库 id={DEFAULT_KB_ID}")
 
 
+async def seed_import_conversations() -> None:
+    """一次性导入旧 conversations.json 的会话元数据到 conversations 表。
+
+    幂等策略：仅当 conversations 表为空且旧文件存在时执行导入；
+    导入成功后把旧文件改名为 conversations.json.imported.bak，
+    之后启动不再触碰。文件缺失/损坏则跳过（业务侧会自动铺底默认会话）。
+    """
+    import paths
+    from server.conversations import ACTIVE_KEY
+
+    json_path = paths.data_path("conversations.json")
+    if not os.path.isfile(json_path):
+        return  # 无旧数据（新装或已导入过）
+
+    async with get_session() as session:
+        count = (
+            await session.execute(select(func.count()).select_from(Conversation))
+        ).scalar() or 0
+        if count > 0:
+            return  # 表已有数据，不重复导入
+
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"旧 conversations.json 解析失败，跳过导入: {e}")
+            return
+
+        convs = raw.get("conversations") if isinstance(raw, dict) else None
+        if not convs:
+            os.replace(json_path, json_path + ".imported.bak")
+            logger.info("seed: 旧 conversations.json 为空，已改名归档")
+            return
+
+        now = _now_ms()
+        for c in convs:
+            cid = c.get("id")
+            if not cid:
+                continue
+            session.add(
+                Conversation(
+                    id=cid,
+                    title=c.get("title") or "新对话",
+                    created_at=c.get("createdAt") or now,
+                    updated_at=c.get("updatedAt") or now,
+                )
+            )
+        active_id = raw.get("activeId")
+        valid_ids = {c.get("id") for c in convs if c.get("id")}
+        if active_id in valid_ids:
+            session.add(
+                SystemMeta(key=ACTIVE_KEY, value=active_id, updated_at=now)
+            )
+        await session.commit()
+
+        os.replace(json_path, json_path + ".imported.bak")
+        logger.info(f"seed: 已导入旧会话 {len(convs)} 条，conversations.json 归档为 .imported.bak")
+
+
 async def run_seeds() -> None:
     """执行全部 seed（在 migration 之后调用）。
 
     每个 seed 独立 try/except：单个失败只记 error 不阻断启动，
     避免初始化数据问题导致整个服务起不来。
     """
-    seeds = [seed_system_meta, seed_default_kb]
+    seeds = [seed_system_meta, seed_default_kb, seed_import_conversations]
     for seed in seeds:
         try:
             await seed()
