@@ -9,7 +9,14 @@
   "agent": {
     "memoryWindow": 50,
     "recursionLimit": 50,
-    "ocrEngine": "markitdown"
+    "ocrEngine": "markitdown",
+    "interruptOn": {
+      "run_command": true,
+      "run_python": true,
+      "write_file": true,
+      "edit_file": true,
+      "delete": true
+    }
   },
   "rag": {
     "autoEmbedding": true,

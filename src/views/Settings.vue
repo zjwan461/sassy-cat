@@ -121,6 +121,19 @@
           </select>
           <span class="hint">Agent 对话中解析上传文档所使用的引擎，默认 MarkItDown</span>
         </div>
+        <div class="field">
+          <label>高危操作人工确认（Interrupt）</label>
+          <div class="interrupt-grid">
+            <label v-for="t in interruptTools" :key="t.name" class="check">
+              <input type="checkbox" v-model="form.interruptOn[t.name]" /> {{ t.label }}
+            </label>
+          </div>
+          <div class="actions">
+            <button class="mini" type="button" @click="setAllInterrupt(true)">全部打断</button>
+            <button class="mini" type="button" @click="setAllInterrupt(false)">全部放行</button>
+          </div>
+          <span class="hint">勾选的工具在 Agent 执行前会中断并等待你确认（同意/拒绝）；取消勾选则直接放行自动执行</span>
+        </div>
         <div class="actions">
           <button class="btn" @click="togglePreview">{{ preview ? '隐藏完整提示词' : '预览完整提示词' }}</button>
           <button class="btn" @click="resetPersona">恢复默认人设</button>
@@ -352,9 +365,17 @@ const { downloading, result: downloadResult } = useModelDownloadState()
 const activeProfile = ref('default')
 const profiles = ref({})
 const activeAgentProfile = ref('default')
-const agentProfiles = ref({})
 // 提醒气泡显示时长可选值（秒），范围 3~30
 const reminderDurationOptions = [3, 5, 8, 10, 15, 20, 30]
+// 高危工具人工确认清单（与 Python agent/engine.py 的 interrupt_on 工具集对应）
+const interruptTools = [
+  { name: 'run_command', label: '执行命令（run_command）' },
+  { name: 'run_python', label: '执行 Python（run_python）' },
+  { name: 'write_file', label: '写入文件（write_file）' },
+  { name: 'edit_file', label: '编辑文件（edit_file）' },
+  { name: 'delete', label: '删除文件（delete）' },
+]
+const defaultInterruptOn = () => Object.fromEntries(interruptTools.map((t) => [t.name, true]))
 const form = reactive({
   provider: 'openai', baseUrl: '', apiKey: '', model: '', extraParamsText: '{}',
   persona: '', memoryWindow: 50, recursionLimit: 50, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
@@ -362,6 +383,7 @@ const form = reactive({
   reminderPoll: 5, reminderDuration: 8,
   tavilyApiKey: '',
   agentOcrEngine: 'markitdown',
+  interruptOn: defaultInterruptOn(),
   ragAutoEmbedding: true, ragEmbedType: 'local', ragEmbedModel: 'BAAI/bge-small-zh-v1.5',
   ragEmbedBaseUrl: '', ragEmbedApiKey: '', ragOcrEngine: 'docling',
   ragLocalDownloaded: false,
@@ -433,14 +455,24 @@ function step(key, delta, min, max) {
   form[key] = Math.min(max, Math.max(min, base + delta))
 }
 
+// 高危操作确认：一键全部打断 / 全部放行
+function setAllInterrupt(value) {
+  for (const t of interruptTools) form.interruptOn[t.name] = value
+}
+
 async function loadConfig() {
   const res = await api.getConfig()
   if (!res.success) return showToast('配置加载失败')
   const cfg = res.config
-  profiles.value = cfg.llm?.profiles || { default: { label: '默认' } }
+  // profiles 必须是包含条目的普通对象才有效（用户配置可能因 deepMerge 类型冲突导致 profiles 丢失）
+  const isValidProfiles = (p) => p && typeof p === 'object' && !Array.isArray(p) && Object.keys(p).length > 0
+  profiles.value = isValidProfiles(cfg.llm?.profiles) ? cfg.llm.profiles : { default: { label: '默认' } }
   activeProfile.value = cfg.llm?.activeProfile || 'default'
-  agentProfiles.value = cfg.agent?.profiles || { default: { label: '默认' } }
+  agentProfiles.value = isValidProfiles(cfg.agent?.profiles) ? cfg.agent.profiles : { default: { label: '默认' } }
   activeAgentProfile.value = cfg.agent?.activeProfile || 'default'
+  // 若当前 active profile 不存在于 profiles 中，回退到 default
+  if (!profiles.value[activeProfile.value]) activeProfile.value = 'default'
+  if (!agentProfiles.value[activeAgentProfile.value]) activeAgentProfile.value = 'default'
   fillFormFromProfile()
   form.idleEnabled = cfg.pet?.idleReminder?.enabled !== false
   form.idleThreshold = cfg.pet?.idleReminder?.thresholdMinutes ?? 30
@@ -462,6 +494,11 @@ async function loadConfig() {
   form.tavilyApiKey = tavilyKey.length > 3 ? '***' + tavilyKey.slice(-3) : tavilyKey
   // 对话 OCR 引擎
   form.agentOcrEngine = cfg.agent?.ocrEngine === 'docling' ? 'docling' : 'markitdown'
+  // 高危操作人工确认：缺省视为打断（与后端默认一致）
+  const interruptOn = cfg.agent?.interruptOn || {}
+  form.interruptOn = Object.fromEntries(
+    interruptTools.map((t) => [t.name, interruptOn[t.name] !== false])
+  )
   // 知识库（RAG）
   form.ragAutoEmbedding = cfg.rag?.autoEmbedding !== false
   form.ragEmbedType = cfg.rag?.embeddingModel?.type === 'remote' ? 'remote' : 'local'
@@ -667,6 +704,7 @@ async function saveAll() {
     { path: 'network.proxy.https', value: form.proxyHttps.trim() },
     { path: 'network.proxy.noProxy', value: form.proxyNoProxy.trim() },
     { path: 'agent.ocrEngine', value: form.agentOcrEngine === 'docling' ? 'docling' : 'markitdown' },
+    { path: 'agent.interruptOn', value: { ...form.interruptOn } },
     { path: 'rag.autoEmbedding', value: !!form.ragAutoEmbedding },
     { path: 'rag.embeddingModel.type', value: form.ragEmbedType === 'remote' ? 'remote' : 'local' },
     { path: 'rag.embeddingModel.baseUrl', value: form.ragEmbedBaseUrl.trim() },
@@ -918,6 +956,9 @@ onMounted(() => {
 .card-body { padding: 18px 20px; }
 .form .field { margin-bottom: 14px; display: flex; flex-direction: column; gap: 6px; }
 .form.inline { display: flex; gap: 26px; align-items: center; flex-wrap: wrap; }
+.interrupt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 18px; }
+.interrupt-grid .check { color: #cbd5e1; font-size: 14px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.interrupt-grid .check input { accent-color: #6366f1; width: 16px; height: 16px; }
 .form.inline label { color: #94a3b8; font-size: 14px; display: flex; align-items: center; gap: 8px; }
 label { color: #94a3b8; font-size: 13px; }
 input, select, textarea { background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #e2e8f0; padding: 9px 12px; font-size: 14px; font-family: inherit; }

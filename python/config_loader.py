@@ -43,6 +43,15 @@ DEFAULTS = {
         "maxToolRounds": 10,
         "tavilyApiKey": "",  # Tavily 网络搜索 API Key
         "ocrEngine": "markitdown",  # agent对话时的ocr引擎，默认markitdown(快速),可选docling(更精细可识图)
+        # 高危工具人工确认策略：true=执行前打断等待用户确认，false=直接放行
+        # 见 agent/engine.py（构建 deep agent 时作为 interrupt_on 传入）
+        "interruptOn": {
+            "run_command": True,
+            "run_python": True,
+            "write_file": True,
+            "edit_file": True,
+            "delete": True,
+        },
     },
     "server": {
         "wsPort": 8790,

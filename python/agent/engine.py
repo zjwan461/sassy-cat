@@ -113,6 +113,9 @@ class AgentHolder:
         profile = cfg.active_llm_profile()
         llm = build_chat_llm(profile)
         system_prompt = build_system_prompt(cfg.active_agent_config().get("persona", ""))
+        # 高危工具人工确认策略（agent.interruptOn，可在设置页配置）：
+        # true = 执行前打断等待用户确认；false = 直接放行
+        interrupt_on = cfg.get("agent.interruptOn") or {}
         # 共享持久层单例：未显式 init_db 时惰性初始化（如 CLI 调试入口）
         agent = create_deep_agent(
             name="SassyCat",
@@ -129,13 +132,7 @@ class AgentHolder:
                 complete_reminder,
                 cancel_reminder,
             ],
-            interrupt_on={
-                "run_command": True,
-                "run_python": True,
-                "write_file": True,
-                "edit_file": True,
-                "delete": True,
-            },
+            interrupt_on=interrupt_on,
             backend=FilesystemBackend(root_dir=WORK_DIR, virtual_mode=True),
             checkpointer=get_checkpointer(),
             system_prompt=system_prompt,
