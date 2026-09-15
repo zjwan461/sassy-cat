@@ -992,7 +992,23 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: #6366f1
 .mini { background: #334155; border: none; color: #cbd5e1; border-radius: 8px; padding: 0 14px; cursor: pointer; }
 .hint { font-size: 12px; color: #64748b; }
 .hint.bad { color: #f87171; }
-.global-actions { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
+/* 悬浮操作条：sticky 相对 .content 滚动容器；top 负值抵消其 32px 上内边距，滚动时真正贴住画面最顶端 */
+.global-actions {
+  position: sticky;
+  top: -32px;
+  z-index: 40;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(8px);
+  border: 1px solid #334155;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
 .actions { display: flex; gap: 10px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
 .btn { background: #334155; border: none; color: #e2e8f0; border-radius: 9px; padding: 9px 18px; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
 .btn-check { color: #34d399; font-weight: 700; font-size: 16px; }
