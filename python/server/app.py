@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from agent import engine as agent_engine
 from agent.rag import model_download
+from agent.rag.rag_service import get_rag_service
 from monitor import service as monitor_service
 from ocr.ocr_engine import do_ocr
 from proactive import reminder_runner, scheduler
@@ -23,7 +24,9 @@ from server.protocol import envelope
 from server.ws_agent import ws_agent_endpoint
 from server.kb_api import router as kb_router
 from server.db import init_db as init_message_db, close_db as close_message_db
-from server.db import get_messages_by_session
+from server.db import get_messages_by_session, DEFAULT_KB_ID
+from server.db import kb_repository as kb_repo
+from uuid import uuid4
 import paths
 import utils
 
@@ -100,6 +103,7 @@ def create_app() -> FastAPI:
         if len(file_bytes) > MAX_SIZE:
             raise HTTPException(status_code=413, detail="文件大小超过 20MB 限制")
         # 将收到的文件落盘到 chat 上传目录（文件名做 basename 防路径穿越，重名时加时间戳）
+        save_path = ""  # 落盘失败时为空串，文档记录仍会登记（向量化失败标 error）
         try:
             os.makedirs(chat_upload_dir, exist_ok=True)
             safe_name = os.path.basename(file.filename or "unknown")
@@ -113,16 +117,64 @@ def create_app() -> FastAPI:
             logger.exception(f"保存上传文件失败: {chat_upload_dir}")
         try:
             result = await do_ocr("chat", file.filename or "unknown", file_bytes)
+            markdown = result.get("page_content", "")
+            # 异步后台保存到 default 知识库（OCR 内容自动向量化，供 RAG 检索），不阻塞 OCR 响应
+            asyncio.create_task(save_to_default_kb(
+                content=markdown,
+                file_name=file.filename or "unknown",
+                file_path=save_path,
+                file_ext=os.path.splitext(file.filename or "")[1].lower(),
+                file_size=len(file_bytes),
+            ))
             return {
                 "status": "success",
                 "filename": file.filename,
-                "markdown": result.get("page_content", ""),
+                "markdown": markdown,
             }
         except HTTPException:
             raise
         except Exception as e:
             logger.exception(f"OCR 处理失败: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+    async def save_to_default_kb(content: str, file_name: str, file_path: str, file_ext: str, file_size: int):
+        """将聊天中上传的非图片文件异步保存到 default 知识库（OCR 内容自动向量化，供 RAG 检索）"""
+        try:
+            content = (content or "").strip()
+            if not content:
+                logger.warning(f"聊天文件 OCR 内容为空，跳过默认知识库保存: {file_name}")
+                return
+
+            # 1. 登记文档记录（status=pending），file_path 落库供后续重新向量化使用
+            doc_id = str(uuid4())
+            await kb_repo.add_document(
+                id=doc_id,
+                kb_id=DEFAULT_KB_ID,
+                file_name=file_name,
+                file_ext=file_ext,
+                file_size=file_size,
+                file_path=file_path,
+            )
+
+            # 2. 分块 + embedding 写入向量库（同步阻塞操作放线程池），metadata 携带 kb_id/doc_id
+            await kb_repo.set_document_status(doc_id, "processing")
+            metadata = {
+                "kb_id": DEFAULT_KB_ID,
+                "doc_id": doc_id,
+                "source": file_name,
+            }
+            rag = get_rag_service()
+            ids = await asyncio.to_thread(rag.save_document, content, metadata)
+            if not ids:
+                raise ValueError("文档分块后无有效内容")
+
+            # 3. 更新文档状态，与知识库文档上传流程保持一致
+            await kb_repo.set_document_status(doc_id, "done", chunk_count=len(ids))
+            logger.info(f"聊天文件已保存到默认知识库: doc_id={doc_id}, file={file_name}, chunks={len(ids)}")
+        except Exception as e:
+            # 单篇文档入库失败不应影响 OCR 响应，仅记录日志，前台可在默认知识库中看到 error 状态
+            logger.exception(f"保存聊天文件到默认知识库失败: {e}")
+
         
     @app.post("/api/rag/model/download")
     async def rag_model_download():

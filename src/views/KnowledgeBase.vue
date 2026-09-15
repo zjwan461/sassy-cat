@@ -23,7 +23,11 @@
       >
         <div class="card-top">
           <span class="card-icon">📚</span>
-          <button class="card-del" title="删除知识库" @click.stop="confirmDelete(kb)">✕</button>
+          <!-- 默认知识库不可删除，仅显示标记 -->
+          <span v-if="kb.id === DEFAULT_KB_ID" class="card-badge" title="默认知识库，存放聊天上传文件，不可删除">
+            默认
+          </span>
+          <button v-else class="card-del" title="删除知识库" @click.stop="confirmDelete(kb)">✕</button>
         </div>
         <div class="card-name" :title="kb.name">{{ kb.name }}</div>
         <div class="card-desc">{{ kb.description || '暂无描述' }}</div>
@@ -88,6 +92,9 @@ import { listKbs, createKb, deleteKb } from '../api/kb'
 const router = useRouter()
 const api = window.electronAPI
 
+// 默认知识库 id 固定为 "default"（与后端 server/db/seed.py 的 DEFAULT_KB_ID 保持一致），不可删除
+const DEFAULT_KB_ID = 'default'
+
 const showModelWarn = ref(false)
 
 const kbs = ref([])
@@ -137,6 +144,10 @@ async function submitCreate() {
 }
 
 async function confirmDelete(kb) {
+  if (kb.id === DEFAULT_KB_ID) {
+    alert('默认知识库不可删除')
+    return
+  }
   if (!window.confirm(`确定删除知识库「${kb.name}」？其下所有文档与向量数据将一并删除。`)) return
   try {
     await deleteKb(kb.id)
@@ -276,6 +287,17 @@ onMounted(() => {
 }
 
 .card-icon { font-size: 24px; }
+
+/* 默认知识库标记 */
+.card-badge {
+  background: rgba(79, 70, 229, 0.15);
+  color: #818cf8;
+  border: 1px solid rgba(79, 70, 229, 0.4);
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: default;
+}
 
 .card-del {
   background: transparent;
