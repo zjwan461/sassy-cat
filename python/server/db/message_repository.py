@@ -67,6 +67,7 @@ async def save_message(
                 tool_call_result=json.dumps(tool_call_result, ensure_ascii=False) if tool_call_result else None,
                 usage_metadata=json.dumps(usage_metadata, ensure_ascii=False) if usage_metadata else None,
             )
+            session.add(msg)
             await session.commit()
             logger.debug(f"消息已保存: id={id}, role={role}")
             return True
