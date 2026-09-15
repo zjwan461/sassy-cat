@@ -7,11 +7,13 @@
 """
 
 import logging
+import sqlite3
 import time
 from typing import Optional
 
 from sqlalchemy import select, func, update, delete
 
+import paths
 from server.db.database import get_session
 from server.db.models import KnowledgeBase, KbDocument
 
@@ -94,6 +96,43 @@ async def list_kbs() -> list[dict]:
             d["chunkCount"] = int(chunk_count)
             items.append(d)
         return items
+
+
+def list_kbs_sync() -> list[dict]:
+    """同步列出全部知识库（附带文档数与分块总数），供无法 await 的同步上下文使用。
+
+    场景：wrap_model_call 中间件在模型调用前同步执行，无法 await 异步的
+    list_kbs()，也不能用 asyncio.run()（该线程可能已有运行中的事件循环，
+    如 agent.stream() 内部）。这里用标准库 sqlite3 直读并聚合，只返回
+    注入提示所需的字段。
+    """
+    try:
+        db_path = paths.data_path("messages.sqlite")
+        conn = sqlite3.connect(db_path, timeout=5)
+        try:
+            rows = conn.execute(
+                "SELECT k.id, k.name, k.description, "
+                "COUNT(d.id) AS docCount, "
+                "COALESCE(SUM(d.chunk_count), 0) AS chunkCount "
+                "FROM knowledge_bases k "
+                "LEFT JOIN kb_documents d ON d.kb_id = k.id "
+                "GROUP BY k.id ORDER BY k.created_at DESC"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        logger.exception("同步查询知识库列表失败")
+        return []
+    return [
+        {
+            "id": r[0],
+            "name": r[1],
+            "description": r[2] or "",
+            "docCount": int(r[3] or 0),
+            "chunkCount": int(r[4] or 0),
+        }
+        for r in rows
+    ]
 
 
 async def get_kb(id: str) -> Optional[dict]:

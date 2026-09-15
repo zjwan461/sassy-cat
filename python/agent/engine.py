@@ -19,21 +19,22 @@ from langgraph.store.sqlite import SqliteStore
 import config_loader
 from agent.llms import build_chat_llm
 from agent.prompts import build_system_prompt
-from agent.builtin_tools import (
+from agent.tools.builtin_tools import (
     get_date_time,
     internet_search,
     run_command,
     run_python,
     save_user_info,
 )
-from agent.reminder_tools import (
+from agent.tools.reminder_tools import (
     create_reminder,
     list_reminders,
     complete_reminder,
     cancel_reminder,
 )
+from agent.tools.rag_tools import search_from_kb
 from agent.constant import DB_URL, WORK_DIR
-from agent.middlewares import trim_messages, inject_base_info
+from agent.middlewares import trim_messages, inject_base_info, inject_kb_info
 
 logger = logging.getLogger(__name__)
 
@@ -131,13 +132,16 @@ class AgentHolder:
                 list_reminders,
                 complete_reminder,
                 cancel_reminder,
+                search_from_kb,
             ],
             interrupt_on=interrupt_on,
             backend=FilesystemBackend(root_dir=WORK_DIR, virtual_mode=True),
             checkpointer=get_checkpointer(),
             system_prompt=system_prompt,
             store=get_store(),
-            middleware=[trim_messages, inject_base_info],
+            # 注意顺序：inject_kb_info 必须在 inject_base_info 之后，
+            # 否则 base info 的标记剥离逻辑会丢掉知识库段落
+            middleware=[trim_messages, inject_base_info, inject_kb_info],
         )
         return agent
 

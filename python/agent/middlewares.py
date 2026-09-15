@@ -1,3 +1,5 @@
+import logging
+
 from langchain.agents.middleware import before_model, wrap_model_call
 from langchain.agents import AgentState
 from langgraph.runtime import Runtime
@@ -9,6 +11,9 @@ from typing import Any
 from agent.constant import USER_ID
 from agent.models import OwnerProfile
 from monitor.service import static_info
+from server.db.kb_repository import list_kbs_sync
+
+logger = logging.getLogger(__name__)
 
 
 @before_model
@@ -172,8 +177,61 @@ def inject_base_info(request, handler):
         parts.append(f"{SYSTEM_INFO_MARKER}\n{system_info_text}")
     if software_info_text:
         parts.append(f"{SOFTWARE_MARKER}\n{software_info_text}")
-    
+
     new_content = "\n\n".join(parts) if len(parts) > 1 else base
+
+    if new_content == content:
+        return handler(request)  # 内容无变化，原样透传
+
+    return handler(request.override(system_message=SystemMessage(content=new_content)))
+
+
+# 知识库段分隔标记：用于幂等注入（重建时先剥离旧段再拼新段）
+KB_MARKER = "[知识库]"
+
+
+@wrap_model_call
+def inject_kb_info(request, handler):
+    """把用户拥有的知识库列表注入 system message，引导模型判断是否需要调用 search_from_kb 搜索知识库。
+
+    注意：
+    - 必须保持同步实现：本项目用同步 agent.stream() 执行，langchain 在同步
+      路径只组装 wrap_model_call 链，async-only 中间件（仅 awrap_model_call）
+      在同步调用下会直接抛 NotImplementedError；
+    - 知识库列表用 list_kbs_sync()（标准库 sqlite3 直读），不可在已有运行中
+      事件循环的线程里调用 asyncio.run()；
+    - 必须在 inject_base_info 之后注册（middleware 按顺序执行），且采用追加
+      而非整体替换，避免覆盖原始 system prompt 与画像/系统信息等段落。
+    """
+    sys_msg = request.system_message
+    if sys_msg is None:
+        return handler(request)
+
+    # 同步拉取知识库列表（含文档数与分块数，不依赖 async 引擎与事件循环）
+    kbs = list_kbs_sync()
+
+    # 幂等处理：先剥离旧的知识库段，再拼接最新内容
+    content = str(sys_msg.content)
+    base = content.split(KB_MARKER, 1)[0].rstrip()
+
+    if kbs:
+        lines = [
+            KB_MARKER,
+            "用户拥有如下知识库，请根据用户问题判断是否需要调用工具 **search_from_kb** 进行知识库搜索：",
+        ]
+        for idx, kb in enumerate(kbs, 1):
+            kb_id = kb.get("id", "")
+            name = kb.get("name", "未知")
+            desc = kb.get("description") or "无描述"
+            doc_count = kb.get("docCount", 0)
+            chunk_count = kb.get("chunkCount", 0)
+            lines.append(
+                f"- 第{idx}个知识库 | ID: {kb_id} | 名称：{name} | 描述：{desc}"
+                f" | 文档个数：{doc_count} | 分段个数：{chunk_count}"
+            )
+        new_content = base + "\n\n" + "\n".join(lines)
+    else:
+        new_content = base
 
     if new_content == content:
         return handler(request)  # 内容无变化，原样透传

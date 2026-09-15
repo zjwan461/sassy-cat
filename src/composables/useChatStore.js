@@ -461,6 +461,7 @@ function transformMessage(item) {
     images: images.length ? images : undefined,
     interruptActions: interruptActions,
     interruptDecisions: interruptDecisions,
+    usage: item.usageMetadata
   }
 }
 

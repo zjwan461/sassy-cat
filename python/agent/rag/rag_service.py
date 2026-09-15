@@ -254,33 +254,35 @@ class RAGService:
         ids = [str(uuid4()) for _ in range(len(all_splits))]
         return self.add_documents(all_splits, ids=ids)
     
-    async def search(self, query: str, k: int = 4) -> List[Document]:
+    async def search(self, query: str, k: int = 4, filter: dict[str, str] | None = None) -> List[Document]:
         """
         语义搜索
         
         Args:
             query: 查询文本
             k: 返回的文档数量
-            
+            filter: Filter by metadata.
+
         Returns:
             相似的文档列表
         """
         self._ensure_embeddings()  # 确保使用最新的 embedding 配置
-        return self.vector_store.similarity_search(query=query, k=k)
+        return self.vector_store.similarity_search(query=query, k=k, filter=filter)
     
-    def search_sync(self, query: str, k: int = 4) -> List[Document]:
+    def search_sync(self, query: str, k: int = 4, filter: dict[str, str] | None = None) -> List[Document]:
         """
         同步语义搜索
         
         Args:
             query: 查询文本
             k: 返回的文档数量
-            
+            filter: Filter by metadata.
+
         Returns:
             相似的文档列表
         """
         self._ensure_embeddings()  # 确保使用最新的 embedding 配置
-        return self.vector_store.similarity_search(query=query, k=k)
+        return self.vector_store.similarity_search(query=query, k=k, filter=filter)
 
     # ==================== 删除 ====================
 
