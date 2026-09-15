@@ -91,6 +91,7 @@ class KbDocument(Base):
     file_name = Column(String, nullable=False)         # 原始文件名
     file_ext = Column(String)                          # 文件后缀
     file_size = Column(Integer)                        # 文件大小 (字节)
+    file_path = Column(String)                         # 原始文件落盘绝对路径（upload/rag 下，供重新 embedding 使用）
     status = Column(String, nullable=False, default="pending")  # pending | processing | done | error
     error = Column(Text)                               # 失败原因 (仅 error)
     chunk_count = Column(Integer, default=0)           # 写入向量库的分块数量

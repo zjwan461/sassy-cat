@@ -5,6 +5,7 @@ FastAPI 应用：lifespan 内运行 monitor 周期任务与 proactive 调度任�
 
 import asyncio
 import logging
+import os
 import time
 
 from contextlib import asynccontextmanager
@@ -23,6 +24,8 @@ from server.ws_agent import ws_agent_endpoint
 from server.kb_api import router as kb_router
 from server.db import init_db as init_message_db, close_db as close_message_db
 from server.db import get_messages_by_session
+import paths
+import utils
 
 logger = logging.getLogger(__name__)
 
@@ -91,10 +94,23 @@ def create_app() -> FastAPI:
     @app.post("/api/ocr")
     async def ocr_endpoint(file: UploadFile = File(...)):
         """文档 OCR：接收文件，返回 markdown 文本"""
+        chat_upload_dir = paths.data_dir() + "/upload/chat"
         MAX_SIZE = 20 * 1024 * 1024  # 20MB
         file_bytes = await file.read()
         if len(file_bytes) > MAX_SIZE:
             raise HTTPException(status_code=413, detail="文件大小超过 20MB 限制")
+        # 将收到的文件落盘到 chat 上传目录（文件名做 basename 防路径穿越，重名时加时间戳）
+        try:
+            os.makedirs(chat_upload_dir, exist_ok=True)
+            safe_name = os.path.basename(file.filename or "unknown")
+            save_path = os.path.join(chat_upload_dir, safe_name)
+            if os.path.exists(save_path):
+                stem, ext = os.path.splitext(safe_name)
+                save_path = os.path.join(chat_upload_dir, f"{stem}_{int(time.time() * 1000)}{ext}")
+            await asyncio.to_thread(utils.write_file, save_path, file_bytes)
+            logger.info(f"上传文件已保存: {save_path}")
+        except OSError:
+            logger.exception(f"保存上传文件失败: {chat_upload_dir}")
         try:
             result = await do_ocr("chat", file.filename or "unknown", file_bytes)
             return {
@@ -107,6 +123,7 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.exception(f"OCR 处理失败: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+        
     @app.post("/api/rag/model/download")
     async def rag_model_download():
         """下载 RAG 本地 embedding 模型（smart_download：智能选镜像 + 智能选大小模型）。

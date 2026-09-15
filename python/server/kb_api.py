@@ -19,6 +19,8 @@ from pydantic import BaseModel
 from agent.rag.rag_service import get_rag_service
 from ocr.ocr_engine import do_ocr
 from server.db import kb_repository as kb_repo
+import paths
+import utils
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +105,24 @@ async def upload_document(kb_id: str, file: UploadFile = File(...)):
     filename = file.filename or "unknown"
     ext = os.path.splitext(filename)[1].lower()
     doc_id = str(uuid4())
+
+    # 原始文件落盘到 upload/rag（doc_id 前缀保证唯一并关联文档；basename 防路径穿越）
+    rag_upload_dir = os.path.join(paths.data_dir(), "upload", "rag")
+    save_path = ""
+    try:
+        os.makedirs(rag_upload_dir, exist_ok=True)
+        safe_name = os.path.basename(filename)
+        save_path = os.path.join(rag_upload_dir, f"{doc_id}_{safe_name}")
+        await asyncio.to_thread(utils.write_file, save_path, file_bytes)
+        logger.info(f"知识库上传文件已保存: {save_path}")
+    except OSError:
+        save_path = ""
+        logger.exception(f"保存知识库上传文件失败: {rag_upload_dir}")
+
+    # 登记文档记录，file_path 落库供后续重新 embedding 使用
     await kb_repo.add_document(
-        id=doc_id, kb_id=kb_id, file_name=filename, file_ext=ext, file_size=len(file_bytes)
+        id=doc_id, kb_id=kb_id, file_name=filename, file_ext=ext,
+        file_size=len(file_bytes), file_path=save_path,
     )
 
     try:

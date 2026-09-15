@@ -39,6 +39,7 @@ def _doc_to_dict(doc: KbDocument) -> dict:
         "fileName": doc.file_name,
         "fileExt": doc.file_ext or "",
         "fileSize": doc.file_size or 0,
+        "filePath": doc.file_path or "",
         "status": doc.status,
         "error": doc.error or "",
         "chunkCount": doc.chunk_count or 0,
@@ -140,6 +141,7 @@ async def add_document(
     file_name: str,
     file_ext: Optional[str] = None,
     file_size: Optional[int] = None,
+    file_path: Optional[str] = None,
 ) -> dict:
     """登记一篇上传文档（status=pending），返回其字典表示"""
     doc = KbDocument(
@@ -148,6 +150,7 @@ async def add_document(
         file_name=file_name,
         file_ext=file_ext or "",
         file_size=file_size or 0,
+        file_path=file_path or "",
         status="pending",
         chunk_count=0,
         created_at=_now_ms(),
