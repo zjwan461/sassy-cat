@@ -226,9 +226,11 @@ async def rag_save_end_to_end():
             chunk_size=1000, chunk_overlap=200
         )
         all_splits = text_splitter.split_documents(docs)
-   
+
     # 过滤空内容，确保 page_content 为非空字符串
-    all_splits = [doc for doc in all_splits if doc.page_content and doc.page_content.strip()]
+    all_splits = [
+        doc for doc in all_splits if doc.page_content and doc.page_content.strip()
+    ]
 
     if not all_splits:
         print("警告：文档分块后无有效内容，跳过写入")
@@ -241,6 +243,21 @@ async def rag_save_end_to_end():
 async def search(text: str):
     retrieved_docs = vector_store.similarity_search(query=text, k=4)
     print(retrieved_docs)
+
+
+async def get_chunks():
+    collection = vector_store._collection
+    ids = collection.get(where={"kb_id": "default"}, include=[])["ids"]
+    print(ids)
+    result = collection.get(
+        where=None,
+        limit=10,
+        offset=0,
+        include=["documents", "metadatas"],
+    )
+    print(result)
+    return result
+
 
 if __name__ == "__main__":
 
@@ -266,6 +283,7 @@ if __name__ == "__main__":
     #     sys.exit(1)
     import asyncio
 
-    asyncio.run(rag_save_end_to_end())
-    asyncio.run(search("spring"))
+    # asyncio.run(rag_save_end_to_end())
+    # asyncio.run(search("spring"))
+    asyncio.run(get_chunks())
     print("\n=== 完成 ===")

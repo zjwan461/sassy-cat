@@ -7,9 +7,9 @@
   否则加 NOT NULL 列 / 改类型 / 删列 / 删表等 DDL 无法生成。
 """
 
+import logging
 import os
 import sys
-from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool, inspect
 from alembic import context
@@ -25,8 +25,19 @@ from paths import data_path  # noqa: E402
 from server.db.models import Base  # noqa: E402
 
 config = context.config
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+
+# 注意：这里【不能】调用 logging.config.fileConfig(alembic.ini)。
+# fileConfig 会整体重建根 logger 的 handler（清掉应用侧注册的 ProtocolLogHandler 等），
+# 导致迁移之后所有应用日志不再经 __PROTOCOL__ 通道推送到前端日志页。
+# 改为：仅当根 logger 无任何 handler（独立 CLI 运行 alembic）时做 basicConfig 兜底；
+# 嵌入应用运行时，alembic 日志经 propagate 走应用已有的 handler 体系。
+if not logging.root.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(levelname)-5.5s [%(name)s] %(message)s',
+        datefmt='%H:%M:%S',
+        stream=sys.stderr,
+    )
 
 target_metadata = Base.metadata
 
