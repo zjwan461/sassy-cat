@@ -3,7 +3,8 @@
 """
 
 from server.db.database import init_db, close_db, get_session
-from server.db.models import Message, Attachment, KnowledgeBase, KbDocument
+from server.db.models import Message, Attachment, KnowledgeBase, KbDocument, SystemMeta
+from server.db.seed import run_seeds, DEFAULT_KB_ID
 from server.db.message_repository import (
     save_message,
     save_attachment,
@@ -21,6 +22,9 @@ __all__ = [
     "Attachment",
     "KnowledgeBase",
     "KbDocument",
+    "SystemMeta",
+    "run_seeds",
+    "DEFAULT_KB_ID",
     "save_message",
     "save_attachment",
     "get_messages_by_session",

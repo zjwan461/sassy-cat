@@ -102,3 +102,12 @@ class KbDocument(Base):
     __table_args__ = (
         Index("idx_kb_documents_kb", "kb_id", "created_at"),
     )
+
+
+class SystemMeta(Base):
+    """系统级键值元数据表（由 seed 初始化维护，如默认版本号等）"""
+    __tablename__ = "system_meta"
+
+    key = Column(String, primary_key=True)             # 元数据键
+    value = Column(Text)                               # 元数据值
+    updated_at = Column(BigInteger, nullable=False)    # 更新时间戳 (毫秒)
