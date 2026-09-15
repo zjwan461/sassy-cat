@@ -223,6 +223,9 @@ def collect_software() -> dict:
         lines = out.strip().splitlines()
         return lines[0].strip() if lines else None
 
+    def _parse_python(out):
+        return _extract_version(out, 1)
+
     checks = [
         ('git',     'git',    '--version', _parse_git),
         ('java',    'java',   '-version',  _parse_java),
@@ -233,6 +236,7 @@ def collect_software() -> dict:
         ('gcc',     'gcc',    '--version', _parse_gcc),
         ('cmake',   'cmake',  '--version', _parse_cmake),
         ('vscode',  'code',   '--version', _parse_code),
+        ('python',  'python', '--version', _parse_python),
     ]
 
     for key, exe, args, parser in checks:

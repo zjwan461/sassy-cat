@@ -96,7 +96,7 @@ def run_python(code: str):
     return "\n".join(output)
 
 
-def _convert_virtual_path(segment: str) -> list[str]:
+def _convert_virtual_path(segment: str, idx: int) -> list[str]:
     """将单个虚拟路径片段转换为真实路径。
 
     返回一个列表，因为某些命令（如 pip）可能需要展开为多个片段。
@@ -111,22 +111,15 @@ def _convert_virtual_path(segment: str) -> list[str]:
     - `echo` → `echo`（不变）
     - `pip` → `[pip绝对路径]` 或 `[python绝对路径, "-m", "pip"]`（回退）
     """
-    if (
-        segment.startswith("C:")
-        or segment.startswith("D:")
-        or segment.startswith("E:")
-        or segment.startswith("F:")
-        or segment.startswith("G:")
-        or segment.startswith("H:")
-        or segment.startswith("Z:")
-    ):
+    # 检测 Windows 盘符模式：单个字母 + 冒号（如 C:、D: 等）
+    if len(segment) >= 2 and segment[0].isalpha() and segment[1] == ":":
         raise ValueError("Windows环境下不得使用真实盘符作为变量开头")
     
     # 使用 in 操作符正确检查成员关系
-    if segment in ("python", "python3"):
+    if segment in ("python", "python3") and idx == 0:
         # 使用项目中实际可用的 Python 解释器绝对路径
         return [_find_python()]
-    elif segment in ("pip", "pip3"):
+    elif segment in ("pip", "pip3") and idx == 0:
         # pip 通常与 Python 解释器在同一目录
         python_exe = Path(_find_python())
         pip_exe = python_exe.parent / ("pip.exe" if os.name == "nt" else "pip")
@@ -163,8 +156,8 @@ def run_command(command: list[str]):
     try:
         # 遍历每个片段，将虚拟路径转换为真实路径（每个片段可能展开为多个）
         real_command = []
-        for seg in command:
-            real_command.extend(_convert_virtual_path(seg))
+        for idx, seg in enumerate(command):
+            real_command.extend(_convert_virtual_path(seg, idx))
         # 拼接为字符串用于 shell 执行（支持 dir、echo 等 shell 内置命令）
         command_str = subprocess.list2cmdline(real_command)
         result = subprocess.run(
