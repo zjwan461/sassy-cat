@@ -274,6 +274,10 @@
       <div class="card-header">桌宠</div>
       <div class="card-body form">
         <div class="field">
+          <label class="check"><input type="checkbox" v-model="form.petEnabled" /> 启用桌宠</label>
+          <span class="hint">桌宠不可见时（关闭或右键临时隐藏），提醒事项与闲置提醒将以系统通知呈现，不再使用桌宠气泡</span>
+        </div>
+        <div class="field">
           <label>快速提问快捷键（全局生效，唤起桌宠输入框）</label>
           <div class="hotkey-row">
             <div
@@ -380,6 +384,7 @@ const defaultInterruptOn = () => Object.fromEntries(interruptTools.map((t) => [t
 const form = reactive({
   provider: 'openai', baseUrl: '', apiKey: '', model: '', extraParamsText: '{}',
   persona: '', memoryWindow: 50, recursionLimit: 50, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
+  petEnabled: true,
   quickAskShortcut: 'Alt+Shift+Q',
   reminderPoll: 5, reminderDuration: 8,
   tavilyApiKey: '',
@@ -473,6 +478,7 @@ async function loadConfig() {
   form.idleEnabled = cfg.pet?.idleReminder?.enabled !== false
   form.idleThreshold = cfg.pet?.idleReminder?.thresholdMinutes ?? 30
   form.idleQuiet = cfg.pet?.idleReminder?.quietPeriodMinutes ?? 10
+  form.petEnabled = cfg.pet?.enabled !== false
   form.quickAskShortcut = cfg.pet?.quickAsk?.shortcut ?? 'Alt+Shift+Q'
   // 提醒事项
   form.reminderPoll = cfg.pet?.reminders?.pollIntervalSeconds ?? 5
@@ -692,6 +698,7 @@ async function saveAll() {
     { path: 'pet.idleReminder.enabled', value: form.idleEnabled },
     { path: 'pet.idleReminder.thresholdMinutes', value: form.idleThreshold },
     { path: 'pet.idleReminder.quietPeriodMinutes', value: form.idleQuiet },
+    { path: 'pet.enabled', value: !!form.petEnabled },
     { path: 'pet.reminders.pollIntervalSeconds', value: Number(form.reminderPoll) || 5 },
     { path: 'pet.reminders.bubbleDurationMs', value: (Number(form.reminderDuration) || 8) * 1000 },
     { path: 'pet.quickAsk.shortcut', value: form.quickAskShortcut },

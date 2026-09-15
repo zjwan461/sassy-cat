@@ -50,7 +50,7 @@ import logoUrl from '../assets/icon.png'
 
 const route = useRoute()
 const router = useRouter()
-const { state: socketState, connect, setPort } = useAgentSocket()
+const { state: socketState, connect, send, on, setPort } = useAgentSocket()
 
 // 知识库上传状态（模块级单例，与详情页共享）
 const {
@@ -101,14 +101,37 @@ const stopWatch = watch(socketState, (s) => {
   }
 })
 
+// 桌宠不可见（设置关闭 / 临时隐藏）时的提醒兜底：
+// 主窗口常驻 WS 连接，订阅 proactive.* 事件请求系统通知；
+// 是否真正弹出由主进程按桌宠窗口实际可见性裁决（可见则抑制，避免与气泡双重打扰）
+function requestSystemNotify(payload, isReminder) {
+  if (!window.electronAPI?.showNotification) return
+  const text = String(payload?.text || payload?.content || '')
+  if (!text) return
+  window.electronAPI.showNotification({
+    title: isReminder ? '⏰ 提醒事项' : '🐱 优墨',
+    body: text.replace(/^⏰\s*/, ''),
+  }).catch(() => { /* 通知失败不影响主流程 */ })
+}
+
+let offProactiveReminder = null
+let offProactiveMessage = null
+
 onMounted(() => {
   connect()
+  offProactiveReminder = on('proactive.reminder', (p) => requestSystemNotify(p, true))
+  offProactiveMessage = on('proactive.message', (p) => requestSystemNotify(p, false))
   if (window.electronAPI) {
     window.electronAPI.getAgentInfo().then((info) => {
       if (info && info.port) setPort(info.port)
     })
     window.electronAPI.onAgentReady((info) => { if (info && info.port) setPort(info.port) })
     window.electronAPI.onNavigateChat(() => router.push('/chat'))
+    // OS 级活动信号上行（与桌宠端同款逻辑）：
+    // 保证桌宠关闭后 Python 侧闲置检测依然能收到 user_activity，不会误判闲置
+    window.electronAPI.onActivityPing((data) => {
+      send('client.event', { name: 'user_activity', event: data.event })
+    })
   } else {
     // 非 Electron 环境无 Agent 服务可等，直接进入界面
     dismissBootLoading()
@@ -120,6 +143,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   clearTimeout(loadingTimer)
   stopWatch()
+  offProactiveReminder?.()
+  offProactiveMessage?.()
 })
 
 const menuItems = [

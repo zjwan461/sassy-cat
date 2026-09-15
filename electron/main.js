@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, shell, powerMonitor, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, shell, powerMonitor, globalShortcut, Notification } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -38,6 +38,11 @@ function initConfigStore() {
     // 快速提问快捷键变更 -> 热重注册并广播注册结果（Settings 页展示）
     if (Object.prototype.hasOwnProperty.call(diff, 'pet.quickAsk.shortcut')) {
       broadcastShortcutStatus(applyQuickAskShortcut());
+    }
+    // 桌宠开关变更 -> 即时创建/销毁桌宠窗口（无需重启），并刷新托盘（关闭时菜单项置灰）
+    if (Object.prototype.hasOwnProperty.call(diff, 'pet.enabled')) {
+      applyPetEnabled(diff['pet.enabled'] !== false);
+      updateTrayMenu();
     }
     // 网络代理配置变更 -> 热更新 Electron 会话代理（Python 侧需重启服务进程生效）
     if (Object.keys(diff).some((k) => k.startsWith('network.proxy'))) {
@@ -525,15 +530,20 @@ function stopPythonService() {
 }
 
 function buildTrayTemplate() {
-  const petVisible = petWindow && !petWindow.isDestroyed() && petWindow.isVisible();
+  // 设置中关闭桌宠时托盘项置灰：显隐统一由「设置 > 桌宠 > 启用桌宠」控制，避免语义冲突
+  const petEnabled = !configStore || configStore.merged.pet?.enabled !== false;
+  const petVisible = petEnabled && petWindow && !petWindow.isDestroyed() && petWindow.isVisible();
   return [
     { label: '显示主窗口', click: () => mainWindow && mainWindow.show() },
     {
-      label: petVisible ? '隐藏桌宠' : '显示桌宠',
+      // 「显示桌宠」持久开启（写 pet.enabled，与设置页联动）；「隐藏桌宠」仅临时隐藏不改设置
+      label: !petEnabled ? '桌宠已关闭（于设置中开启）' : (petVisible ? '隐藏桌宠' : '显示桌宠'),
+      enabled: petEnabled,
       click: () => {
         if (petVisible) {
           petWindow.hide();
         } else {
+          if (configStore) configStore.setByDotted('pet.enabled', true);
           createPetWindow();
         }
         updateTrayMenu();
@@ -907,6 +917,8 @@ function applyQuickAskShortcut() {
 
 // 快捷键触发：唤起桌宠窗口并切换快速输入框
 function triggerQuickAsk() {
+  // 桌宠已在设置中关闭：静默忽略（尊重用户设置）
+  if (configStore && configStore.merged.pet?.enabled === false) return;
   if (!petWindow || petWindow.isDestroyed()) {
     createPetWindow();
     // 窗口刚创建时渲染层尚未就绪，等加载完成后再通知打开输入框
@@ -1065,6 +1077,43 @@ ipcMain.handle('pet:show-chat', () => {
 ipcMain.handle('pet:hide', () => {
   if (petWindow && !petWindow.isDestroyed()) petWindow.hide();
   return { success: true };
+});
+
+// ---------- 桌宠开关热生效 ----------
+// pet.enabled: true -> 创建/显示桌宠窗口；false -> 销毁窗口（避免隐藏窗口后台残留 WS 连接）
+function applyPetEnabled(enabled) {
+  if (enabled) {
+    createPetWindow();
+  } else if (petWindow && !petWindow.isDestroyed()) {
+    petWindow.destroy();
+    petWindow = null;
+    updateTrayMenu();
+  }
+}
+
+// ---------- 系统通知（桌宠不可见时的提醒兜底） ----------
+// 由主进程统一裁决：桌宠窗口存在且实际可见 -> 气泡负责展示，丢弃请求；
+// 否则（设置关闭 / 临时隐藏）-> 弹系统原生通知。
+// 调用方（主窗口渲染层收到 proactive.reminder / proactive.message 时）无需关心桌宠状态。
+ipcMain.handle('notify:show', (event, { title, body }) => {
+  const petVisible = petWindow && !petWindow.isDestroyed() && petWindow.isVisible() && !petWindow.isMinimized();
+  if (petVisible) return { success: true, suppressed: true };
+  if (!Notification.isSupported()) return { success: false, message: '系统不支持通知' };
+  const notif = new Notification({
+    title: String(title || appConfig.name),
+    body: String(body || ''),
+    icon: getAssetPath('assets/icon.png'),
+  });
+  // 点击通知唤起主窗口，方便回到聊天
+  notif.on('click', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (!mainWindow.isVisible()) mainWindow.show();
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+  notif.show();
+  return { success: true, suppressed: false };
 });
 
 ipcMain.handle('pet:popup-menu', (event, items) => {

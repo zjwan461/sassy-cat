@@ -48,6 +48,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 用系统默认浏览器打开外部链接
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
 
+  // 系统通知：主进程按桌宠可见性裁决（桌宠可见则丢弃，不可见则弹原生通知）
+  showNotification: (payload) => ipcRenderer.invoke('notify:show', payload),
+
   // HTML 代码块预览：保存到 runtime/preview 并在应用内 Electron 预览窗口打开
   openHtmlPreview: (html) => ipcRenderer.invoke('html-preview:open', html)
 });
