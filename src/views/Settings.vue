@@ -365,6 +365,7 @@ const { downloading, result: downloadResult } = useModelDownloadState()
 const activeProfile = ref('default')
 const profiles = ref({})
 const activeAgentProfile = ref('default')
+const agentProfiles = ref({})
 // 提醒气泡显示时长可选值（秒），范围 3~30
 const reminderDurationOptions = [3, 5, 8, 10, 15, 20, 30]
 // 高危工具人工确认清单（与 Python agent/engine.py 的 interrupt_on 工具集对应）
@@ -464,15 +465,10 @@ async function loadConfig() {
   const res = await api.getConfig()
   if (!res.success) return showToast('配置加载失败')
   const cfg = res.config
-  // profiles 必须是包含条目的普通对象才有效（用户配置可能因 deepMerge 类型冲突导致 profiles 丢失）
-  const isValidProfiles = (p) => p && typeof p === 'object' && !Array.isArray(p) && Object.keys(p).length > 0
-  profiles.value = isValidProfiles(cfg.llm?.profiles) ? cfg.llm.profiles : { default: { label: '默认' } }
+  profiles.value = cfg.llm?.profiles || { default: { label: '默认' } }
   activeProfile.value = cfg.llm?.activeProfile || 'default'
-  agentProfiles.value = isValidProfiles(cfg.agent?.profiles) ? cfg.agent.profiles : { default: { label: '默认' } }
+  agentProfiles.value = cfg.agent?.profiles || { default: { label: '默认' } }
   activeAgentProfile.value = cfg.agent?.activeProfile || 'default'
-  // 若当前 active profile 不存在于 profiles 中，回退到 default
-  if (!profiles.value[activeProfile.value]) activeProfile.value = 'default'
-  if (!agentProfiles.value[activeAgentProfile.value]) activeAgentProfile.value = 'default'
   fillFormFromProfile()
   form.idleEnabled = cfg.pet?.idleReminder?.enabled !== false
   form.idleThreshold = cfg.pet?.idleReminder?.thresholdMinutes ?? 30
