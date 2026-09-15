@@ -535,6 +535,23 @@ onMounted(() => {
       setState('idle'); scheduleNext()
     }, 1400)
   })
+  // ---------- 每日首次加载打招呼（服务端触发，复用聊天气泡打字机） ----------
+  on('greeting.delta', (p) => {
+    if (state.value !== 'talk') { setState('talk'); typewriteStart() }
+    streamTarget += p.text
+  })
+  on('greeting.completed', (p) => {
+    if (p.text && p.text.length >= streamTarget.length) streamTarget = p.text
+    setTimeout(() => {
+      typewriteStop()
+      if (streamTarget) {
+        // 招呼语文案较短，按 140ms/字放缓阅读节奏（9s ~ 25s）
+        const ms = Math.min(25000, Math.max(9000, streamTarget.length * 140))
+        showBubble(streamTarget, ms)
+      }
+      setState('idle'); scheduleNext()
+    }, 1400)
+  })
   on('chat.error', () => { typewriteStop(); setState('idle'); showBubble('呜…出了点小状况 😿', 4000) })
   on('pet.command', (p) => {
     if (p.action === 'think') setState('think')

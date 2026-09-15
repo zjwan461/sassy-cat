@@ -21,7 +21,7 @@ import config_loader
 from agent import runner
 from agent.engine import holder
 from agent.prompts import build_system_prompt, DEFAULT_PERSONA
-from proactive import scheduler
+from proactive import greeting, scheduler
 from server import conversations
 from server.bus import hub
 from server.protocol import envelope
@@ -31,6 +31,14 @@ logger = logging.getLogger(__name__)
 
 # 每个 session 的运行态：当前取消事件
 _session_cancel: dict[str, threading.Event] = {}
+
+# 当前正在流式输出的聊天轮次数量（打招呼等旁路生成据此避让）
+_running_turns = 0
+
+
+def has_running_turn() -> bool:
+    """是否有进行中的聊天轮次（proactive/greeting 避让判定用）"""
+    return _running_turns > 0
 
 # 当前激活会话对应的房间 id：所有窗口连接都聚集在该房间，
 # 切换会话时整房迁移（见 _activate_room），保证多窗口事件同步
@@ -216,6 +224,9 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     async def emit(evt_type: str, payload: dict):
         await hub.publish(session_id, envelope(evt_type, payload), exclude=None)
 
+    global _running_turns
+    _running_turns += 1
+
     buffer = []
     args_buffer = []
     last_flush = time.monotonic()
@@ -374,6 +385,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
             "chat.error", {"msgId": msg_id, "code": "internal", "message": str(e)}
         )
     finally:
+        _running_turns -= 1
         # 仅当注册的取消事件仍是本轮的才清理：旧轮次结束时可能已有新轮次
         # 注册了自己的事件，无条件 pop 会误删新轮次的取消句柄
         if _session_cancel.get(session_id) is cancel:
@@ -678,6 +690,9 @@ async def ws_agent_endpoint(ws: WebSocket):
         await _send(
             ws, envelope("connected", {"client": client, "sessionId": session_id})
         )
+        if client == "pet":
+            # 桌宠连接建立：今日首次加载则由服务端判定并打招呼（幂等，非阻塞）
+            asyncio.create_task(greeting.maybe_greet())
         while True:
             raw = await ws.receive_text()
             try:

@@ -49,3 +49,29 @@ def build_ds_chat_llm(profile_cfg: dict):
         model=profile_cfg.get("model") or "Qwen3.6-35B",
         extra_body=extra,
     )
+
+
+def simple_blocking_call(llm, prompt: str) -> str | None:
+    result = llm.invoke(prompt)
+    if getattr(result, "content"):
+        return result.content
+    else:
+        return None
+
+
+async def simple_streaming_call(llm, prompt: str):
+    """纯流式调用：逐块产出增量文本（str），不使用任何 Agent/工具能力。
+
+    与 simple_blocking_call 对等的流式版本，基于 llm.astream。
+    reasoning 内容（reasoning_content）不产出，只输出正式回复正文。
+    """
+    async for chunk in llm.astream(prompt):
+        text = chunk.content if isinstance(chunk.content, str) else ""
+        # 兼容多模态 content 列表形式（部分 provider 返回 [{type:text,...}]）
+        if not text and isinstance(chunk.content, list):
+            text = "".join(
+                p.get("text", "") for p in chunk.content
+                if isinstance(p, dict) and p.get("type") == "text"
+            )
+        if text:
+            yield text
