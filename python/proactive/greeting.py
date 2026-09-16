@@ -178,15 +178,19 @@ async def _stream_greeting(msg_id: str) -> str | None:
     profile = config_loader.current().active_llm_profile()
     try:
         llm = build_chat_llm(profile)
-        llm.extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
-    except Exception:
-        logger.exception("构建打招呼 LLM 失败")
+        # 打招呼不需要开启深度思考
+        llm.extra_body = {
+            "chat_template_kwargs": {"enable_thinking": False},
+            "enable_thinking": False,
+        }
+    except Exception as e:
+        logger.exception(f"构建打招呼 LLM 失败: {str(e)}")
         return None
 
     try:
         prompt = await _build_prompt()
-    except Exception:
-        logger.exception("构造打招呼提示词失败")
+    except Exception as e:
+        logger.exception(f"构造打招呼提示词失败: {str(e)}")
         return None
 
     parts: list[str] = []
@@ -213,8 +217,8 @@ async def _stream_greeting(msg_id: str) -> str | None:
         if not parts:
             return None
         # 已流出部分内容：收尾保留已有文本，不回退兜底
-    except Exception:
-        logger.exception("打招呼 LLM 流式调用异常")
+    except Exception as e:
+        logger.exception(f"打招呼 LLM 流式调用异常: {str(e)}")
         if not parts:
             return None
     finally:
@@ -255,8 +259,8 @@ def _reminders_section() -> str:
 
     try:
         pending = [r for r in list_reminders(status="active") if r.get("next_at")]
-    except Exception:
-        logger.exception("读取未完成提醒失败（打招呼不带待办）")
+    except Exception as e:
+        logger.exception(f"读取未完成提醒失败（打招呼不带待办）: {str(e)}")
         return ""
 
     overdue, today, tomorrow, near, later = [], [], [], [], []
