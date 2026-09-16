@@ -204,9 +204,6 @@
             <span v-if="downloadResult" :class="downloadResult.ok ? 'ok' : 'bad-text'">{{ downloadResult.text }}</span>
           </div>
         </div>
-        <div class="actions">
-          <span class="hint">RAG 后端功能尚未上线，当前保存的配置将在功能启用后生效</span>
-        </div>
       </div>
     </section>
 
