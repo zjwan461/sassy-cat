@@ -2,7 +2,7 @@
   <div class="kb-page">
     <div class="kb-header">
       <div>
-        <h2 class="kb-title">知识库</h2>
+        <h2 class="kb-title">藏书阁</h2>
         <p class="kb-subtitle">创建知识库并上传文档，自动分块与向量化入库</p>
       </div>
       <button class="btn-primary" @click="openCreate">＋ 新建知识库</button>

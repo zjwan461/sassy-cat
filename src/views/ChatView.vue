@@ -1,7 +1,7 @@
 <template>
   <div class="page chat-page">
     <header class="page-header">
-      <h1 class="page-title">AI 聊天</h1>
+      <h1 class="page-title">唠嗑</h1>
       <p class="page-subtitle">
         与优墨对话
         <span class="conn" :class="connClass">{{ connText }}</span>

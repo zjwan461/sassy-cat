@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-FastAPI 应用：lifespan 内运行 monitor 周期任务与 proactive 调度任务。
+FastAPI 应用：lifespan 内运行 proactive 调度与 reminder 后台任务。
 """
 
 import asyncio
@@ -16,13 +16,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from agent import engine as agent_engine
 from agent.rag import model_download
 from agent.rag.rag_service import get_rag_service
-from monitor import service as monitor_service
 from ocr.ocr_engine import do_ocr
 from proactive import reminder_runner, scheduler
-from server.bus import hub
-from server.protocol import envelope
 from server.ws_agent import ws_agent_endpoint
 from server.kb_api import router as kb_router
+from server.stats_api import router as stats_router
 from server.db import init_db as init_message_db, close_db as close_message_db
 from server.db import get_messages_by_session, DEFAULT_KB_ID
 from server.db import kb_repository as kb_repo
@@ -32,49 +30,25 @@ import utils
 
 logger = logging.getLogger(__name__)
 
-METRICS_INTERVAL = 2.0
-_metrics_stop = asyncio.Event()
-
 # RAG 本地嵌入模型下载：同一时刻仅允许一个下载任务
 _rag_download_busy = False
 
 
-async def _monitor_loop():
-    """周期采集：阻塞采集放 to_thread，兼容 stdout 协议行"""
-    while not _metrics_stop.is_set():
-        started = time.time()
-        try:
-            payload = await asyncio.to_thread(monitor_service.collect_once_and_emit)
-            # await hub.publish_all(envelope("metrics.snapshot", payload))
-        except Exception:
-            logger.exception("monitor tick 失败")
-        elapsed = time.time() - started
-        await asyncio.sleep(max(0.2, METRICS_INTERVAL - elapsed))
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 同步初始化（静态信息采集等含阻塞调用）
-    await asyncio.to_thread(monitor_service.init_sync)
     # 打开 agent 共享 SQLite 连接（checkpointer/store 复用，shutdown 时统一关闭）
     await asyncio.to_thread(agent_engine.init_db)
     # 初始化消息数据库（SQLAlchemy 异步引擎）
     await init_message_db()
     stop_event = asyncio.Event()
-    monitor_task = asyncio.create_task(_monitor_loop())
     proactive_task = asyncio.create_task(scheduler.run_forever(stop_event))
     reminder_task = asyncio.create_task(reminder_runner.run_forever(stop_event))
-    logger.info("后台任务已启动：monitor_loop / proactive_scheduler / reminder_runner")
+    logger.info("后台任务已启动：proactive_scheduler / reminder_runner")
     yield
     stop_event.set()
-    _metrics_stop.set()
-    monitor_task.cancel()
     proactive_task.cancel()
     reminder_task.cancel()
-    await asyncio.gather(
-        monitor_task, proactive_task, reminder_task, return_exceptions=True
-    )
-    await asyncio.to_thread(monitor_service.shutdown_sync)
+    await asyncio.gather(proactive_task, reminder_task, return_exceptions=True)
     await asyncio.to_thread(agent_engine.close_db)
     await close_message_db()
     logger.info("后台任务已停止")
@@ -218,6 +192,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(e))
 
     app.include_router(kb_router)
+    app.include_router(stats_router)
 
     @app.websocket("/ws/agent")
     async def ws_agent(websocket: WebSocket):
