@@ -36,14 +36,20 @@
 
       <!-- 近 7 天趋势 -->
       <section class="card chart-card">
-        <div class="card-header">近 7 天你找本喵的次数 📈</div>
+        <div class="card-header">
+          <span>近 7 天你找本喵的次数 📈</span>
+          <span class="card-sub">柱形 = 对话次数 · 折线 = Token 用量</span>
+        </div>
         <div ref="trendRef" class="chart-box" style="height: 300px"></div>
       </section>
 
       <div class="chart-row">
         <!-- Token 构成环图 -->
         <section class="card chart-card">
-          <div class="card-header">本喵烧掉的脑细胞 🧠（输入 / 输出）</div>
+          <div class="card-header">
+            <span>本喵烧掉的脑细胞 🧠（输入 / 输出）</span>
+            <span class="card-sub">输入 = 你说的话 · 输出 = 本喵的回话</span>
+          </div>
           <div class="donut-wrap">
             <div ref="tokenTodayRef" class="chart-box donut-box"></div>
             <div ref="tokenTotalRef" class="chart-box donut-box"></div>
@@ -52,7 +58,10 @@
 
         <!-- 知识库分布 -->
         <section class="card chart-card">
-          <div class="card-header">本喵的藏书阁家底 📚</div>
+          <div class="card-header">
+            <span>本喵的藏书阁家底 📚</span>
+            <span class="card-sub">按库统计文档数与分片数</span>
+          </div>
           <div ref="kbRef" class="chart-box" style="height: 300px"></div>
         </section>
       </div>
@@ -67,12 +76,12 @@ import { fetchDashboardStats } from '../api/stats'
 // ---------- ECharts 按需引入（控制打包体积） ----------
 import * as echarts from 'echarts/core'
 import { BarChart, LineChart, PieChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import { GridComponent, TooltipComponent, LegendComponent, TitleComponent, GraphicComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 
 echarts.use([
   BarChart, LineChart, PieChart,
-  GridComponent, TooltipComponent, LegendComponent,
+  GridComponent, TooltipComponent, LegendComponent, TitleComponent, GraphicComponent,
   CanvasRenderer,
 ])
 
@@ -199,7 +208,23 @@ function initCharts() {
   if (trendRef.value) {
     const c = echarts.init(trendRef.value)
     const dates = d.trend.map((x) => x.date)
+    const hasTrend = dates.length > 0
     c.setOption({
+      graphic: hasTrend
+        ? []
+        : [
+            {
+              type: 'text',
+              left: 'center',
+              top: '45%',
+              style: {
+                text: '近 7 天还没有对话记录，快去和本喵唠两句 😼',
+                fill: COLOR.text,
+                fontSize: 14,
+                fontWeight: 500,
+              },
+            },
+          ],
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
@@ -319,7 +344,23 @@ function initCharts() {
     const c = echarts.init(kbRef.value)
     const per = d.kb.perKb || []
     const names = per.map((x) => x.name)
+    const hasKb = per.length > 0
     c.setOption({
+      graphic: hasKb
+        ? []
+        : [
+            {
+              type: 'text',
+              left: 'center',
+              top: '45%',
+              style: {
+                text: '还没有知识库，去「知识库」页面建一个吧 📚',
+                fill: COLOR.text,
+                fontSize: 14,
+                fontWeight: 500,
+              },
+            },
+          ],
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
@@ -483,11 +524,22 @@ onUnmounted(() => {
 }
 
 .card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
   padding: 16px 22px;
   font-size: 15px;
   font-weight: 600;
   color: #e2e8f0;
   border-bottom: 1px solid #334155;
+}
+
+.card-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: #64748b;
 }
 
 /* ===== 错误空态 ===== */

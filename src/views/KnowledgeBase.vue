@@ -24,14 +24,14 @@
         <div class="card-top">
           <div class="card-top-left">
             <span class="card-icon">📚</span>
-            <!-- 默认知识库不可删除，仅显示标记 -->
-            <span v-if="kb.id === DEFAULT_KB_ID" class="card-badge" title="默认知识库，存放聊天上传文件，不可删除">
+            <!-- 默认知识库不可修改、不可删除，仅显示标记 -->
+            <span v-if="kb.id === DEFAULT_KB_ID" class="card-badge" title="默认知识库，存放聊天上传文件，不可修改、不可删除">
               默认
             </span>
           </div>
-          <div class="card-top-actions">
+          <div v-if="kb.id !== DEFAULT_KB_ID" class="card-top-actions">
             <button class="card-edit" title="编辑名称与描述" @click.stop="openEdit(kb)">✎</button>
-            <button v-if="kb.id !== DEFAULT_KB_ID" class="card-del" title="删除知识库" @click.stop="confirmDelete(kb)">✕</button>
+            <button class="card-del" title="删除知识库" @click.stop="confirmDelete(kb)">✕</button>
           </div>
         </div>
         <div class="card-name" :title="kb.name">{{ kb.name }}</div>
@@ -87,7 +87,7 @@
       </div>
     </div>
 
-    <!-- 编辑知识库弹窗（仅修改名称/描述，默认知识库同样可编辑） -->
+    <!-- 编辑知识库弹窗（仅修改名称/描述，默认知识库不可编辑） -->
     <div v-if="showEdit" class="modal-mask" @click.self="showEdit = false">
       <div class="modal">
         <div class="modal-title">编辑知识库</div>
