@@ -1,217 +1,247 @@
-# 🐱 优墨（Sassy Cat）
+<p align="center">
+  <img src="assets/icon.png" alt="Sassy Cat" width="120" />
+</p>
 
-一只傲娇但可靠的桌面猫咪助手 —— 基于 Electron + Vue 3 + Python 构建的 AI 桌宠应用。
+<h1 align="center">🐱 优墨 · Sassy Cat</h1>
 
-## ✨ 特性
+<p align="center">
+  <strong>An AI desktop pet assistant</strong> — Electron + Vue 3 + Python
+</p>
 
-- 🤖 **AI 智能对话**：集成 LangChain / LangGraph Agent，支持流式回复、工具调用、多轮对话
-- 🐾 **桌面宠物**：透明置顶窗口，精灵帧动画，支持拖拽、点击互动、气泡对话
-- 💬 **双入口聊天**：主窗口完整聊天页 + 桌宠气泡快捷输入，会话实时同步
-- 📊 **系统监控**：实时查看 CPU、GPU、内存、磁盘等系统指标
-- ⚙️ **灵活配置**：可视化设置页，支持多 LLM 配置切换、系统提示词（人设）自定义编辑
-- 🔔 **主动提醒**：闲置检测，桌宠会主动冒泡提醒（"为什么不理本喵😾"）
-- 🧩 **技能扩展**：支持内置工具和技能插件（如天气查询）
-- 🎨 **双层配置**：模板默认值 + 用户覆盖，升级不丢失个人配置
-- 🔌 **WebSocket 通信**：渲染进程直连 Python 后端，低延迟流式传输
-- 📦 **一键打包**：支持 Windows / macOS / Linux 多平台打包
+<p align="center">
+  <a href="#-features">Features</a> ·
+  <a href="#-tech-stack">Tech Stack</a> ·
+  <a href="#-quick-start">Quick Start</a> ·
+  <a href="#-development-guide">Dev Guide</a> ·
+  <a href="#-configuration">Configuration</a>
+</p>
 
-## 🛠️ 技术栈
+<p align="center">
+  <strong>English</strong> | <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-| 层 | 技术 |
+---
+
+A slightly sassy but dependable desktop cat companion. Built with **Electron + Vue 3 + Python**, it combines an **AI Agent** (LangChain / LangGraph) with a transparent, always-on-top **desktop pet** that chats with you, watches your system, reminds you to take a break, and can even read documents and answer questions from your own knowledge base.
+
+## ✨ Features
+
+- 🤖 **AI Conversational Agent** — Powered by LangChain / LangGraph / DeepAgents, with streaming replies, tool calling, multi-turn memory, and a customizable system persona (人设)
+- 🐾 **Desktop Pet** — Transparent, always-on-top window with sprite frame animations; drag it around, click to interact, and read bubble messages
+- 💬 **Dual Chat Entry** — Full chat page in the main window + a quick-ask bubble on the pet (shortcut `Alt+Shift+Q`), with real-time session sync
+- 🧠 **Knowledge Base (RAG)** — Build your own local knowledge base with automatic document chunking, vector search (ChromaDB) and a local embedding model (BAAI/bge-small-zh-v1.5, auto-downloaded if missing)
+- 📄 **Document Parsing & OCR** — Upload PDF / Word / Excel / images and more; parsed with MarkItDown, Docling, RapidOCR, etc., then fed to the agent or indexed into the knowledge base
+- ⏰ **Proactive Reminders** — Idle detection and greeting scheduling; the pet proactively bubbles up ("Why aren't you talking to me? 😾"), plus scheduled reminder tools
+- 🧩 **Skill & Tool Extensions** — Built-in toolkits plus a skill plugin system (`runtime/skills/`, e.g. weather query), with MCP adapter support
+- 🪄 **Agent Actions** — The agent can run commands, execute Python, and read/write files (with confirmation before dangerous actions)
+- 📊 **System Monitoring** — Real-time CPU, GPU, memory, and disk metrics on a dashboard
+- 💬 **Rich Chat Rendering** — Markdown, code highlighting, LaTeX (KaTeX) and Mermaid diagrams rendered in chat
+- 🛠️ **Flexible Settings** — Visual settings page with multiple LLM provider profiles, persona / system prompt editing, proxy configuration, and RAG options
+- 🎨 **Dual-Layer Config** — Template defaults + user overrides; personal settings survive app upgrades
+- 📦 **One-Click Packaging** — Cross-platform builds for Windows / macOS / Linux via electron-builder
+
+## 🛠️ Tech Stack
+
+| Layer | Technology |
 |---|---|
-| 桌面框架 | Electron 28 |
-| 前端 | Vue 3 (Composition API) + Vue Router + Vite 5 |
-| 后端 | Python 3.11 + FastAPI + uvicorn |
-| AI Agent | LangChain + LangGraph + deepagents |
-| 通信 | WebSocket（聊天/事件）+ IPC（窗口控制/配置）+ stdio 协议行（监控） |
-| 打包 | electron-builder |
+| Desktop Framework | Electron 28 |
+| Frontend | Vue 3 (Composition API) + Vue Router + Vite 5 + ECharts |
+| Backend | Python 3.11 + FastAPI + uvicorn + asyncio |
+| AI Agent | LangChain + LangGraph + DeepAgents (+ MCP adapters) |
+| Knowledge Base | ChromaDB + sentence-transformers + langchain-huggingface |
+| Document Parsing | MarkItDown + Docling + RapidOCR + Unstructured |
+| Persistence | SQLAlchemy + SQLite + Alembic migrations |
+| Monitoring | psutil + pynvml |
+| Communication | WebSocket (chat/events) + IPC (window/config) + stdio protocol lines (monitor) |
+| Packaging | electron-builder |
 
-## 📁 项目结构
+## 📁 Project Structure
 
 ```
 sassy-cat/
-├── electron/                  # Electron 主进程
-│   ├── main.js               # 主进程入口（主窗口 + 桌宠窗口 + 托盘管理）
-│   ├── preload.js            # 主窗口预加载脚本
-│   ├── pet-preload.js        # 桌宠窗口预加载脚本
-│   ├── config-store.js       # 双层配置读写（深度合并 + 原子写）
-│   └── python-env-checker.js # Python 环境检查器
-├── src/                       # 主窗口 Vue3 前端
+├── electron/                  # Electron main process
+│   ├── main.js               # Entry: main window + pet window + tray
+│   ├── preload.js            # Main window preload script
+│   ├── pet-preload.js        # Pet window preload script
+│   ├── config-store.js       # Dual-layer config (deep merge + atomic write)
+│   └── python-env-checker.js # Python environment checker
+├── src/                       # Main window Vue 3 frontend
 │   ├── views/
-│   │   ├── ChatView.vue      # AI 聊天页（流式对话 + 工具状态）
-│   │   ├── Dashboard.vue     # 系统监控仪表盘
-│   │   ├── Settings.vue      # 设置页（LLM 配置 + 人设编辑）
-│   │   ├── Logs.vue          # 日志查看
-│   │   ├── About.vue         # 关于页
-│   │   ├── Setup.vue         # 环境检查页面
-│   │   └── ...
+│   │   ├── ChatView.vue      # AI chat page (streaming + tool states)
+│   │   ├── Dashboard.vue     # System monitor dashboard
+│   │   ├── KnowledgeBase.vue # RAG knowledge base management
+│   │   ├── Settings.vue      # Settings (LLM + persona + RAG + proxy)
+│   │   ├── Logs.vue / About.vue / Setup.vue
 │   ├── composables/
-│   │   └── useAgentSocket.js # WebSocket 客户端（单例 + 自动重连）
-│   ├── App.vue               # 根组件
-│   ├── main.js               # Vue 应用入口
-│   └── styles.css            # 全局样式
-├── pet/                       # 桌宠窗口（Vite 多页入口）
-│   ├── pet.html
-│   ├── pet-main.js
-│   └── components/PetApp.vue # 精灵动画 + 气泡 + 互动
-├── python/                    # Python 后端
-│   ├── main.py               # 入口（asyncio + FastAPI）
-│   ├── server/               # WebSocket 服务层
-│   │   ├── app.py            # FastAPI 实例 + 路由 + lifespan
-│   │   ├── ws_agent.py       # /ws/agent 端点 + 会话管理
-│   │   ├── protocol.py       # WS 消息模型定义
-│   │   └── bus.py            # 服务端事件总线
-│   ├── agent/                # AI Agent 引擎
-│   │   ├── engine.py         # Agent 构建（配置注入）
-│   │   ├── llms.py           # LLM 工厂
-│   │   ├── prompts.py        # 人设模板 + 运行时提示词拼接
-│   │   ├── main_agent.py     # 流式对话核心
-│   │   └── builtin_tools.py  # 内置工具集
-│   ├── monitor/              # 系统监控采集
-│   │   ├── service.py        # 采集调度
-│   │   ├── cpu.py / gpu.py / memory.py / disks.py ...
+│   │   ├── useAgentSocket.js # WebSocket client (singleton + auto-reconnect)
+│   │   ├── useChatStore.js   # Chat state store
+│   │   ├── useFileUpload.js  # File upload (OCR / RAG)
 │   │   └── ...
-│   └── proactive/            # 主动提醒引擎
-│       └── scheduler.py      # 闲置检测 + 提醒规则
-├── runtime/skills/            # 技能插件目录
-├── assets/                    # 静态资源（图标等）
-├── config.json               # 应用配置模板
-├── package.json              # Node.js 依赖
-├── requirements.txt          # Python 依赖
-├── vite.config.js            # Vite 配置（多页入口）
-├── start.bat                 # Windows 启动脚本
-└── plans/sassy-cat-design.md # 详细设计文档
+│   ├── components/
+│   │   ├── MarkdownRenderer.vue # Markdown/LaTeX/Mermaid rendering
+│   │   ├── DocumentAttachment.vue / FilePreview.vue
+│   └── api/                  # REST clients (kb / messages / stats)
+├── pet/                       # Pet window (Vite multi-page entry)
+│   ├── pet.html / pet-main.js
+│   └── components/PetApp.vue # Sprite animation + bubbles + interaction
+├── python/                    # Python backend
+│   ├── main.py               # Entry (asyncio + FastAPI)
+│   ├── server/
+│   │   ├── app.py            # FastAPI app + routes + lifespan
+│   │   ├── ws_agent.py       # /ws/agent endpoint + session management
+│   │   ├── conversations.py  # Conversation history APIs
+│   │   ├── kb_api.py         # Knowledge base APIs
+│   │   ├── stats_api.py      # Monitor stats APIs
+│   │   └── db/               # SQLAlchemy models + Alembic migrations
+│   ├── agent/
+│   │   ├── engine.py         # Agent builder (config injection)
+│   │   ├── llms.py           # LLM factory
+│   │   ├── prompts.py        # Persona templates + runtime prompt assembly
+│   │   ├── main_agent.py     # Streaming conversation core
+│   │   ├── middlewares.py    # Agent middlewares
+│   │   ├── tools/            # builtin_tools / rag_tools / reminder_tools
+│   │   └── rag/              # document_retriever / rag_service / model_download
+│   ├── monitor/              # System monitoring (cpu / gpu / memory / disks)
+│   ├── ocr/                  # Document parsing (markitdown / docling / rapidocr)
+│   └── proactive/            # Idle detection + greetings + reminders
+├── runtime/skills/            # Skill plugin directory (e.g. weather-skill)
+├── assets/                    # Static assets (icons)
+├── config.json               # App config template
+├── package.json              # Node.js dependencies
+├── requirements.txt          # Python dependencies
+├── vite.config.js            # Vite config (multi-page)
+├── start.bat                 # Windows start script
+└── plans/                    # Design & migration docs
 ```
 
-## 🚀 快速开始
+## 🚀 Quick Start
 
-### 环境要求
+### Requirements
 
 - **Node.js**: 18+
 - **npm**: 9+
-- **Python**: 3.10+（程序会自动检测，缺失时自动下载嵌入式 Python）
+- **Python**: 3.10+ (auto-detected; an embedded Python is downloaded automatically if missing)
 
-### 安装依赖
+### Install Dependencies
 
 ```bash
 npm install
 ```
 
-### 开发模式
+### Development Mode
 
 **Windows:**
 ```bash
 start.bat
 ```
 
-**macOS/Linux:**
+**macOS / Linux:**
 ```bash
 npm run electron:dev
 ```
 
-开发模式会同时启动 Vite 开发服务器和 Electron 应用，支持热重载。
+Development mode launches the Vite dev server and the Electron app together, with hot reload.
 
-### 生产构建
+### Production Build
 
 ```bash
-# 构建所有平台
+# Build for all platforms
 npm run electron:build
 
-# 仅构建 Windows
+# Build for a specific platform
 npm run electron:build:win
-
-# 仅构建 macOS
 npm run electron:build:mac
-
-# 仅构建 Linux
 npm run electron:build:linux
 ```
 
-构建产物位于 `dist_electron/` 目录。
+Build artifacts are output to the `dist_electron/` directory.
 
-## 🔧 开发指南
+## 🔧 Development Guide
 
-### 前端（主窗口）
+### Frontend (Main Window)
 
-前端使用 Vue 3 + Vite，代码位于 `src/` 目录：
+The frontend uses Vue 3 + Vite and lives in `src/`:
 
-- [`ChatView.vue`](src/views/ChatView.vue) — AI 聊天页，流式对话 + 工具调用展示
-- [`Dashboard.vue`](src/views/Dashboard.vue) — 系统监控仪表盘
-- [`Settings.vue`](src/views/Settings.vue) — LLM 配置 + 人设/系统提示词编辑
-- [`useAgentSocket.js`](src/composables/useAgentSocket.js) — WebSocket 客户端封装
+- [`ChatView.vue`](src/views/ChatView.vue) — AI chat page with streaming and tool-call display
+- [`Dashboard.vue`](src/views/Dashboard.vue) — System monitor dashboard
+- [`KnowledgeBase.vue`](src/views/KnowledgeBase.vue) — Knowledge base management
+- [`Settings.vue`](src/views/Settings.vue) — LLM / persona / RAG / proxy settings
+- [`useAgentSocket.js`](src/composables/useAgentSocket.js) — WebSocket client wrapper
 
-修改前端代码会自动热重载。
+Frontend changes are hot-reloaded automatically.
 
-### 桌宠窗口
+### Pet Window
 
-桌宠使用 Vite 多页入口，代码位于 `pet/` 目录：
+The pet uses a separate Vite multi-page entry under `pet/`:
 
-- [`PetApp.vue`](pet/components/PetApp.vue) — 精灵动画 + 气泡 + 交互逻辑
-- [`pet-preload.js`](electron/pet-preload.js) — 桌宠专用预加载脚本
+- [`PetApp.vue`](pet/components/PetApp.vue) — Sprite animation + bubble + interaction logic
+- [`pet-preload.js`](electron/pet-preload.js) — Dedicated preload script
 
-### Python 后端
+### Python Backend
 
-后端代码位于 `python/` 目录，基于 FastAPI + asyncio：
+The backend lives in `python/` and is built on FastAPI + asyncio:
 
-- [`main.py`](python/main.py) — 服务入口
-- [`server/ws_agent.py`](python/server/ws_agent.py) — WebSocket 聊天端点
-- [`agent/engine.py`](python/agent/engine.py) — Agent 构建引擎
-- [`monitor/service.py`](python/monitor/service.py) — 系统监控采集
+- [`main.py`](python/main.py) — Service entry
+- [`server/ws_agent.py`](python/server/ws_agent.py) — WebSocket chat endpoint
+- [`agent/engine.py`](python/agent/engine.py) — Agent builder engine
+- [`monitor/service.py`](python/monitor/service.py) — System monitoring collection
 
-在 `requirements.txt` 中添加 Python 依赖，程序启动时会自动安装。
+Add Python dependencies to `requirements.txt`; they are installed automatically at startup.
 
-### 通信架构
+### Communication Architecture
 
-| 数据类型 | 通道 | 说明 |
+| Data Type | Channel | Description |
 |---|---|---|
-| AI 对话 / 流式 token / 主动提醒 | WebSocket | 渲染进程直连 Python，低延迟 |
-| 配置持久化（LLM / 人设 / 桌宠偏好） | IPC | 主进程读写 config.user.json |
-| 系统监控数据 | stdio 协议行 + IPC | 兼容现有解析逻辑 |
-| 窗口控制（拖动 / 置顶 / 穿透） | IPC | 主进程管理 |
+| AI chat / streaming tokens / proactive reminders | WebSocket | Renderer connects directly to Python for low latency |
+| Config persistence (LLM / persona / pet preferences) | IPC | Main process reads/writes `config.user.json` |
+| System monitoring data | stdio protocol lines + IPC | Compatible with existing parsing logic |
+| Window control (drag / always-on-top / click-through) | IPC | Managed by the main process |
 
-## ⚙️ 配置说明
+## ⚙️ Configuration
 
-### 应用配置（config.json）
+### App Config (`config.json`)
 
-项目基础信息维护在根目录 [`config.json`](config.json) 中：
+Base project info is maintained in the root [`config.json`](config.json):
 
 ```json
 {
   "app": {
     "name": "优墨",
-    "description": "结合AI Agent能力的桌宠",
     "version": "1.0.0"
   },
+  "agent": { "memoryWindow": 50, "recursionLimit": 50, "ocrEngine": "markitdown" },
+  "rag": { "autoEmbedding": true, "embeddingModel": { "type": "local", "model": "BAAI/bge-small-zh-v1.5" }, "ocrEngine": "docling" },
+  "network": { "proxy": { "enabled": false } },
   "pythonVersion": "3.11.9"
 }
 ```
 
-### 用户配置（config.user.json）
+### User Config (`config.user.json`)
 
-运行时用户配置（LLM 连接、人设提示词、桌宠偏好等）存储在 `userData/config.user.json`，通过设置页可视化编辑，采用双层配置设计（模板 + 用户覆盖），应用升级不丢失。
+Runtime user settings (LLM connections, persona prompts, pet preferences, etc.) are stored in `userData/config.user.json` and edited via the visual settings page. It uses a dual-layer design (template + user override) so settings survive upgrades.
 
-### 自定义 Python 版本
+### Custom Python Version
 
-修改 `config.json` 中的 `pythonVersion`，重启应用生效。若已下载过嵌入式 Python，需删除 `python_env` 目录后重启。
+Change `pythonVersion` in `config.json` and restart. If an embedded Python was already downloaded, delete the `python_env` directory before restarting.
 
-## 📦 打包说明
+## 📦 Packaging
 
-将应用图标放置在 `assets/` 目录：
+Place app icons in `assets/`:
 
-- `icon.ico` — Windows 图标
-- `icon.icns` — macOS 图标
-- `icon.png` — Linux 图标
+- `icon.ico` — Windows icon
+- `icon.icns` — macOS icon
+- `icon.png` — Linux icon
 
-`extraResources` 配置会自动将 `requirements.txt`、`python/`、`config.json`、`assets/` 打包到应用中。
+`extraResources` auto-bundles `requirements.txt`, `python/`, `config.json`, and `assets/` into the app.
 
-## 📝 许可证
+## 📝 License
 
-Apache License 2.0
+[Apache License 2.0](LICENSE)
 
-## 🤝 贡献
+## 🤝 Contributing
 
-欢迎提交 Issue 和 Pull Request！
+Issues and pull requests are welcome!
 
-## 📮 反馈
+## 📮 Feedback
 
-如有问题，请前往 [项目主页](https://gitee.com/zjwan461/sassy-cat) 提交 Issue。
+Report issues on the [project homepage](https://gitee.com/zjwan461/sassy-cat).

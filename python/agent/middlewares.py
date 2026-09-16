@@ -217,7 +217,11 @@ def inject_kb_info(request, handler):
     if kbs:
         lines = [
             KB_MARKER,
-            "用户拥有如下知识库，请根据用户问题判断是否需要调用工具 **search_from_kb** 进行知识库搜索：",
+            "用户拥有如下知识库。当问题涉及其中内容时，请调用工具 **search_from_kb** 检索："
+            "能对应到下述某个库就传对应 ID，不确定归属时传 \"all\" 全库搜索。"
+            "凡引用知识库内容作答，必须在回答末尾用 markdown 有序列表列出「参考来源」，"
+            "每项标注来源文件名 + 所属知识库名称（可对照下方 ID/名称核实），禁止编造来源；"
+            "完整规范见运行时约束「知识库检索与溯源规范」：",
         ]
         for idx, kb in enumerate(kbs, 1):
             kb_id = kb.get("id", "")
