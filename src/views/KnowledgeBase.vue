@@ -22,12 +22,17 @@
         @click="goDetail(kb)"
       >
         <div class="card-top">
-          <span class="card-icon">📚</span>
-          <!-- 默认知识库不可删除，仅显示标记 -->
-          <span v-if="kb.id === DEFAULT_KB_ID" class="card-badge" title="默认知识库，存放聊天上传文件，不可删除">
-            默认
-          </span>
-          <button v-else class="card-del" title="删除知识库" @click.stop="confirmDelete(kb)">✕</button>
+          <div class="card-top-left">
+            <span class="card-icon">📚</span>
+            <!-- 默认知识库不可删除，仅显示标记 -->
+            <span v-if="kb.id === DEFAULT_KB_ID" class="card-badge" title="默认知识库，存放聊天上传文件，不可删除">
+              默认
+            </span>
+          </div>
+          <div class="card-top-actions">
+            <button class="card-edit" title="编辑名称与描述" @click.stop="openEdit(kb)">✎</button>
+            <button v-if="kb.id !== DEFAULT_KB_ID" class="card-del" title="删除知识库" @click.stop="confirmDelete(kb)">✕</button>
+          </div>
         </div>
         <div class="card-name" :title="kb.name">{{ kb.name }}</div>
         <div class="card-desc">{{ kb.description || '暂无描述' }}</div>
@@ -81,13 +86,41 @@
         </div>
       </div>
     </div>
+
+    <!-- 编辑知识库弹窗（仅修改名称/描述，默认知识库同样可编辑） -->
+    <div v-if="showEdit" class="modal-mask" @click.self="showEdit = false">
+      <div class="modal">
+        <div class="modal-title">编辑知识库</div>
+        <input
+          v-model="editName"
+          class="modal-input"
+          placeholder="知识库名称（必填）"
+          maxlength="50"
+          @keyup.enter="submitEdit"
+        />
+        <textarea
+          v-model="editDesc"
+          class="modal-textarea"
+          placeholder="描述（可选）"
+          rows="3"
+          maxlength="200"
+        ></textarea>
+        <div v-if="editError" class="modal-error">{{ editError }}</div>
+        <div class="modal-actions">
+          <button class="btn-ghost" @click="showEdit = false">取消</button>
+          <button class="btn-primary" :disabled="editing || !editName.trim()" @click="submitEdit">
+            {{ editing ? '保存中…' : '保存' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { listKbs, createKb, deleteKb } from '../api/kb'
+import { listKbs, createKb, updateKb, deleteKb } from '../api/kb'
 
 const router = useRouter()
 const api = window.electronAPI
@@ -106,6 +139,14 @@ const formName = ref('')
 const formDesc = ref('')
 const creating = ref(false)
 const createError = ref('')
+
+// 编辑知识库状态
+const showEdit = ref(false)
+const editId = ref('')
+const editName = ref('')
+const editDesc = ref('')
+const editing = ref(false)
+const editError = ref('')
 
 async function load() {
   loading.value = true
@@ -140,6 +181,30 @@ async function submitCreate() {
     createError.value = e.message
   } finally {
     creating.value = false
+  }
+}
+
+function openEdit(kb) {
+  editId.value = kb.id
+  editName.value = kb.name
+  editDesc.value = kb.description || ''
+  editError.value = ''
+  showEdit.value = true
+}
+
+async function submitEdit() {
+  const name = editName.value.trim()
+  if (!name) return
+  editing.value = true
+  editError.value = ''
+  try {
+    await updateKb(editId.value, name, editDesc.value.trim())
+    showEdit.value = false
+    await load()
+  } catch (e) {
+    editError.value = e.message
+  } finally {
+    editing.value = false
   }
 }
 
@@ -298,6 +363,29 @@ onMounted(() => {
   padding: 2px 8px;
   cursor: default;
 }
+
+.card-top-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.card-edit {
+  background: transparent;
+  border: none;
+  color: #475569;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.card-edit:hover { color: #818cf8; background: rgba(79, 70, 229, 0.1); }
 
 .card-del {
   background: transparent;
