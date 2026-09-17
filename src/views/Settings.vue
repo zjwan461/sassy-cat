@@ -232,6 +232,51 @@
       </div>
     </section>
 
+    <!-- 语音朗读（TTS） -->
+    <section class="card">
+      <div class="card-header">语音朗读（TTS）</div>
+      <div class="card-body form">
+        <div class="field">
+          <label>语音方案</label>
+          <select v-model="form.voiceEngine">
+            <option value="web-speech">Web Speech API（系统语音 · 无需 GPU）</option>
+            <option value="local" disabled>本地 TTS（N 卡 ≥8GB，Phase 2 敬请期待）</option>
+          </select>
+          <span class="hint">当前方案使用系统自带语音，无需显卡、零依赖；本地 TTS 将随 GPU 推理支持逐步开放</span>
+        </div>
+        <div class="field">
+          <label class="check"><input type="checkbox" v-model="form.voiceEnabled" /> 启用语音朗读</label>
+          <span class="hint">开启后，每条 AI 回复气泡下都会出现朗读按钮</span>
+        </div>
+        <div class="field">
+          <label class="check"><input type="checkbox" v-model="form.voiceAutoRead" :disabled="!form.voiceEnabled" /> AI 自动朗读</label>
+          <span class="hint">开启后 AI 回复生成时自动朗读；内置播放缓冲抗网络波动，回复结束会补全剩余内容</span>
+        </div>
+        <div class="field">
+          <label>中文语音</label>
+          <div class="profile-row">
+            <select v-model="form.voiceVoiceName" class="voice-select" :disabled="!form.voiceEnabled">
+              <option v-for="v in voiceOptions" :key="v.name" :value="v.name">{{ voiceLabel(v) }}</option>
+            </select>
+            <button class="mini voice-preview-btn" type="button" :disabled="!form.voiceEnabled" @click="voicePreview" :title="testingVoice ? '正在试听…' : '试听当前语音'">
+              <template v-if="testingVoice"><span class="eq"><i></i><i></i><i></i></span>试听中</template>
+              <template v-else>试听</template>
+            </button>
+          </div>
+          <span class="hint" v-if="!voiceOptions.length">{{ voiceNoVoicesHint }}</span>
+          <span class="hint" v-else>选择朗读时使用的语音；留空则自动挑选中文语音</span>
+        </div>
+        <div class="field">
+          <label>语速 <span class="inline-val">{{ form.voiceRate.toFixed(1) }}</span></label>
+          <input type="range" min="0.5" max="2" step="0.1" v-model.number="form.voiceRate" :disabled="!form.voiceEnabled" />
+        </div>
+        <div class="field">
+          <label>音调 <span class="inline-val">{{ form.voicePitch.toFixed(1) }}</span></label>
+          <input type="range" min="0.5" max="2" step="0.1" v-model.number="form.voicePitch" :disabled="!form.voiceEnabled" />
+        </div>
+      </div>
+    </section>
+
     <!-- 闲置提醒 -->
     <section class="card">
       <div class="card-header">闲置提醒</div>
@@ -352,11 +397,14 @@ import { useRoute } from 'vue-router'
 import { useAgentSocket } from '../composables/useAgentSocket'
 import { useRestartState } from '../composables/useRestartState'
 import { useModelDownloadState } from '../composables/useModelDownloadState'
+import { useTTS } from '../composables/useTTS'
 import { downloadEmbeddingModel } from '../api/embeddingModelDownload'
 
 const { connect, send, on } = useAgentSocket()
 const api = window.electronAPI
 const route = useRoute()
+// 语音朗读（TTS）：中文语音枚举、试听、配置刷新
+const { getZhVoices, testVoice, loadConfig: loadTtsConfig, ttsState, speaking } = useTTS()
 
 // 模块级单例状态：切换 tab 导致组件卸载/重新挂载时，重启进度与提示不丢失
 const { restarting, restartDone, toast } = useRestartState()
@@ -390,7 +438,9 @@ const form = reactive({
   ragAutoEmbedding: true, ragEmbedType: 'local', ragEmbedModel: 'BAAI/bge-small-zh-v1.5',
   ragEmbedBaseUrl: '', ragEmbedApiKey: '', ragOcrEngine: 'docling',
   ragLocalDownloaded: false,
-  proxyEnabled: false, proxyHttp: '', proxyHttps: '', proxyNoProxy: ''
+  proxyEnabled: false, proxyHttp: '', proxyHttps: '', proxyNoProxy: '',
+  voiceEnabled: false, voiceEngine: 'web-speech', voiceAutoRead: false,
+  voiceVoiceName: '', voiceRate: 1, voicePitch: 1
 })
 
 const recordingKey = ref(false)
@@ -463,6 +513,42 @@ function setAllInterrupt(value) {
   for (const t of interruptTools) form.interruptOn[t.name] = value
 }
 
+// ---------- 语音朗读（TTS） ----------
+// 中文语音下拉选项（响应式：系统语音异步就绪后自动刷新）
+const voiceOptions = computed(() => getZhVoices())
+
+// 简洁化语音名：去 Microsoft 前缀与中文区段，避免下拉框被全名撑爆
+function voiceLabel(v) {
+  const raw = v.name || ''
+  const short = raw
+    .replace(/^Microsoft\s*/i, '')
+    .replace(/\s*\(Natural\)\s*-\s*Chinese/i, '')
+    .replace(/\s*-{1,2}\s*Chinese\s*\([^)]*\)\s*$/i, '')
+    .replace(/\s*\(zh-CN\)\s*$/i, '')
+    .trim() || raw
+  const lang = (v.lang || '').replace('_', '-')
+  const tag = v.localService ? '· 本地' : v.online ? '· 在线' : ''
+  return `${short}（${lang}${tag}）`
+}
+
+const voiceNoVoicesHint = computed(() => {
+  if (!ttsState.ready) return '未检测到系统语音，请检查系统「语音」设置。'
+  return '未检测到中文语音，可能需要安装中文语言包（Win10/11 自带 Huihui / Kangkang / Yaoyao）；将自动使用系统默认语音朗读。'
+})
+
+// 试听：用当前表单（未保存）的语音/语速/音调试读一句话
+// 试听是否进行中（useTTS 播放 voice-test 时置位，播完/停止后复位）
+const testingVoice = computed(() => speaking.value === 'voice-test')
+
+function voicePreview() {
+  const ok = testVoice('喵～本喵就是这么可爱！', {
+    voiceName: form.voiceVoiceName,
+    rate: form.voiceRate,
+    pitch: form.voicePitch,
+  })
+  if (!ok) showToast('系统不支持语音播放，或未检测到语音引擎')
+}
+
 async function loadConfig() {
   const res = await api.getConfig()
   if (!res.success) return showToast('配置加载失败')
@@ -488,6 +574,13 @@ async function loadConfig() {
   form.proxyHttp = cfg.network?.proxy?.http || ''
   form.proxyHttps = cfg.network?.proxy?.https || ''
   form.proxyNoProxy = cfg.network?.proxy?.noProxy || ''
+  // 语音朗读（TTS）
+  form.voiceEnabled = cfg.voice?.enabled === true
+  form.voiceEngine = cfg.voice?.engine || 'web-speech'
+  form.voiceAutoRead = cfg.voice?.autoRead === true
+  form.voiceVoiceName = cfg.voice?.voiceName || ''
+  form.voiceRate = cfg.voice?.rate ?? 1
+  form.voicePitch = cfg.voice?.pitch ?? 1
   // Tavily API Key：掩码处理
   const tavilyKey = cfg.agent?.tavilyApiKey || ''
   form.tavilyApiKey = tavilyKey.length > 3 ? '***' + tavilyKey.slice(-3) : tavilyKey
@@ -703,6 +796,13 @@ async function saveAll() {
     { path: 'network.proxy.http', value: form.proxyHttp.trim() },
     { path: 'network.proxy.https', value: form.proxyHttps.trim() },
     { path: 'network.proxy.noProxy', value: form.proxyNoProxy.trim() },
+    // 语音朗读（TTS）
+    { path: 'voice.enabled', value: !!form.voiceEnabled },
+    { path: 'voice.engine', value: form.voiceEngine || 'web-speech' },
+    { path: 'voice.autoRead', value: !!form.voiceAutoRead },
+    { path: 'voice.voiceName', value: form.voiceVoiceName },
+    { path: 'voice.rate', value: Number(form.voiceRate) || 1 },
+    { path: 'voice.pitch', value: Number(form.voicePitch) || 1 },
     { path: 'agent.ocrEngine', value: form.agentOcrEngine === 'docling' ? 'docling' : 'markitdown' },
     { path: 'agent.interruptOn', value: { ...form.interruptOn } },
     { path: 'rag.autoEmbedding', value: !!form.ragAutoEmbedding },
@@ -738,6 +838,8 @@ async function saveAll() {
   send('config.invalidate', { paths: ['llm', 'agent', 'rag'] })
   showToast('已保存，配置热生效 ✓')
   await loadConfig()
+  // 同步 TTS 运行时状态（自动朗读设置即时对聊天页生效）
+  await loadTtsConfig()
 }
 
 function resetPersona() {
@@ -989,6 +1091,18 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: #6366f1
 .mini { background: #334155; border: none; color: #cbd5e1; border-radius: 8px; padding: 0 14px; cursor: pointer; }
 .hint { font-size: 12px; color: #64748b; }
 .hint.bad { color: #f87171; }
+/* 语音朗读（TTS）：滑杆与数值样式 */
+input[type="range"] { border: none; padding: 0; background: transparent; width: 100%; accent-color: #6366f1; }
+.inline-val { color: #a5b4fc; font-family: Consolas, monospace; font-size: 12px; margin-left: 6px; }
+/* 语音下拉：压缩宽度（min-width:0 允许 flex 收缩），防止长语音名把「试听」按钮挤出可视区 */
+.profile-row .voice-select { min-width: 0; flex: 1 1 150px; }
+/* 试听按钮：播放中「均衡器」动画 */
+.voice-preview-btn { display: inline-flex; align-items: center; gap: 6px; }
+.eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
+.eq i { width: 3px; border-radius: 1px; background: #34d399; animation: eq-bounce 0.9s ease-in-out infinite; }
+.eq i:nth-child(2) { animation-delay: 0.15s; }
+.eq i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes eq-bounce { 0%, 100% { height: 4px; } 50% { height: 12px; } }
 /* 悬浮操作条：sticky 相对 .content 滚动容器；top 负值抵消其 32px 上内边距，滚动时真正贴住画面最顶端 */
 .global-actions {
   position: sticky;

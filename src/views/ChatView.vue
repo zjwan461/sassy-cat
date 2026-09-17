@@ -88,8 +88,19 @@
               </template>
               <template v-else>{{ m.content }}</template>
             </div>
-            <!-- 操作条：复制按钮（豆包风格图标按钮），助手消息流式期间隐藏 -->
+            <!-- 操作条：朗读 + 复制按钮（豆包风格图标按钮），助手消息流式期间隐藏 -->
             <div v-if="isAssistant(m) ? (!m.streaming && (m.content || m.reasoning)) : !!m.content" class="msg-actions">
+              <button
+                v-if="isAssistant(m) && m.content"
+                class="action-btn"
+                type="button"
+                :class="{ speaking: isSpeaking(m) }"
+                :title="isSpeaking(m) ? '停止朗读' : '朗读'"
+                @click="onSpeak(m)"
+              >
+                <svg v-if="isSpeaking(m)" class="action-icon speaking" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
+                <svg v-else class="action-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>
+              </button>
               <button
                 class="action-btn"
                 type="button"
@@ -237,6 +248,7 @@
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useChatStore } from '../composables/useChatStore'
 import { useFileUpload } from '../composables/useFileUpload'
+import { useTTS } from '../composables/useTTS'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 import FilePreview from '../components/FilePreview.vue'
 import DocumentAttachment from '../components/DocumentAttachment.vue'
@@ -246,6 +258,8 @@ import DocumentAttachment from '../components/DocumentAttachment.vue'
 // 重新挂载直接恢复现场继续渲染，不再出现"切走就停止渲染"的问题。
 const { chat, conv, socketState, submitMessage, stopGeneration, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation, loadMoreMessages } = useChatStore()
 const { hasAttachments, isProcessing, handleFiles, buildAttachments, clearAllAttachments } = useFileUpload()
+// 语音朗读（TTS）：播放状态（模块级，跨 tab 存活）+ 播放/停止/切换
+const { speaking, playMessage, loadConfig: loadTtsConfig } = useTTS()
 
 const messages = chat.messages
 const draft = ref('')
@@ -334,6 +348,18 @@ watch(
 
 function isAssistant(m) {
   return m.role === 'assistant'
+}
+
+// ---------- 语音朗读（TTS） ----------
+// 当前消息是否正在朗读（播放中按钮高亮为停止图标）
+function isSpeaking(m) {
+  return speaking.value === m.id
+}
+
+// 点击朗读按钮：播放/停止/切换（由 useTTS.playMessage 裁决）
+function onSpeak(m) {
+  if (!m.content) return
+  playMessage(m.id, m.content)
 }
 
 // 复制助手消息：包含深度思考内容 + 正文
@@ -545,6 +571,8 @@ async function onLoadMore() {
 onMounted(() => {
   // 回到页面时若仍处于流式轮次，恢复滚动位置
   scrollBottom()
+  // 刷新语音配置（用户在设置页可能改过自动朗读/语音等，回到聊天页即时生效）
+  loadTtsConfig()
 })
 </script>
 
@@ -638,6 +666,8 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .action-btn:hover { background: #33415580; color: #cbd5e1; }
 .action-btn .action-icon { display: block; }
 .action-btn .action-icon.copied { color: #34d399; }
+.action-btn.speaking { color: #34d399; }
+.action-btn.speaking .action-icon { color: #34d399; }
 
 /* 工具调用折叠容器 */
 .tool-steps-wrapper { margin-top: 6px; background: #0f172a80; border: 1px solid #334155; border-radius: 8px; overflow: hidden; }

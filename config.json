@@ -48,6 +48,14 @@
       "noProxy": ""
     }
   },
+  "voice": {
+    "enabled": false,
+    "engine": "web-speech",
+    "autoRead": false,
+    "voiceName": "",
+    "rate": 1.0,
+    "pitch": 1.0
+  },
   "links": [
     { "label": "项目主页", "url": "https://gitee.com/zjwan461/sassy-cat" },
     { "label": "使用文档", "url": "https://gitee.com/zjwan461/sassy-cat/blob/master/README.md" },
