@@ -125,14 +125,35 @@ def _format_profile(profile: OwnerProfile | dict) -> str:
     lines = []
     if data.get("master_name"):
         lines.append(f"- 称呼：{data['master_name']}")
+    if data.get("gender"):
+        lines.append(f"- 性别：{data['gender']}")
+    if data.get("age") is not None:
+        lines.append(f"- 年龄：{data['age']}")
+    if data.get("occupation"):
+        lines.append(f"- 职业：{data['occupation']}")
+    if data.get("location"):
+        lines.append(f"- 所在地：{data['location']}")
+    if data.get("relationship_status"):
+        lines.append(f"- 情感状况：{data['relationship_status']}")
     likes = data.get("likes") or []
     if likes:
         lines.append(f"- 爱好：{'、'.join(likes)}")
     dislikes = data.get("dislikes") or []
     if dislikes:
         lines.append(f"- 不喜欢：{'、'.join(dislikes)}")
+    personality = data.get("personality") or []
+    if personality:
+        lines.append(f"- 性格：{'、'.join(personality)}")
     if data.get("daily_habit"):
         lines.append(f"- 作息习惯：{data['daily_habit']}")
+    goals = data.get("goals") or []
+    if goals:
+        lines.append(f"- 目标：{'、'.join(goals)}")
+    important_dates = data.get("important_dates") or []
+    if important_dates:
+        lines.append(f"- 重要日期：{'、'.join(important_dates)}")
+    if data.get("health_notes"):
+        lines.append(f"- 健康提醒：{data['health_notes']}")
     return "\n".join(lines)
 
 
@@ -241,3 +262,4 @@ def inject_kb_info(request, handler):
         return handler(request)  # 内容无变化，原样透传
 
     return handler(request.override(system_message=SystemMessage(content=new_content)))
+
