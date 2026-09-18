@@ -190,7 +190,10 @@
             </details>
             <!-- 确认卡失效提示：用户在确认前发送了新消息，服务端以 respond 决策跳过挂起操作并续跑新消息 -->
             <div v-if="m.interruptExpired" class="interrupt-expired">⏹ 新消息已发送，未确认的操作已跳过</div>
-            <div v-if="m.error" class="msg-error">{{ m.error }}</div>
+            <div v-if="m.error" class="msg-error">
+              <span class="msg-error-text">{{ m.error }}</span>
+              <button class="msg-retry-btn" type="button" :disabled="m.streaming" @click="onRetry(m)">重试</button>
+            </div>
             <!-- 光标：放在 msg-body 末尾，确保出现在所有内容（包括工具步骤和中断确认）之后 -->
             <span v-if="m.streaming" class="cursor cursor-at-end">▌</span>
           </div>
@@ -261,7 +264,7 @@ import DocumentAttachment from '../components/DocumentAttachment.vue'
 // 会话状态与 WS 事件订阅已提升到模块级单例（useChatStore）：
 // 切换 tab 导致本组件卸载时，流式数据仍在后台接收与累积；
 // 重新挂载直接恢复现场继续渲染，不再出现"切走就停止渲染"的问题。
-const { chat, conv, socketState, submitMessage, stopGeneration, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation, loadMoreMessages } = useChatStore()
+const { chat, conv, socketState, submitMessage, stopGeneration, retryLastTurn, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation, loadMoreMessages } = useChatStore()
 const { hasAttachments, isProcessing, handleFiles, buildAttachments, clearAllAttachments } = useFileUpload()
 // 语音朗读（TTS）：播放状态（模块级，跨 tab 存活）+ 播放/停止/切换
 const { speaking, playMessage, loadConfig: loadTtsConfig } = useTTS()
@@ -565,6 +568,12 @@ function stopGen() {
   stopGeneration()
 }
 
+// 重试上一轮失败的生成（是否重试由用户决定）；重试后滚到底部跟随新内容
+function onRetry(m) {
+  retryLastTurn(m.id)
+  forceScrollBottom()
+}
+
 // ---------- 文档附件提取 ----------
 function docAttachments(m) {
   if (!m.attachments) return []
@@ -761,7 +770,21 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .btn-sm.approve { background: #065f46; color: #6ee7b7; }
 .btn-sm.reject { background: #7f1d1d; color: #fca5a5; }
 
-.msg-error { margin-top: 6px; color: #f87171; font-size: 13px; }
+.msg-error { display: flex; align-items: center; gap: 10px; margin-top: 6px; color: #f87171; font-size: 13px; }
+.msg-error-text { flex: 1; min-width: 0; }
+.msg-retry-btn {
+  flex-shrink: 0;
+  padding: 4px 14px;
+  font-size: 12px;
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.msg-retry-btn:hover:not(:disabled) { background: rgba(248, 113, 113, 0.22); border-color: rgba(248, 113, 113, 0.7); }
+.msg-retry-btn:disabled { opacity: 0.5; cursor: default; }
 
 /* 输入区域 */
 .input-area { 

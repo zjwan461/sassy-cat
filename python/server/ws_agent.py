@@ -25,7 +25,13 @@ from proactive import greeting, scheduler
 from server import conversations
 from server.bus import hub
 from server.protocol import envelope
-from server.db import save_message, save_attachment, update_message, get_message_by_id
+from server.db import (
+    save_message,
+    save_attachment,
+    update_message,
+    get_message_by_id,
+    get_messages_by_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +148,7 @@ async def _save_or_update_assistant_message_sage(
     interrupt_actions: list | None = None,
     tool_call_result: list | None = None,
     usage_metadata: dict | None = None,
+    error: str | None = None,
 ):
     """安全地保存或更新 AI 消息到数据库，失败不影响聊天"""
     try:
@@ -172,6 +179,7 @@ async def _save_or_update_assistant_message_sage(
                 interrupt_actions=interrupt_actions,
                 tool_call_result=tool_call_result,
                 usage_metadata=usage_metadata,
+                error=error,
             )
             logger.debug(f"AI 消息已更新: id={msg_id}")
         else:
@@ -187,6 +195,7 @@ async def _save_or_update_assistant_message_sage(
                 interrupt_actions=interrupt_actions,
                 tool_call_result=tool_call_result,
                 usage_metadata=usage_metadata,
+                error=error,
             )
             logger.debug(f"AI 消息已保存: id={msg_id}")
     except Exception as e:
@@ -349,7 +358,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 await flush()
                 final_text = event.get("text", "")
                 await emit("chat.completed", {"msgId": msg_id, "text": final_text})
-                # 异步保存 AI 消息（不阻塞聊天）
+                # 异步保存 AI 消息（不阻塞聊天）；error="" 显式清除历史错误标记
                 asyncio.create_task(
                     _save_or_update_assistant_message_sage(
                         session_id=session_id,
@@ -367,23 +376,43 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                             tool_call_result if tool_call_result else None
                         ),
                         usage_metadata=usage_metadata,
+                        error="",
                     )
                 )
             elif kind == "error":
                 await flush()
+                err_msg = event.get("message") or "生成失败，请重试"
                 await emit(
                     "chat.error",
                     {
                         "msgId": msg_id,
-                        "code": "agent_error",
-                        "message": event.get("message", ""),
+                        "code": event.get("code") or "agent_error",
+                        "message": err_msg,
                     },
+                )
+                # 失败轮次也落库（含已流式输出的部分内容 + error 标记），
+                # 使刷新/切回会话后错误气泡与「重试」入口依然存在
+                asyncio.create_task(
+                    _save_or_update_assistant_message_sage(
+                        session_id=session_id,
+                        msg_id=msg_id,
+                        content="".join(content_parts),
+                        reasoning="".join(reasoning_parts) if reasoning_parts else None,
+                        tool_calls=tool_call if tool_call else None,
+                        tool_call_args=(
+                            tool_call_args_list if tool_call_args_list else None
+                        ),
+                        tool_call_result=(
+                            tool_call_result if tool_call_result else None
+                        ),
+                        usage_metadata=usage_metadata,
+                        error=err_msg,
+                    )
                 )
     except Exception as e:
         logger.exception("stream turn 异常")
-        await emit(
-            "chat.error", {"msgId": msg_id, "code": "internal", "message": str(e)}
-        )
+        code, msg = runner.classify_error(e)
+        await emit("chat.error", {"msgId": msg_id, "code": code, "message": msg})
     finally:
         _running_turns -= 1
         # 仅当注册的取消事件仍是本轮的才清理：旧轮次结束时可能已有新轮次
@@ -534,6 +563,89 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
         gen = runner.resume_turn(session_id, decisions, cancel)
     else:
         gen = runner.run_turn(user_content, session_id, cancel)
+    await _stream_turn(ws, session_id, gen, msg_id, cancel)
+    await hub.publish(session_id, envelope("pet.command", {"action": "idle"}))
+
+
+async def _last_user_content(session_id: str) -> str | None:
+    """取会话中最后一条用户消息的文本内容（重试兜底用）。
+
+    get_messages_by_session 已按 created_at 倒序返回，取首个 role=user 即最新一条。
+    """
+    try:
+        items, _ = await get_messages_by_session(session_id, page=1, page_size=50)
+        for it in items:
+            if it.get("role") == "user" and it.get("content"):
+                return it["content"]
+    except Exception as e:
+        logger.warning(f"读取最后一条用户消息失败 (重试兜底): {e}")
+    return None
+
+
+async def _handle_chat_retry(ws, payload: dict):
+    """重试上一轮失败/中断的生成：不新增用户消息，是否重试完全由用户决定。"""
+    # 与 chat.send / tool.confirm 一致：以服务端激活会话为权威
+    session_id = await conversations.active_id()
+    msg_id = payload.get("msgId") or uuid.uuid4().hex[:12]
+
+    cancel = threading.Event()
+    # 同一 session 已有进行中的轮次 -> 先取消，避免双流并发写同一 checkpoint
+    old = _session_cancel.get(session_id)
+    if old:
+        old.set()
+    _session_cancel[session_id] = cancel
+
+    # 重置该消息的持久化内容：done 分支按「累积」语义写入，若不重置，
+    # 上一次失败残留的部分内容会与新内容拼接造成重复
+    try:
+        await update_message(
+            id=msg_id,
+            content="",
+            reasoning="",
+            tool_calls=[],
+            tool_call_args=[],
+            tool_call_result=[],
+            error="",
+        )
+    except Exception as e:
+        logger.warning(f"重试前重置消息内容失败 (不影响重试): {e}")
+
+    await hub.publish(
+        session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
+    )
+    await hub.publish(session_id, envelope("pet.command", {"action": "think"}))
+
+    # 线程仍有待执行节点 -> 从 checkpoint 续跑（不产生重复 user 消息）；
+    # 否则回退为重发最后一条用户消息（罕见降级，会新增一条 user 消息）
+    pending = False
+    try:
+        _, agent = holder.get()
+        state = agent.get_state({"configurable": {"thread_id": session_id}})
+        pending = bool(state and state.next)
+    except Exception as e:
+        logger.warning(f"重试前校验待执行状态失败: {e}")
+
+    if pending:
+        gen = runner.retry_turn(session_id, cancel)
+    else:
+        content = await _last_user_content(session_id)
+        if not content:
+            await hub.publish(
+                session_id,
+                envelope(
+                    "chat.error",
+                    {
+                        "msgId": msg_id,
+                        "code": "nothing_to_retry",
+                        "message": "没有可重试的内容",
+                    },
+                ),
+            )
+            if _session_cancel.get(session_id) is cancel:
+                _session_cancel.pop(session_id, None)
+            return
+        gen = runner.run_turn(content, session_id, cancel)
+
     await _stream_turn(ws, session_id, gen, msg_id, cancel)
     await hub.publish(session_id, envelope("pet.command", {"action": "idle"}))
 
@@ -709,6 +821,8 @@ async def ws_agent_endpoint(ws: WebSocket):
                     await _send(ws, envelope("pong", {}))
                 elif mtype == "chat.send":
                     asyncio.create_task(_handle_chat_send(ws, payload, room_ref))
+                elif mtype == "chat.retry":
+                    asyncio.create_task(_handle_chat_retry(ws, payload))
                 elif mtype == "chat.cancel":
                     sid = payload.get("sessionId") or room_ref.get("id") or "default"
                     ev = _session_cancel.get(sid)

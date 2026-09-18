@@ -92,15 +92,28 @@ function ensureStarted() {
     const last = chat.messages[chat.messages.length - 1]
     const hasTools = last?.tools && last.tools.length > 0
     const wasResuming = !!last?.resuming
+    const wasErrored = !!last?.error
     const hasPending = !!(last?.interruptActions?.length &&
       (last.interruptDecisions || []).some((d) => d === undefined))
     const wasInterrupted = hasPending || last?.interruptExpired || wasResuming
     if (last) last.resuming = false
-    if (last && last.role === 'assistant' && (hasTools || wasInterrupted)) {
+    if (last && last.role === 'assistant' && (hasTools || wasInterrupted || wasErrored)) {
       // 复用现有消息：更新 id 以匹配新的 msgId，保持 tools 和内容
       last.id = p.msgId
       last.streaming = true
       last.thinking = false
+      // 重试：清空上一条失败回复的内容与错误标记，重新开始
+      // （与服务端 _handle_chat_retry 重置落库行为保持一致）
+      if (wasErrored) {
+        last.content = ''
+        last.reasoning = ''
+        last.tools = []
+        last.usage = undefined
+        last.error = null
+        last.errorCode = null
+        last.thinking = true
+        last.reasoningOpen = true
+      }
       // 卡片已无待确认项则保留展示（与历史回填行为一致）；
       // 仍有待确认项却续跑了，说明是其他窗口/新消息消费的确认，本窗口卡片失效
       if (hasPending && !wasResuming) {
@@ -160,7 +173,19 @@ function ensureStarted() {
   })
   on('chat.error', (p) => {
     const m = chat.messages.find((x) => x.id === p.msgId)
-    if (m) { m.streaming = false; m.error = p.message || '生成失败' }
+    if (m) {
+      m.streaming = false
+      m.error = p.message || '生成失败'
+      m.errorCode = p.code || null
+    } else if (p.msgId === currentMsgId) {
+      // 找不到对应消息（多窗口/边界）：兜底挂到当前轮次的消息上，避免错误被静默吞掉
+      const last = chat.messages[chat.messages.length - 1]
+      if (last && last.role === 'assistant') {
+        last.streaming = false
+        last.error = p.message || '生成失败'
+        last.errorCode = p.code || null
+      }
+    }
     if (p.msgId === currentMsgId) chat.generating = false
   })
   on('agent.tool_call', (p) => {
@@ -339,6 +364,16 @@ export function stopGeneration() {
   send('chat.cancel', { sessionId: chat.convId || socketState.sessionId })
 }
 
+/** 重试上一轮失败的生成：不新增用户消息，是否重试完全由用户决定 */
+export function retryLastTurn(msgId) {
+  ensureStarted()
+  chat.generating = true
+  send('chat.retry', {
+    sessionId: chat.convId || socketState.sessionId,
+    msgId: msgId || currentMsgId,
+  })
+}
+
 /** 单个操作的确认/拒绝；全部确认后统一发送 decisions */
 export function decideInterrupt(msgId, index, decision) {
   const m = chat.messages.find((x) => x.id === msgId)
@@ -461,7 +496,8 @@ function transformMessage(item) {
     images: images.length ? images : undefined,
     interruptActions: interruptActions,
     interruptDecisions: interruptDecisions,
-    usage: item.usageMetadata
+    usage: item.usageMetadata,
+    error: item.error || null,
   }
 }
 
@@ -526,7 +562,7 @@ export function useChatStore() {
   }
   return {
     chat, conv, socketState,
-    submitMessage, stopGeneration, decideInterrupt, approveAllInterrupt,
+    submitMessage, stopGeneration, retryLastTurn, decideInterrupt, approveAllInterrupt,
     loadConversations, newConversation, switchConversation, renameConversation, deleteConversation,
     loadMessages, loadMoreMessages,
   }

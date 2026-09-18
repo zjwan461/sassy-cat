@@ -33,6 +33,7 @@ class Message(Base):
     interrupt_decisions = Column(Text)                 # 人工审核的工具记录
     tool_call_result = Column(Text)                    # 工具调用结果
     usage_metadata = Column(Text)                      # token 用量 JSON，如 {"input_tokens":..,"output_tokens":..,"total_tokens":..} (仅 assistant)
+    error = Column(Text)                               # 生成失败提示文案（为空表示正常完成，仅 assistant）
     # 关系
     attachments = relationship(
         "Attachment",

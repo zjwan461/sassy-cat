@@ -23,6 +23,15 @@ from langchain.messages import AIMessageChunk, ToolMessage
 import config_loader
 from agent.engine import holder
 
+try:  # openai 异常类型用于错误分类（缺失时降级为永不匹配的占位类型）
+    from openai import APIConnectionError, APITimeoutError
+except Exception:  # pragma: no cover
+    class APIConnectionError(Exception):  # type: ignore
+        pass
+
+    class APITimeoutError(APIConnectionError):  # type: ignore
+        pass
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,6 +42,36 @@ def _recursion_limit() -> int:
         return max(1, int(cfg.active_agent_config().get("recursionLimit", 100)))
     except (TypeError, ValueError, AttributeError):
         return 100
+
+
+def classify_error(e: Exception) -> tuple[str, str]:
+    """把底层异常翻译成 (code, 面向用户的中文提示)。
+
+    仅用于把技术异常转成可读文案，不参与任何控制/重试决策。
+    拿不到 status 时统一落到 unknown，绝不抛出。
+    """
+    if isinstance(e, (APIConnectionError, APITimeoutError)):
+        return "network", "网络异常或超时，请重试"
+
+    status = getattr(e, "status_code", None)
+    try:
+        body = str(getattr(e, "body", "")) or str(e)
+    except Exception:
+        body = str(e)
+
+    if status == 400:
+        if "DataInspectionFailed" in body:
+            return "content_inspection", "请求被平台内容审核拦截，请调整输入后重试"
+        return "bad_request", "请求参数有误（可能是上下文过长或格式问题），请重试或检查输入"
+    if status == 401:
+        return "auth", "API Key 无效或已过期，请到设置中检查"
+    if status == 404:
+        return "model_not_found", "模型不存在，请检查模型配置"
+    if status == 429:
+        return "rate_limit", "请求过于频繁，请稍后重试"
+    if isinstance(status, int) and status >= 500:
+        return "upstream", "上游服务异常，请稍后重试"
+    return "unknown", "生成失败，请重试"
 
 
 def _extract_item(item: dict, msg_chunk):
@@ -126,7 +165,9 @@ def _worker_stream(
         q.sync_q.put({"kind": "done", "text": "".join(final_parts)})
     except Exception as e:
         logger.exception("agent.stream 异常")
-        q.sync_q.put({"kind": "error", "message": str(e)})
+        code, msg = classify_error(e)
+        # raw 仅用于日志/调试，不下发前端；message 为面向用户的友好文案
+        q.sync_q.put({"kind": "error", "code": code, "message": msg, "raw": str(e)})
 
 
 async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event):
@@ -174,6 +215,35 @@ async def resume_turn(
     thread = threading.Thread(
         target=_worker_stream,
         args=(agent, payload, config, q, cancel_event),
+        daemon=True,
+    )
+    thread.start()
+    try:
+        while True:
+            event = await q.async_q.get()
+            yield event
+            if event["kind"] in ("done", "error"):
+                break
+    finally:
+        q.close()
+
+
+async def retry_turn(thread_id: str, cancel_event: threading.Event):
+    """重试上一轮：从当前 checkpoint 续跑，不追加新的用户输入。
+
+    与 run_turn 的唯一区别是 input_payload 传 None —— LangGraph 会从最后一个
+    checkpoint 继续执行（重跑上一轮失败/待执行的节点），因此不会产生重复的用户消息。
+    仅当线程仍存在待执行节点时有效；调用方需先校验（见 ws_agent._handle_chat_retry）。
+    """
+    version, agent = holder.get()
+    q = janus.Queue()
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": _recursion_limit(),
+    }
+    thread = threading.Thread(
+        target=_worker_stream,
+        args=(agent, None, config, q, cancel_event),
         daemon=True,
     )
     thread.start()

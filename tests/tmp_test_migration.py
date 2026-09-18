@@ -38,6 +38,14 @@ def _tables() -> set:
         conn.close()
 
 
+def _columns(table: str) -> set:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    finally:
+        conn.close()
+
+
 def _alembic_version() -> str | None:
     conn = sqlite3.connect(DB_PATH)
     try:
@@ -52,24 +60,39 @@ def _alembic_version() -> str | None:
 def make_legacy_db() -> None:
     """模拟旧库：建出 0001 时代的四张表（不含 system_meta，无 alembic_version）。
 
-    注意 kb_documents 用 0001 原始 schema（无 file_path 列，该列由 0003 迁移补加），
-    因此不能直接用当前 Base.metadata 建表。
+    注意 messages / kb_documents 用 0001 原始 schema（messages 无 error 列，由 0005
+    迁移补加；kb_documents 无 file_path 列，由 0003 迁移补加），因此不能直接用当前
+    Base.metadata 建表。
     """
     from sqlalchemy import create_engine
     from server.db.models import Base
 
-    engine = create_engine(f"sqlite:///{DB_PATH}")
-    legacy_tables = [
-        Base.metadata.tables["messages"],
-        Base.metadata.tables["attachments"],
-        Base.metadata.tables["knowledge_bases"],
-    ]
-    for t in legacy_tables:
-        t.create(engine)
-    engine.dispose()
-
     conn = sqlite3.connect(DB_PATH)
     try:
+        conn.execute(
+            """
+            CREATE TABLE messages (
+                id VARCHAR NOT NULL,
+                session_id VARCHAR NOT NULL,
+                role VARCHAR NOT NULL,
+                content TEXT,
+                reasoning TEXT,
+                tool_calls TEXT,
+                tool_call_args TEXT,
+                created_at BIGINT NOT NULL,
+                interrupt_actions TEXT,
+                interrupt_decisions TEXT,
+                tool_call_result TEXT,
+                usage_metadata TEXT,
+                PRIMARY KEY (id)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX ix_messages_session_id ON messages (session_id)")
+        conn.execute("CREATE INDEX ix_messages_created_at ON messages (created_at)")
+        conn.execute(
+            "CREATE INDEX idx_messages_session_time ON messages (session_id, created_at)"
+        )
         conn.execute(
             """
             CREATE TABLE kb_documents (
@@ -97,6 +120,12 @@ def make_legacy_db() -> None:
     finally:
         conn.close()
 
+    # 结构自 0001 起未变的表直接用当前 metadata 建
+    engine = create_engine(f"sqlite:///{DB_PATH}")
+    for name in ("knowledge_bases", "attachments"):
+        Base.metadata.tables[name].create(engine)
+    engine.dispose()
+
 
 async def main() -> int:
     from server.db.database import init_db, close_db, get_session
@@ -112,7 +141,9 @@ async def main() -> int:
     print("tables:", sorted(tables))
     assert {"messages", "attachments", "knowledge_bases", "kb_documents",
             "conversations", "system_meta", "alembic_version"} <= tables, "新库表结构不完整"
-    assert _alembic_version() == "0004_conversations", f"version={_alembic_version()}"
+    assert _alembic_version() == "0005_message_error", f"version={_alembic_version()}"
+    assert "error" in _columns("messages"), f"messages 缺少 error 列: {_columns('messages')}"
+    print("ok: messages.error 列存在（0005 迁移生效）")
 
     # 验证 seed 数据
     async with get_session() as session:
@@ -139,7 +170,8 @@ async def main() -> int:
     print("tables:", sorted(tables))
     assert "system_meta" in tables, "旧库升级后应补出 system_meta"
     assert "conversations" in tables, "旧库升级后应补出 conversations"
-    assert _alembic_version() == "0004_conversations", f"version={_alembic_version()}"
+    assert _alembic_version() == "0005_message_error", f"version={_alembic_version()}"
+    assert "error" in _columns("messages"), f"旧库升级后 messages 缺少 error 列: {_columns('messages')}"
     async with get_session() as session:
         row = (await session.execute(
             select(SystemMeta).where(SystemMeta.key == "schema_seed_version")

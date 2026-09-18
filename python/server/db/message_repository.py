@@ -31,6 +31,7 @@ async def save_message(
     interrupt_decisions: Optional[list] = None,
     tool_call_result: Optional[list] = None,
     usage_metadata: Optional[dict] = None,
+    error: Optional[str] = None,
 ) -> bool:
     """
     保存消息到数据库。
@@ -66,6 +67,7 @@ async def save_message(
                 interrupt_decisions=json.dumps(interrupt_decisions, ensure_ascii=False) if interrupt_decisions else None,
                 tool_call_result=json.dumps(tool_call_result, ensure_ascii=False) if tool_call_result else None,
                 usage_metadata=json.dumps(usage_metadata, ensure_ascii=False) if usage_metadata else None,
+                error=error,
             )
             session.add(msg)
             await session.commit()
@@ -88,6 +90,7 @@ async def update_message(
     interrupt_decisions: Optional[list] = None,
     tool_call_result: Optional[list] = None,
     usage_metadata: Optional[dict] = None,
+    error: Optional[str] = None,
 ) -> bool:
     """
     更新消息到数据库。
@@ -141,6 +144,8 @@ async def update_message(
                 msg.tool_call_result = json.dumps(tool_call_result, ensure_ascii=False)
             if usage_metadata is not None:
                 msg.usage_metadata = json.dumps(usage_metadata, ensure_ascii=False)
+            if error is not None:
+                msg.error = error
             
             await session.commit()
             logger.debug(f"消息已更新: id={id}")
@@ -258,6 +263,7 @@ async def get_messages_by_session(
                     "interruptDecisions": msg.interrupt_decisions,
                     "toolCallResult": msg.tool_call_result,
                     "usageMetadata": json.loads(msg.usage_metadata) if msg.usage_metadata else None,
+                    "error": msg.error,
                     "attachments": [
                         {
                             "id": att.id,
@@ -336,6 +342,7 @@ async def get_message_by_id(msg_id: str) -> Optional[dict]:
                 "interruptDecisions": json.loads(msg.interrupt_decisions) if msg.interrupt_decisions else None,
                 "toolCallResult": json.loads(msg.tool_call_result) if msg.tool_call_result else None,
                 "usageMetadata": json.loads(msg.usage_metadata) if msg.usage_metadata else None,
+                "error": msg.error,
                 "attachments": [
                     {
                         "id": att.id,
