@@ -126,7 +126,7 @@ class AgentHolder:
                 get_date_time,
                 internet_search,
                 run_command,
-                run_python,
+                # run_python,
                 save_user_info,
                 create_reminder,
                 list_reminders,

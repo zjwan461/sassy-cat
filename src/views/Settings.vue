@@ -420,7 +420,6 @@ const reminderDurationOptions = [3, 5, 8, 10, 15, 20, 30]
 // 高危工具人工确认清单（与 Python agent/engine.py 的 interrupt_on 工具集对应）
 const interruptTools = [
   { name: 'run_command', label: '执行命令（run_command）' },
-  { name: 'run_python', label: '执行 Python（run_python）' },
   { name: 'write_file', label: '写入文件（write_file）' },
   { name: 'edit_file', label: '编辑文件（edit_file）' },
   { name: 'delete', label: '删除文件（delete）' },

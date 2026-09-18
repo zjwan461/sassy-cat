@@ -6,6 +6,8 @@ from tavily import TavilyClient
 import os
 import sys
 import subprocess
+import shlex
+import locale
 from pathlib import Path
 from agent.models import OwnerProfile
 from agent.constant import USER_ID
@@ -44,11 +46,11 @@ def internet_search(
     except Exception as e:
         return f"查询失败：{e}"
 
-# 项目根目录（builtin_tools.py 位于 python/agent/ 下，向上两级）
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# 项目根目录（builtin_tools.py 位于 python/agent/tools/ 下，向上三级）
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-# 工作目录（规范化为绝对路径）
-work_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../..", "runtime"))
+# 工作目录（规范化为绝对路径，即项目根下的 runtime）
+work_dir = str(PROJECT_ROOT / "runtime")
 
 # 候选 Python 解释器路径，按优先级排列：.venv 在前，python_env 在后
 PYTHON_CANDIDATES = [
@@ -144,34 +146,45 @@ def _convert_virtual_path(segment: str, idx: int) -> list[str]:
 
 
 @tool
-def run_command(command: list[str]):
+def run_command(command: list[str], timeout: int = 60):
     """执行系统命令，返回执行结果。
 
     参数为命令片段数组，例如：["python", "/skills/test.py", "--arg", "value"]
     支持虚拟路径自动转换：数组中以 / 开头的路径片段会自动转换为真实路径。
     不得使用真实路径作为参数传入，比如D://skills, 命令行参数仅支持虚拟环境路径参数，必须是/开头。
-    调用如python,pip,java,node,npm,pnpm,go ... 等等开发常用命令时，不要使用绝对路径，只能使用命令本身。如：直接用python,java等，不啊哟使用/home/user/java 这种绝对路径。
+    调用如python,pip,java,node,npm,pnpm,go ... 等等开发常用命令时，不要使用绝对路径，只能使用命令本身。如：直接用python,java等，不要使用/home/user/java 这种绝对路径。
     Windows环境下不得使用真实盘符作为变量开头，比如D:/python.exe等。
+
+    参数：
+      timeout: 命令执行超时时间（秒），默认 60。执行耗时较长的任务（如安装依赖、编译、下载等）请适当调大。
     """
+    # 提前初始化，避免转换阶段抛异常时 except 分支引用未定义变量
+    command_str = ""
     try:
         # 遍历每个片段，将虚拟路径转换为真实路径（每个片段可能展开为多个）
         real_command = []
         for idx, seg in enumerate(command):
             real_command.extend(_convert_virtual_path(seg, idx))
         # 拼接为字符串用于 shell 执行（支持 dir、echo 等 shell 内置命令）
-        command_str = subprocess.list2cmdline(real_command)
+        # Windows 用 list2cmdline，POSIX 用 shlex.join，避免跨平台转义语义错乱
+        if os.name == "nt":
+            command_str = subprocess.list2cmdline(real_command)
+        else:
+            command_str = shlex.join(real_command)
+        # 编码按操作系统活动代码页选择（Windows 常见 GBK/cp936，POSIX 为 UTF-8）
+        encoding = locale.getpreferredencoding(False) if os.name == "nt" else "utf-8"
         result = subprocess.run(
             command_str,
             shell=True,
             capture_output=True,
             text=True,
-            encoding="utf-8",
+            encoding=encoding,
             errors="replace",
-            timeout=60,
+            timeout=timeout,
             cwd=work_dir,
         )
     except subprocess.TimeoutExpired:
-        return f"执行超时（超过 60 秒），命令：{command_str}"
+        return f"执行超时（超过 {timeout} 秒），命令：{command_str}"
     except Exception as e:
         return f"执行失败：{e}，命令：{command_str}"
 

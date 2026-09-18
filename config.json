@@ -12,7 +12,6 @@
     "ocrEngine": "markitdown",
     "interruptOn": {
       "run_command": true,
-      "run_python": true,
       "write_file": true,
       "edit_file": true,
       "delete": true

@@ -47,7 +47,6 @@ DEFAULTS = {
         # 见 agent/engine.py（构建 deep agent 时作为 interrupt_on 传入）
         "interruptOn": {
             "run_command": True,
-            "run_python": True,
             "write_file": True,
             "edit_file": True,
             "delete": True,
