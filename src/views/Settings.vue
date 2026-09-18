@@ -98,12 +98,12 @@
         <div class="field">
           <label>递归上限（步）</label>
           <div class="stepper">
-            <button type="button" class="step-btn" @click="step('recursionLimit', -1, 1, 200)" :disabled="form.recursionLimit <= 1">−</button>
-            <input type="number" v-model.number="form.recursionLimit" min="1" max="200" class="step-input"
-              @blur="clamp('recursionLimit', 1, 200, 50)" />
-            <button type="button" class="step-btn" @click="step('recursionLimit', 1, 1, 200)" :disabled="form.recursionLimit >= 200">+</button>
+            <button type="button" class="step-btn" @click="step('recursionLimit', -1, 1, 9999)" :disabled="form.recursionLimit <= 1">−</button>
+            <input type="number" v-model.number="form.recursionLimit" min="1" max="9999" class="step-input"
+              @blur="clamp('recursionLimit', 1, 9999, 100)" />
+            <button type="button" class="step-btn" @click="step('recursionLimit', 1, 1, 9999)" :disabled="form.recursionLimit >= 9999">+</button>
           </div>
-          <span class="hint">单轮对话 Agent 可执行的最大步数（含工具调用），过小会提前中断（默认 50）</span>
+          <span class="hint">单轮对话 Agent 可执行的最大步数（含工具调用），范围 1~9999，过小会提前中断（默认 100）</span>
         </div>
         <div class="field">
           <label>Tavily API Key（网络搜索工具）</label>
@@ -427,7 +427,7 @@ const interruptTools = [
 const defaultInterruptOn = () => Object.fromEntries(interruptTools.map((t) => [t.name, true]))
 const form = reactive({
   provider: 'openai', baseUrl: '', apiKey: '', model: '', extraParamsText: '{}',
-  persona: '', memoryWindow: 50, recursionLimit: 50, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
+  persona: '', memoryWindow: 50, recursionLimit: 100, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
   petEnabled: true,
   quickAskShortcut: 'Alt+Shift+Q',
   reminderPoll: 5, reminderDuration: 8,
@@ -679,7 +679,7 @@ function fillFormFromProfile() {
   const ap = agentProfiles.value[activeAgentProfile.value] || {}
   form.persona = ap.persona || ''
   form.memoryWindow = ap.memoryWindow ?? 50
-  form.recursionLimit = ap.recursionLimit ?? 50
+  form.recursionLimit = ap.recursionLimit ?? 100
 }
 
 async function switchProfile(name) {
@@ -736,7 +736,7 @@ async function addAgentProfile() {
   const name = newAgentProfileName.value.trim()
   const err = validateProfileName(name, agentProfiles.value)
   if (err) { newAgentProfileError.value = err; return }
-  const base = JSON.parse(JSON.stringify(agentProfiles.value.default || { persona: '', memoryWindow: 50, recursionLimit: 50 }))
+  const base = JSON.parse(JSON.stringify(agentProfiles.value.default || { persona: '', memoryWindow: 50, recursionLimit: 100 }))
   base.label = name
   const res = await api.setConfig(`agent.profiles.${name}`, base)
   if (!res.success) return showToast('新增 Agent 配置档失败: ' + (res.message || ''))
@@ -783,7 +783,7 @@ async function saveAll() {
     { path: 'agent.activeProfile', value: activeAgentProfile.value },
     { path: `${agentPrefix}.persona`, value: form.persona },
     { path: `${agentPrefix}.memoryWindow`, value: Number(form.memoryWindow) || 50 },
-    { path: `${agentPrefix}.recursionLimit`, value: Number(form.recursionLimit) || 50 },
+    { path: `${agentPrefix}.recursionLimit`, value: Number(form.recursionLimit) || 100 },
     { path: 'pet.idleReminder.enabled', value: form.idleEnabled },
     { path: 'pet.idleReminder.thresholdMinutes', value: form.idleThreshold },
     { path: 'pet.idleReminder.quietPeriodMinutes', value: form.idleQuiet },

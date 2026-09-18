@@ -128,6 +128,21 @@ function loadAppConfig() {
 
 const appConfig = loadAppConfig();
 
+// ---------- 主窗口激活状态（供桌宠判断是否重复展示聊天气泡） ----------
+// 「激活」= 可见、未最小化且获得焦点。桌宠据此决定：主窗口前台时不再用气泡
+// 复述聊天内容（提醒类消息仍照常展示）。
+function mainWindowActive() {
+  return !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()
+    && !mainWindow.isMinimized() && mainWindow.isFocused());
+}
+
+// 把主窗口激活状态同步给桌宠窗口（焦点/显隐/最小化变化时调用）
+function notifyMainWindowState() {
+  if (petWindow && !petWindow.isDestroyed()) {
+    petWindow.webContents.send('main-window-state', { active: mainWindowActive() });
+  }
+}
+
 // 创建主窗口
 function createWindow() {
   const { screen } = require('electron');
@@ -172,6 +187,11 @@ function createWindow() {
     if (agentInfo.ready) {
       mainWindow.webContents.send('agent-ready', agentInfo);
     }
+  });
+
+  // 主窗口激活状态变化（焦点 / 显隐 / 最小化）-> 同步给桌宠，用于抑制重复聊天气泡
+  ['focus', 'blur', 'show', 'hide', 'minimize', 'restore'].forEach((ev) => {
+    mainWindow.on(ev, notifyMainWindowState);
   });
 }
 
@@ -986,6 +1006,8 @@ function createPetWindow() {
   } else {
     petWindow.loadFile(path.join(__dirname, '..', 'dist', 'pet', 'pet.html'));
   }
+  // 桌宠页面加载完成后同步一次主窗口激活状态（渲染层也会主动查询，双保险）
+  petWindow.webContents.on('did-finish-load', notifyMainWindowState);
   // 移动（拖动/走动）后防抖持久化位置
   let posTimer = null;
   petWindow.on('moved', () => {
@@ -1078,6 +1100,9 @@ ipcMain.handle('pet:hide', () => {
   if (petWindow && !petWindow.isDestroyed()) petWindow.hide();
   return { success: true };
 });
+
+// 桌宠渲染层挂载时主动查询一次主窗口激活状态（与事件推送互为兜底）
+ipcMain.handle('pet:main-window-active', () => mainWindowActive());
 
 // ---------- 桌宠开关热生效 ----------
 // pet.enabled: true -> 创建/显示桌宠窗口；false -> 销毁窗口（避免隐藏窗口后台残留 WS 连接）

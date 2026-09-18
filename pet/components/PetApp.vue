@@ -131,6 +131,9 @@ const bubbleWrapRef = ref(null)
 const bubbleTextRef = ref(null)
 const longPressing = ref(false)
 const clickCount = ref(0)
+// 主窗口是否处于前台激活（由主进程推送 / 挂载时查询）：
+// 激活时桌宠不再用气泡复述聊天内容，避免与主窗口重复、干扰正常使用
+const mainActive = ref(false)
 
 const bubbleActionsVisible = computed(() => {
   if (!bubbleText.value) return false
@@ -384,7 +387,9 @@ function hideBubble() {
   scheduleSync()
 }
 
-function showBubble(text, ms = 5000) {
+function showBubble(text, ms = 5000, kind = 'local') {
+  // 记录气泡来源：chat（聊天内容，主窗口前台时不展示）| reminder（提醒，始终展示）| local（桌宠本地互动）
+  bubbleKind = kind
   let t = String(text || '')
   bubbleTruncated.value = t.length > BUBBLE_MAX_CHARS
   if (bubbleTruncated.value) t = t.slice(0, BUBBLE_MAX_CHARS) + '…'
@@ -409,6 +414,8 @@ function openFullChat() { window.petAPI && window.petAPI.showChat() }
 let streamBuf = ''
 let streamTarget = ''
 let typer = null
+// 当前展示内容的来源：chat | reminder | local（见 showBubble / onMainWindowStateChanged）
+let bubbleKind = 'local'
 function typewriteStart() {
   streamBuf = ''; streamTarget = ''
   clearInterval(typer)
@@ -426,6 +433,20 @@ function typewriteStop() {
   clearInterval(typer); typer = null
   // 打字结束后统一调整一次窗口尺寸
   scheduleSync()
+}
+
+// ---------- 主窗口激活联动 ----------
+// 主窗口进入前台后，桌宠不再用气泡复述聊天内容（提醒 / 问候 / 本地互动气泡不受影响）。
+// 过渡瞬间若正展示聊天气泡或处于思考动画，则立即收起并回到 idle。
+function onMainWindowStateChanged(active) {
+  const was = mainActive.value
+  mainActive.value = !!active
+  if (!mainActive.value || was) return
+  if (bubbleKind !== 'chat') return
+  typewriteStop()
+  streamBuf = ''; streamTarget = ''
+  if (bubbleText.value) hideBubble()
+  if (state.value === 'talk' || state.value === 'think') { setState('idle'); scheduleNext() }
 }
 
 // ---------- 拖动（增量移动，主进程节流） ----------
@@ -515,29 +536,40 @@ onMounted(() => {
     window.petAPI.onMenuAction(onMenuAction)
     window.petAPI.onQuickAsk(onQuickAskHotkey)
     window.petAPI.getPosition().then((pos) => { if (pos) facingLeft.value = false })
+    // 主窗口激活状态：挂载时查询一次，之后由主进程 push 更新
+    window.petAPI.getMainWindowActive().then((v) => { mainActive.value = !!v })
+    window.petAPI.onMainWindowState((data) => onMainWindowStateChanged(data && data.active))
   }
   connect()
 
-  on('chat.started', () => { setState('think'); if (inputOpen.value) closeInput() })
+  // 聊天内容：主窗口前台激活时直接忽略（内容已在主窗口展示），不改变桌宠状态也不弹气泡
+  on('chat.started', () => {
+    if (mainActive.value) return
+    setState('think'); if (inputOpen.value) closeInput()
+  })
   on('chat.delta', (p) => {
-    if (state.value !== 'talk') { setState('talk'); typewriteStart() }
+    if (mainActive.value) return
+    if (state.value !== 'talk') { setState('talk'); typewriteStart(); bubbleKind = 'chat' }
     streamTarget += p.text
   })
   on('chat.completed', (p) => {
+    if (mainActive.value) { typewriteStop(); streamBuf = ''; streamTarget = ''; setState('idle'); return }
     if (p.text && p.text.length >= streamTarget.length) streamTarget = p.text
     setTimeout(() => {
       typewriteStop()
+      // 1.4s 缓冲期内主窗口可能已被激活：此时放弃气泡展示
+      if (mainActive.value) { streamBuf = ''; streamTarget = ''; setState('idle'); scheduleNext(); return }
       if (streamTarget) {
         // 阅读时长随文本长度自适应（90ms/字，9s ~ 25s），超长截断由 showBubble 内部处理
         const ms = Math.min(25000, Math.max(9000, streamTarget.length * 90))
-        showBubble(streamTarget, ms)
+        showBubble(streamTarget, ms, 'chat')
       }
       setState('idle'); scheduleNext()
     }, 1400)
   })
-  // ---------- 每日首次加载打招呼（服务端触发，复用聊天气泡打字机） ----------
+  // ---------- 每日首次加载打招呼（服务端触发，属于主动问候，主窗口前台时也照常展示） ----------
   on('greeting.delta', (p) => {
-    if (state.value !== 'talk') { setState('talk'); typewriteStart() }
+    if (state.value !== 'talk') { setState('talk'); typewriteStart(); bubbleKind = 'reminder' }
     streamTarget += p.text
   })
   on('greeting.completed', (p) => {
@@ -547,24 +579,30 @@ onMounted(() => {
       if (streamTarget) {
         // 招呼语文案较短，按 140ms/字放缓阅读节奏（9s ~ 25s）
         const ms = Math.min(25000, Math.max(9000, streamTarget.length * 140))
-        showBubble(streamTarget, ms)
+        showBubble(streamTarget, ms, 'reminder')
       }
       setState('idle'); scheduleNext()
     }, 1400)
   })
-  on('chat.error', () => { typewriteStop(); setState('idle'); showBubble('呜…出了点小状况 😿', 4000) })
+  on('chat.error', () => {
+    typewriteStop()
+    setState('idle')
+    if (mainActive.value) return // 主窗口前台时错误已在主窗口呈现，桌宠不再提示
+    showBubble('呜…出了点小状况 😿', 4000, 'chat')
+  })
   on('pet.command', (p) => {
     if (p.action === 'think') setState('think')
-    else if (p.action === 'remind') { setState('remind', p.durationMs || 8000); if (p.text) showBubble(p.text, p.durationMs || 8000) }
+    else if (p.action === 'remind') { setState('remind', p.durationMs || 8000); if (p.text) showBubble(p.text, p.durationMs || 8000, 'reminder') }
     else if (p.action === 'wave') setState('react', 1200)
     else if (p.action === 'sleep') setState('sleep')
     else if (p.action === 'idle' && !dragging) { setState('idle'); scheduleNext() }
   })
-  on('proactive.message', (p) => { setState('remind', 8000); showBubble(p.text, 8000) })
+  // 提醒类消息：无论主窗口是否前台，均照常提示
+  on('proactive.message', (p) => { setState('remind', 8000); showBubble(p.text, 8000, 'reminder') })
   on('proactive.reminder', (p) => {
     const ms = p.durationMs || 8000
     setState('remind', ms)
-    showBubble(p.text, ms)
+    showBubble(p.text, ms, 'reminder')
   })
 })
 

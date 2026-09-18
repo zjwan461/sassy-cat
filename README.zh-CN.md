@@ -209,7 +209,7 @@ npm run electron:build:linux
     "name": "优墨",
     "version": "1.0.0"
   },
-  "agent": { "memoryWindow": 50, "recursionLimit": 50, "ocrEngine": "markitdown" },
+  "agent": { "memoryWindow": 50, "recursionLimit": 100, "ocrEngine": "markitdown" },
   "rag": { "autoEmbedding": true, "embeddingModel": { "type": "local", "model": "BAAI/bge-small-zh-v1.5" }, "ocrEngine": "docling" },
   "network": { "proxy": { "enabled": false } },
   "pythonVersion": "3.11.9"

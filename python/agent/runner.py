@@ -27,12 +27,12 @@ logger = logging.getLogger(__name__)
 
 
 def _recursion_limit() -> int:
-    """从运行时配置读取单轮最大递归步数（优先从 active profile 读取，兼容旧顶层 agent 段），非法值回退为 50"""
+    """从运行时配置读取单轮最大递归步数（优先从 active profile 读取，兼容旧顶层 agent 段），非法值回退为 100"""
     cfg = config_loader.current()
     try:
-        return max(1, int(cfg.active_agent_config().get("recursionLimit", 50)))
+        return max(1, int(cfg.active_agent_config().get("recursionLimit", 100)))
     except (TypeError, ValueError, AttributeError):
-        return 50
+        return 100
 
 
 def _extract_item(item: dict, msg_chunk):

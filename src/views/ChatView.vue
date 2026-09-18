@@ -196,6 +196,11 @@
           </div>
         </div>
       </div>
+
+      <!-- 回到底部浮动按钮：用户手动上翻时出现，点击/自行滚回底部即消失 -->
+      <button v-if="!stickToBottom" class="back-to-bottom" @click="onBackToBottom" title="回到底部">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </button>
       </div>
 
       <!-- 输入区：永远固定在卡片最底部，横跨整宽 -->
@@ -268,6 +273,23 @@ const listRef = ref(null)
 const fileInputRef = ref(null)
 const isDragOver = ref(false)
 const previewImageUrl = ref(null)
+// 是否紧贴底部：用户手动上翻看历史时置 false（暂停自动滚动并显示浮动按钮），重新到达底部或点击按钮后恢复 true
+const stickToBottom = ref(true)
+
+// 是否已滚动到接近底部（80px 阈值内视为贴底）
+function isNearBottom() {
+  const el = listRef.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 80
+}
+
+// 强制滚动到底部并恢复自动跟随（用户主动操作：发消息/切会话/确认/点击浮动按钮）
+function forceScrollBottom() {
+  stickToBottom.value = true
+  nextTick(() => {
+    if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight
+  })
+}
 
 function openImagePreview(url) {
   previewImageUrl.value = url
@@ -302,7 +324,7 @@ function onNewConv() {
 function onSwitchConv(c) {
   if (c.id === chat.convId) return
   switchConversation(c.id)
-  scrollBottom()
+  forceScrollBottom()
 }
 
 function startRename(c) {
@@ -336,8 +358,14 @@ const connClass = computed(() => socketState.status === 'open' ? 'online' : 'off
 
 function scrollBottom() {
   nextTick(() => {
-    if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight
+    // 仅在用户未上翻时自动跟随到底部；用户手动上翻后不再强制滚动
+    if (listRef.value && stickToBottom.value) listRef.value.scrollTop = listRef.value.scrollHeight
   })
+}
+
+// 浮动按钮点击：回到底部并恢复自动滚动
+function onBackToBottom() {
+  forceScrollBottom()
 }
 
 // 流式内容变化时自动滚动到底部（仅在本组件挂载期间生效）
@@ -460,13 +488,13 @@ function getActionDecisionClass(m, i) {
 // 单个操作的确认/拒绝
 function onDecision(msgId, index, decision) {
   decideInterrupt(msgId, index, decision)
-  scrollBottom()
+  forceScrollBottom()
 }
 
 // 全部允许
 function onApproveAll(msgId) {
   approveAllInterrupt(msgId)
-  scrollBottom()
+  forceScrollBottom()
 }
 
 // ---------- 文件上传相关 ----------
@@ -530,7 +558,7 @@ function submit() {
   draft.value = ''
   submitMessage(text, attachments)
   clearAllAttachments()
-  scrollBottom()
+  forceScrollBottom()
 }
 
 function stopGen() {
@@ -551,6 +579,8 @@ function onMsgListScroll() {
   if (scrollTop < 50 && chat.hasMore && !chat.loadingMore) {
     onLoadMore()
   }
+  // 同步"是否贴底"状态：用户手动上翻 → 暂停自动跟随并显示浮动按钮；滚回底部 → 恢复自动跟随
+  stickToBottom.value = isNearBottom()
 }
 
 async function onLoadMore() {
@@ -569,8 +599,8 @@ async function onLoadMore() {
 }
 
 onMounted(() => {
-  // 回到页面时若仍处于流式轮次，恢复滚动位置
-  scrollBottom()
+  // 回到页面时若仍处于流式轮次，恢复滚动位置（进入页面默认贴底并恢复自动跟随）
+  forceScrollBottom()
   // 刷新语音配置（用户在设置页可能改过自动朗读/语音等，回到聊天页即时生效）
   loadTtsConfig()
 })
@@ -589,7 +619,7 @@ onMounted(() => {
 
 /* 卡片纵向：上半区（侧栏+消息流并排）+ 底部全宽输入区 */
 .chat-card { flex: 1; display: flex; flex-direction: column; min-height: 0; background: #1e293b; border: 1px solid #334155; border-radius: 14px; overflow: hidden; }
-.chat-body { flex: 1; min-height: 0; display: flex; flex-direction: row; }
+.chat-body { flex: 1; min-height: 0; display: flex; flex-direction: row; position: relative; }
 
 /* ===== 会话侧栏（紧凑） ===== */
 .conv-panel { width: 176px; min-width: 176px; display: flex; flex-direction: column; border-right: 1px solid #334155; background: #172033; padding: 8px; gap: 6px; }
@@ -816,4 +846,26 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   cursor: default;
 }
+
+/* 回到底部浮动按钮：用户手动上翻时出现，点击/自行滚回底部即消失 */
+.back-to-bottom {
+  position: absolute;
+  right: 28px;
+  bottom: 20px;
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  transition: transform 0.15s, filter 0.15s;
+  z-index: 5;
+}
+.back-to-bottom:hover { transform: translateY(-2px); filter: brightness(1.1); }
+.back-to-bottom:active { transform: translateY(0); }
 </style>

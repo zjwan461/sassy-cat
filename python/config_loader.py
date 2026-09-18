@@ -35,7 +35,7 @@ DEFAULTS = {
             "default": {
                 "persona": "",  # 空字符串表示使用内置默认人设（见 agent/prompts.py）
                 "memoryWindow": 50,
-                "recursionLimit": 50,  # langgraph 单轮最大递归步数（见 agent/runner.py）
+                "recursionLimit": 100,  # langgraph 单轮最大递归步数（见 agent/runner.py）
             }
         },
         # 保留顶层字段作为兼容旧配置的 fallback
@@ -149,7 +149,7 @@ class AppConfig:
             memory_window = self.get("agent.memoryWindow", 50)
         recursion_limit = profile.get("recursionLimit")
         if recursion_limit is None:
-            recursion_limit = self.get("agent.recursionLimit", 50)
+            recursion_limit = self.get("agent.recursionLimit", 100)
         return {
             "persona": persona,
             "memoryWindow": memory_window,

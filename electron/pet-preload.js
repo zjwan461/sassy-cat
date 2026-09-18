@@ -19,5 +19,10 @@ contextBridge.exposeInMainWorld('petAPI', {
   onMenuAction: (cb) => ipcRenderer.on('pet:menu-action', (e, data) => cb(data)),
 
   onAgentReady: (cb) => ipcRenderer.on('agent-ready', (e, info) => cb(info)),
-  onActivityPing: (cb) => ipcRenderer.on('activity-ping', (e, data) => cb(data))
+  onActivityPing: (cb) => ipcRenderer.on('activity-ping', (e, data) => cb(data)),
+
+  // 主窗口是否处于前台激活（挂载时主动查询一次）
+  getMainWindowActive: () => ipcRenderer.invoke('pet:main-window-active'),
+  // 主窗口激活状态变化推送：{ active: boolean }
+  onMainWindowState: (cb) => ipcRenderer.on('main-window-state', (e, data) => cb(data))
 });
