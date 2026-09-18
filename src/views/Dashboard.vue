@@ -70,8 +70,9 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { fetchDashboardStats } from '../api/stats'
+import { useAgentSocket } from '../composables/useAgentSocket'
 
 // ---------- ECharts 按需引入（控制打包体积） ----------
 import * as echarts from 'echarts/core'
@@ -418,6 +419,12 @@ function initCharts() {
 const handleResize = () => charts.value.forEach((c) => c.resize())
 
 // ---------- 数据加载 ----------
+// 后端就绪前不发请求：Python 的真实端口由 Electron 的 agent-ready 上报（8790 被占用时会
+// 回退到随机端口），而本页挂载时（子组件 onMounted 先于 App.vue）往往还没拿到端口，
+// 此时请求会打到默认端口并被直接拒绝，浏览器只会抛出 "Failed to fetch"。
+// 因此与 App.vue 的就绪判定保持一致：等 WS 首次连通（= 端口已确定且服务在监听）后再拉数据。
+const { state: socketState } = useAgentSocket()
+
 async function loadData() {
   loading.value = true
   try {
@@ -428,21 +435,44 @@ async function loadData() {
     await nextTick()
     initCharts()
   } catch (e) {
-    error.value = `本喵翻遍了账本也没找到数据：${e.message}（确认一下本地服务是否已启动）`
+    error.value = `本喵翻遍了账本也没找到数据：${e.message}`
   } finally {
     loading.value = false
   }
 }
 
 let autoTimer = null
-onMounted(() => {
+let bootTimer = null
+let stopStatusWatch = null
+
+/** 后端就绪（端口可用）后启动：先拉一次数据，再开启定时刷新 */
+function startLoad() {
+  if (bootTimer) { clearTimeout(bootTimer); bootTimer = null }
+  if (stopStatusWatch) { stopStatusWatch(); stopStatusWatch = null }
   loadData()
-  autoTimer = setInterval(loadData, 60000) // 60s 自动刷新
+  if (!autoTimer) autoTimer = setInterval(loadData, 60000) // 60s 自动刷新
+}
+
+onMounted(() => {
+  if (socketState.status === 'open') {
+    // 已连通（例如从其它页面切回本页）：直接拉
+    startLoad()
+  } else if (!window.electronAPI) {
+    // 非 Electron（浏览器直连调试）：没有 agent-ready 可等，按默认端口直接试
+    startLoad()
+  } else {
+    // Electron 环境：等 setPort 触发的重连把状态推进到 open
+    stopStatusWatch = watch(() => socketState.status, (s) => { if (s === 'open') startLoad() })
+    // 兜底：久未就绪也试一次，让错误态展示真实原因，而不是空白干等
+    bootTimer = setTimeout(startLoad, 8000)
+  }
   window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
   if (autoTimer) clearInterval(autoTimer)
+  if (bootTimer) clearTimeout(bootTimer)
+  if (stopStatusWatch) stopStatusWatch()
   window.removeEventListener('resize', handleResize)
   disposeCharts()
 })
