@@ -7,18 +7,19 @@
       </div>
       <div class="header-actions">
         <span class="update-time" v-if="lastUpdated">更新于 {{ lastUpdated }}</span>
-        <button class="btn-refresh" :disabled="loading" @click="loadData">
+        <button class="btn-refresh" :disabled="loading" @click="manualRefresh">
           <span :class="{ spinning: loading }">⟳</span>
           {{ loading ? '加载中…' : '刷新' }}
         </button>
       </div>
     </header>
 
-    <!-- 错误空态（Python 服务未运行等） -->
+    <!-- 错误空态（Python 服务未运行 / 仍在冷启动等） -->
     <section v-if="error" class="card empty-card">
       <div class="empty-icon">⚠️</div>
       <div class="empty-text">{{ error }}</div>
-      <button class="btn-retry" @click="loadData">重试</button>
+      <p v-if="retrying" class="empty-hint">本喵正在自动重试…（第 {{ retryCount }} / {{ RETRY_MAX }} 次）</p>
+      <button class="btn-retry" @click="manualRefresh">重试</button>
     </section>
 
     <template v-else>
@@ -419,11 +420,24 @@ function initCharts() {
 const handleResize = () => charts.value.forEach((c) => c.resize())
 
 // ---------- 数据加载 ----------
-// 后端就绪前不发请求：Python 的真实端口由 Electron 的 agent-ready 上报（8790 被占用时会
-// 回退到随机端口），而本页挂载时（子组件 onMounted 先于 App.vue）往往还没拿到端口，
-// 此时请求会打到默认端口并被直接拒绝，浏览器只会抛出 "Failed to fetch"。
-// 因此与 App.vue 的就绪判定保持一致：等 WS 首次连通（= 端口已确定且服务在监听）后再拉数据。
+// 后端就绪前不发请求：Python 端口由 Electron 的 agent-ready 上报（8790 被占用时会回退到随机
+// 端口），而本页挂载时（子组件 onMounted 先于 App.vue）往往还没拿到端口，此时请求会打到默认
+// 端口并被直接拒绝，浏览器只抛 "Failed to fetch"。
+// 生产构建（electron:preview / 打包版）页面自本地文件加载、挂载极快，比 dev（Vite 现编译
+// 2800+ 模块、天然慢几秒）更容易撞上 Python 冷启动窗口，所以这里用"等就绪 + 失败退避重试"
+// 双保险，任一侧生效都不会再把错误卡片挂在界面上。
 const { state: socketState } = useAgentSocket()
+
+const RETRY_MAX = 5 // 自动重试次数上限
+const RETRY_BASE_MS = 1500 // 首次重试间隔，之后指数退避：1.5s / 3s / 6s / 12s / 24s
+
+const retrying = ref(false)
+const retryCount = ref(0)
+
+let retryTimer = null
+let autoTimer = null
+let bootTimer = null
+let stopStatusWatch = null
 
 async function loadData() {
   loading.value = true
@@ -431,19 +445,40 @@ async function loadData() {
     const data = await fetchDashboardStats(7)
     stats.value = data
     error.value = ''
+    retryCount.value = 0
+    retrying.value = false
     lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
     await nextTick()
     initCharts()
   } catch (e) {
     error.value = `本喵翻遍了账本也没找到数据：${e.message}`
+    scheduleRetry()
   } finally {
     loading.value = false
   }
 }
 
-let autoTimer = null
-let bootTimer = null
-let stopStatusWatch = null
+/** 失败后退避重试：覆盖"端口已就绪但 Python 仍在冷启动"的时间窗 */
+function scheduleRetry() {
+  if (retryCount.value >= RETRY_MAX) {
+    retrying.value = false
+    return
+  }
+  const delay = RETRY_BASE_MS * 2 ** retryCount.value
+  retryCount.value += 1
+  retrying.value = true
+  clearTimeout(retryTimer)
+  retryTimer = setTimeout(() => { retryTimer = null; loadData() }, delay)
+}
+
+/** 手动刷新/重试：清掉待重试计时器并重置计数，避免与自动重试叠加 */
+function manualRefresh() {
+  clearTimeout(retryTimer)
+  retryTimer = null
+  retryCount.value = 0
+  retrying.value = false
+  loadData()
+}
 
 /** 后端就绪（端口可用）后启动：先拉一次数据，再开启定时刷新 */
 function startLoad() {
@@ -463,7 +498,7 @@ onMounted(() => {
   } else {
     // Electron 环境：等 setPort 触发的重连把状态推进到 open
     stopStatusWatch = watch(() => socketState.status, (s) => { if (s === 'open') startLoad() })
-    // 兜底：久未就绪也试一次，让错误态展示真实原因，而不是空白干等
+    // 兜底：WS 久未连通也先试一次；失败会自动退避重试，不会再一直挂着错误卡片
     bootTimer = setTimeout(startLoad, 8000)
   }
   window.addEventListener('resize', handleResize)
@@ -472,6 +507,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (autoTimer) clearInterval(autoTimer)
   if (bootTimer) clearTimeout(bootTimer)
+  if (retryTimer) clearTimeout(retryTimer)
   if (stopStatusWatch) stopStatusWatch()
   window.removeEventListener('resize', handleResize)
   disposeCharts()
@@ -588,6 +624,12 @@ onUnmounted(() => {
 .empty-text {
   font-size: 14px;
   color: #94a3b8;
+}
+
+.empty-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #64748b;
 }
 
 .btn-retry {
