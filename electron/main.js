@@ -22,6 +22,7 @@ let pythonPath = null;
 let pythonStartTime = null;
 let pythonStderrBuffer = '';
 let pythonEverReady = false; // 本次启动是否收到过 [READY] 信号
+let pythonStopping = false;  // 是否处于「主动停止」流程（抑制退出码非 0 的误报）
 
 // Agent 服务信息（由 Python [READY] 信号解析得到）
 let agentInfo = { ready: false, port: null };
@@ -271,7 +272,16 @@ function handleProtocolLine(line) {
       agentInfo = { ready: true, port: null };
     }
     pythonEverReady = true; // 标记已收到就绪信号
+    pythonStopping = false;
+    // [READY] 是服务真正就绪的可靠信号（uvicorn 已开始监听）：用它置运行标志，
+    // 不再依赖易变的日志文案匹配（原先匹配的 "服务启动成功" 当前根本不会输出，
+    // 导致 isRunning 恒为 false、退出/重启时都杀不掉进程）
+    isRunning = true;
+    updateTrayMenu();
     console.log('[main] agent ready, port =', agentInfo.port);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('status-update', { running: true });
+    }
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         win.webContents.send('agent-ready', agentInfo);
@@ -309,7 +319,9 @@ function handleProtocolLine(line) {
 
 // 启动Python服务
 function startPythonService() {
-  if (isRunning) {
+  // 以「是否存在子进程」为准（而非 isRunning）：服务未收到 [READY] 前 isRunning 仍为
+  // false，只看它会在旧进程未退出时重复 spawn 出多个 Python 进程
+  if (pythonProcess) {
     return { success: false, message: '服务已在运行中' };
   }
 
@@ -317,6 +329,7 @@ function startPythonService() {
   pythonStderrBuffer = '';
   pythonStartTime = Date.now();
   pythonEverReady = false; // 重置就绪标记
+  pythonStopping = false;  // 重置主动停止标记
 
   try {
     let pyPath = pythonPath;
@@ -338,6 +351,9 @@ function startPythonService() {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8', ...buildProxyEnv() },
       stdio: ['ignore', 'pipe', 'pipe']
     });
+    // 捕获本次进程引用：close/error 回调只应清理「自己」，否则重启时旧进程的事件
+    // 会把已启动的新进程引用误置为 null，导致后续再也停不掉新进程
+    const spawned = pythonProcess;
 
     const handleOutput = (text) => {
       // 按行拆分，尝试解析协议数据
@@ -370,10 +386,10 @@ function startPythonService() {
       });
     };
 
-    pythonProcess.stdout.on('data', (data) => {
+    spawned.stdout.on('data', (data) => {
       handleOutput(data.toString());
     });
-    pythonProcess.stderr.on('data', (data) => {
+    spawned.stderr.on('data', (data) => {
       const text = data.toString();
       // 收集 stderr 输出用于错误诊断
       pythonStderrBuffer += text;
@@ -384,36 +400,53 @@ function startPythonService() {
       handleOutput(text);
     });
 
-    pythonProcess.on('error', (err) => {
-      isRunning = false;
-      updateTrayMenu();
-      if (mainWindow) {
-        mainWindow.webContents.send('status-update', { running: false });
+    spawned.on('error', (err) => {
+      // 只有当本进程仍是当前跟踪的进程时才更新状态，避免影响已启动的新进程
+      const isCurrent = pythonProcess === spawned;
+      if (isCurrent) {
+        pythonProcess = null;
+        isRunning = false;
+        updateTrayMenu();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('status-update', { running: false });
+        }
       }
       pushLog('error', `进程启动失败: ${err.message}`);
-      // 弹出错误对话框
-      showPythonStartError(`无法启动 Python 进程: ${err.message}`, '');
+      // 主动停止（含 taskkill 竞态）或已被替换的旧进程，不弹「无法启动」错误框
+      const intentionalStop = spawned.__intentionalStop === true || pythonStopping;
+      if (isCurrent && !intentionalStop) {
+        showPythonStartError(`无法启动 Python 进程: ${err.message}`, '');
+      }
     });
 
     // close 事件在 exit 之后、所有 stdio 流关闭后触发，此时 stderr 数据已完整
-    pythonProcess.on('close', (code, signal) => {
+    spawned.on('close', (code, signal) => {
       // 冲刷残留缓冲
       if (stdoutBuffer.trim()) {
         handleProtocolLine(stdoutBuffer.trim());
         stdoutBuffer = '';
       }
       
-      const wasRunning = isRunning;
-      isRunning = false;
-      pythonProcess = null;
-      updateTrayMenu();
-      if (mainWindow) {
-        mainWindow.webContents.send('status-update', { running: false });
+      // 仅当本进程仍是当前跟踪的进程时才更新运行状态并清空引用，
+      // 避免重启时旧进程的 close 事件把已启动的新进程标记为「未运行」
+      const isCurrent = pythonProcess === spawned;
+      if (isCurrent) {
+        pythonProcess = null;
+        isRunning = false;
+        updateTrayMenu();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('status-update', { running: false });
+        }
       }
       pushLog('info', `进程已退出 (code: ${code}, signal: ${signal})`);
       
-      // 检测是否为启动失败：非零退出码且从未收到 [READY] 信号
-      const isStartupFailure = code !== 0 && code !== null && !pythonEverReady;
+      // 启动失败判定必须限定在「本进程」上：
+      //   isCurrent        —— 被替换掉的旧进程，其 close 不应再触发失败提示；
+      //   intentionalStop  —— 主动停止（taskkill 退出码非 0）不算失败。
+      // 历史教训：重启时旧进程 close 会晚于新进程 spawn（此时 pythonEverReady /
+      // pythonStopping 刚被重置），不加这两个限定就会误弹「Python 服务启动失败」。
+      const intentionalStop = spawned.__intentionalStop === true || pythonStopping;
+      const isStartupFailure = isCurrent && code !== 0 && code !== null && !pythonEverReady && !intentionalStop;
       
       if (isStartupFailure) {
         const errorMsg = `Python 服务启动失败 (退出码: ${code})`;
@@ -522,31 +555,52 @@ function showPythonStartError(title, detail) {
 }
 
 // 停止Python服务
+// 返回 Promise：进程真正退出（或 5s 兜底超时）后 resolve，供重启流程串行等待。
+// 判定条件改用「是否存在子进程」，不再依赖 isRunning（服务未就绪时它为 false，
+// 旧逻辑会直接 return，导致旧进程残留）。
 function stopPythonService() {
-  if (!isRunning || !pythonProcess) {
-    return { success: false, message: '服务未在运行' };
+  if (!pythonProcess) {
+    isRunning = false;
+    return Promise.resolve({ success: false, message: '服务未在运行' });
   }
+
+  const proc = pythonProcess;
+  pythonStopping = true;         // 全局标记（兼作兼容兜底）
+  // 进程级标记：即使重启流程随后把全局 pythonStopping 重置，旧进程的 close
+  // 事件也不会被误判为「启动失败」
+  proc.__intentionalStop = true;
+  pythonProcess = null;
+  isRunning = false;
+  updateTrayMenu();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('status-update', { running: false });
+  }
+  pushLog('info', '正在停止服务…');
+
+  // 等待进程真正退出，避免新进程启动时端口仍被旧进程占用（否则回退到随机端口）
+  const exited = new Promise((resolve) => {
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; resolve(); } };
+    proc.once('close', done);
+    proc.once('exit', done);
+    setTimeout(done, 5000); // 兜底：最多等待 5s，避免调用方被长时间挂起
+  });
 
   try {
     if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', pythonProcess.pid, '/f', '/t']);
+      spawn('taskkill', ['/pid', proc.pid, '/f', '/t']);
     } else {
-      pythonProcess.kill('SIGTERM');
+      proc.kill('SIGTERM');
     }
-    
-    isRunning = false;
-    pythonProcess = null;
-    updateTrayMenu();
-    
-    if (mainWindow) {
-      mainWindow.webContents.send('status-update', { running: false });
-    }
-    pushLog('info', '服务已停止');
-    
-    return { success: true, message: '服务已停止' };
   } catch (error) {
-    return { success: false, message: `停止失败: ${error.message}` };
+    pushLog('error', `停止服务失败: ${error.message}`);
+    return Promise.resolve({ success: false, message: `停止失败: ${error.message}` });
   }
+
+  return exited.then(() => {
+    pushLog('info', '服务已停止');
+    return { success: true, message: '服务已停止' };
+  });
 }
 
 function buildTrayTemplate() {
@@ -574,7 +628,7 @@ function buildTrayTemplate() {
       label: '退出',
       click: () => {
         app.isQuitting = true;
-        if (isRunning) {
+        if (pythonProcess) {
           stopPythonService();
         }
         app.quit();
@@ -673,11 +727,11 @@ ipcMain.handle('shortcut:status', () => {
 });
 
 // 重启 Python Agent 服务（配置兜底生效手段）
-ipcMain.handle('agent:restart', () => {
+ipcMain.handle('agent:restart', async () => {
+  // 先等旧进程真正退出，再启动新进程：固定 setTimeout 无法保证 kill 已完成，
+  // 会造成新旧进程并存（端口回退、checkpoint/DB 文件锁冲突）
   if (pythonProcess) {
-    stopPythonService();
-    setTimeout(() => startPythonService(), 800);
-    return { success: true, message: '服务重启中…' };
+    await stopPythonService();
   }
   return startPythonService();
 });
@@ -1215,7 +1269,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    if (isRunning) {
+    if (pythonProcess) {
       stopPythonService();
     }
     app.quit();
@@ -1225,7 +1279,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', async () => {
   app.isQuitting = true;
   globalShortcut.unregisterAll();
-  if (isRunning) {
+  if (pythonProcess) {
     stopPythonService();
   }
 });
