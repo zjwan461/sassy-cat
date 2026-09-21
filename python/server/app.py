@@ -21,6 +21,7 @@ from proactive import reminder_runner, scheduler
 from server.ws_agent import ws_agent_endpoint
 from server.kb_api import router as kb_router
 from server.stats_api import router as stats_router
+from server.skills_api import router as skills_router
 from server.db import init_db as init_message_db, close_db as close_message_db
 from server.db import get_messages_by_session, DEFAULT_KB_ID
 from server.db import kb_repository as kb_repo
@@ -193,6 +194,7 @@ def create_app() -> FastAPI:
 
     app.include_router(kb_router)
     app.include_router(stats_router)
+    app.include_router(skills_router)
 
     @app.websocket("/ws/agent")
     async def ws_agent(websocket: WebSocket):

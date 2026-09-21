@@ -4,9 +4,11 @@ from datetime import datetime
 from typing import Literal
 from tavily import TavilyClient
 import os
+import re
 import sys
 import subprocess
 import shlex
+import shutil
 import locale
 from pathlib import Path
 from agent.models import OwnerProfile
@@ -220,3 +222,216 @@ def save_user_info(user_info: OwnerProfile, runtime: ToolRuntime) -> str:
     # 注意：SqliteStore 序列化要求 JSON 兼容类型，需先 model_dump()
     store.put(("users",), user_id, user_info.model_dump())
     return "用户画像已保存。请在回复中自然地确认已记住（如'本喵记住了'），不要向用户展示工具细节。"
+
+
+# 技能名规范（agentskills.io）：小写字母/数字，单连字符分隔，不以 - 开头结尾，<=64
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+# 单个辅助文件内容上限 1MB，SKILL.md 正文上限 200KB，防止误写巨型文件
+MAX_SKILL_FILE_SIZE = 1024 * 1024
+MAX_SKILL_MD_SIZE = 200 * 1024
+
+# 技能根目录：runtime/skills（与 skills_api、FilesystemBackend 的 /skills 虚拟目录一致）
+SKILLS_ROOT = os.path.join(work_dir, "skills")
+
+
+def _slugify_skill_name(name: str) -> str:
+    """把用户/模型给的名字规范化为合规技能名：小写、空格下划线转 -、去非法字符。"""
+    s = (name or "").strip().lower()
+    s = re.sub(r"[\s_.]+", "-", s)
+    s = re.sub(r"[^a-z0-9-]", "", s)
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    return s[:64]
+
+
+def _folded_yaml_text(text: str) -> str:
+    """压平为单行并按 72 列折行，供 SKILL.md frontmatter 的 '>' 折叠块使用。"""
+    flat = " ".join((text or "").split())
+    # YAML 折叠块中标量不能含冒号+空格歧义，简单场景直接保留即可
+    lines = []
+    cur = ""
+    for word in flat.split(" "):
+        if cur and len(cur) + 1 + len(word) > 72:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = f"{cur} {word}".strip()
+    if cur:
+        lines.append(cur)
+    return "\n".join(f"  {line}" for line in lines)
+
+
+def _resolve_skill_file_path(skill_dir: str, rel_path: str) -> str | None:
+    """技能内相对路径 -> 绝对路径；非法（越界/绝对路径/盘符）返回 None。"""
+    rel = (rel_path or "").replace("\\", "/").strip("/")
+    if not rel or rel.startswith("/") or ":" in rel.split("/")[0]:
+        return None
+    parts = rel.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return None
+    target = os.path.realpath(os.path.join(skill_dir, *parts))
+    if not target.startswith(os.path.realpath(skill_dir) + os.sep):
+        return None
+    return target
+
+
+def _resolve_virtual_src(virtual_path: str) -> str | None:
+    """work_dir 下的虚拟路径（/code/xxx.py）-> 真实绝对路径；越界返回 None。"""
+    rel = (virtual_path or "").replace("\\", "/").lstrip("/")
+    if not rel or ":" in rel.split("/")[0]:
+        return None
+    parts = rel.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return None
+    target = os.path.realpath(os.path.join(work_dir, *parts))
+    root = os.path.realpath(work_dir)
+    if not target.startswith(root + os.sep):
+        return None
+    return target
+
+
+@tool
+def create_skill(
+    name: str,
+    description: str,
+    instructions: str,
+    files: list[dict] | None = None,
+    copies: list[dict] | None = None,
+    overwrite: bool = False,
+) -> str:
+    """创建技能（skill）：把本次对话沉淀出的可复用资产保存为 runtime/skills 下的技能。
+
+    技能 = 一个目录，内含 SKILL.md（frontmatter 描述 + 操作指引正文），
+    可选 scripts/（脚本）与 references/（参考资料）等辅助文件。
+    之后新会话中 Agent 会自动发现并按 SKILL.md 的指引复用这套流程。
+
+    触发场景：
+    - 主人说"把这次的做法/成果保存成技能"、"以后都按这个流程来"
+    - 对话中经过多轮指导打磨出了一个有价值的产物或工作流，值得沉淀复用
+
+    参数说明：
+    - name: 技能名，仅小写字母/数字/连字符（如 "report-format-skill"）；
+      传中文或其它格式会自动尝试转换，转换失败会报错请你重新命名。
+    - description: 技能描述（必填），说明"做什么 + 何时触发使用"，
+      会被注入系统提示供未来会话判断是否调用本技能，写清触发关键词。
+    - instructions: SKILL.md 正文（Markdown），完整描述工作流步骤、
+      脚本调用方式、输出示例与注意事项。这是技能的灵魂，务必详尽可执行。
+    - files: 可选，辅助文件列表，每项 {"path": 技能内相对路径, "content": 文本内容}，
+      如 {"path": "scripts/run.py", "content": "..."}。禁止二进制与越界路径。
+    - copies: 可选，把本次对话在虚拟环境中已生成的产物复制进技能，
+      每项 {"src": 虚拟路径, "dest": 技能内相对路径}，
+      如 {"src": "/code/clean_data.py", "dest": "scripts/clean_data.py"}。
+      src 必须是 / 开头、位于虚拟环境内的路径（如 /code、/data、/tmp 下的文件）。
+    - overwrite: 同名技能已存在时是否覆盖（默认 False 直接拒绝）。
+      覆盖时旧版本自动备份为 "{name}.bak-时间戳"。
+
+    返回创建结果。注意：新技能在**新会话**中才会被加载，当前会话不会立即生效。
+    """
+    # ---------- 名称规范化与校验 ----------
+    slug = _slugify_skill_name(name)
+    if not slug or not _SKILL_NAME_RE.match(slug) or len(slug) > 64:
+        return (
+            f"错误：技能名 {name!r} 无法转换为合法名称。"
+            "请使用小写字母/数字/单个连字符，如 'weekly-report-skill'。"
+        )
+
+    description = (description or "").strip()
+    if not description:
+        return "错误：description 不能为空，需说明技能做什么、何时使用。"
+    if len(description) > 1024:
+        description = description[:1024]
+
+    # ---------- 目标目录与冲突处理 ----------
+    skill_dir = os.path.realpath(os.path.join(SKILLS_ROOT, slug))
+    if not skill_dir.startswith(os.path.realpath(SKILLS_ROOT) + os.sep):
+        return "错误：非法的技能名称。"
+    backup_note = ""
+    if os.path.exists(skill_dir):
+        if not overwrite:
+            return (
+                f"错误：技能「{slug}」已存在。若确要替换，请传 overwrite=true"
+                "（旧版本会自动备份）。"
+            )
+        backup = f"{skill_dir}.bak-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        try:
+            os.rename(skill_dir, backup)
+            backup_note = f"（旧版本已备份为 {os.path.basename(backup)}）"
+        except OSError as e:
+            return f"错误：备份旧技能失败：{e}"
+
+    # ---------- 组装 SKILL.md ----------
+    body = (instructions or "").strip()
+    if not body:
+        body = (
+            f"# {slug}\n\n"
+            f"## 使用说明\n\n{description}\n\n"
+            "TODO：补充详细工作流步骤与注意事项。\n"
+        )
+    if len(body) > MAX_SKILL_MD_SIZE:
+        return f"错误：instructions 过大（{len(body)} 字符，上限 {MAX_SKILL_MD_SIZE}）。"
+    skill_md = (
+        "---\n"
+        f"name: {slug}\n"
+        "description: >\n"
+        f"{_folded_yaml_text(description)}\n"
+        "---\n\n"
+        f"{body}\n"
+    )
+
+    # ---------- 预校验所有辅助文件，全部合法才落盘 ----------
+    staged: list[tuple[str, bytes]] = []  # (绝对路径, 内容)
+    try:
+        for item in files or []:
+            rel = (item or {}).get("path", "")
+            content = (item or {}).get("content", "")
+            if not isinstance(content, str):
+                return f"错误：files 中 {rel!r} 的 content 必须是文本字符串。"
+            target = _resolve_skill_file_path(skill_dir, rel)
+            if target is None:
+                return f"错误：files 路径非法（越界/绝对路径/盘符）：{rel!r}"
+            data = content.encode("utf-8")
+            if len(data) > MAX_SKILL_FILE_SIZE:
+                return f"错误：文件 {rel!r} 超过 1MB 上限。"
+            staged.append((target, data))
+
+        for item in copies or []:
+            src = (item or {}).get("src", "")
+            rel = (item or {}).get("dest", "")
+            real_src = _resolve_virtual_src(src)
+            if real_src is None:
+                return f"错误：copies.src 必须是虚拟环境内的合法路径（/ 开头）：{src!r}"
+            if not os.path.isfile(real_src):
+                return f"错误：copies.src 指向的文件不存在：{src!r}"
+            target = _resolve_skill_file_path(skill_dir, rel)
+            if target is None:
+                return f"错误：copies.dest 路径非法：{rel!r}"
+            with open(real_src, "rb") as f:
+                data = f.read()
+            if len(data) > MAX_SKILL_FILE_SIZE:
+                return f"错误：复制文件 {src!r} 超过 1MB 上限。"
+            staged.append((target, data))
+    except Exception as e:
+        return f"错误：解析技能文件参数失败：{e}"
+
+    # ---------- 写盘（失败回滚半成品目录） ----------
+    written = []
+    try:
+        os.makedirs(SKILLS_ROOT, exist_ok=True)
+        os.makedirs(skill_dir, exist_ok=True)
+        with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:
+            f.write(skill_md)
+        written.append("SKILL.md")
+        for target, data in staged:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as f:
+                f.write(data)
+            written.append(os.path.relpath(target, skill_dir).replace("\\", "/"))
+    except OSError as e:
+        shutil.rmtree(skill_dir, ignore_errors=True)
+        return f"错误：写入技能失败，已回滚：{e}"
+
+    return (
+        f"技能「{slug}」已创建成功{backup_note}。"
+        f"位置：/skills/{slug}/，文件：{', '.join(written)}。"
+        "提醒主人：新技能会在**下一次新会话**中自动生效并可被调用。"
+        "请在回复中自然地确认技能已保存（如'本喵已经把这套流程存成技能了'），不要向用户展示工具细节。"
+    )

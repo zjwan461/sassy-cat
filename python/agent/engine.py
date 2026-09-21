@@ -20,6 +20,7 @@ import config_loader
 from agent.llms import build_chat_llm
 from agent.prompts import build_system_prompt
 from agent.tools.builtin_tools import (
+    create_skill,
     get_date_time,
     internet_search,
     run_command,
@@ -128,6 +129,7 @@ class AgentHolder:
                 run_command,
                 # run_python,
                 save_user_info,
+                create_skill,
                 create_reminder,
                 list_reminders,
                 complete_reminder,
