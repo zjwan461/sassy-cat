@@ -26,9 +26,15 @@ export const chat = reactive({
 })
 
 // 会话列表（元数据来自服务端 SQLite conversations 表，按 updatedAt 倒序）
+// 分页加载：默认每页 20 条，列表滚动到底部时无限加载更多
 export const conv = reactive({
   list: [],
-  loading: false
+  loading: false,
+  currentPage: 0, // 已加载到第几页（0 表示尚未加载）
+  pageSize: 20,
+  total: 0,
+  hasMore: true,
+  loadingMore: false,
 })
 
 let currentMsgId = null
@@ -284,8 +290,23 @@ function ensureStarted() {
     loadMessages(true)
   })
   on('conv.list.result', (p) => {
-    conv.list = p.items || []
+    const items = p.items || []
+    const page = p.page || 1
+    if (page <= 1) {
+      // 重置：全量替换（首次加载 / 重连刷新 / 新建·改名·删除后的列表刷新）
+      conv.list = items
+      conv.currentPage = 1
+    } else {
+      // 加载更多：追加到列表尾部并按 id 去重，避免与已有页重叠
+      const seen = new Set(conv.list.map((c) => c.id))
+      conv.list.push(...items.filter((c) => !seen.has(c.id)))
+      conv.currentPage = page
+    }
+    conv.total = p.total != null ? p.total : conv.list.length
+    conv.pageSize = p.pageSize || conv.pageSize
+    conv.hasMore = p.hasMore != null ? p.hasMore : conv.list.length < conv.total
     conv.loading = false
+    conv.loadingMore = false
   })
   // 激活会话变更（新建/切换/删除回退，含其他窗口触发）：
   // 清空现场并重新拉取新会话历史；旧轮次事件按 msgId 找不到消息自然丢弃
@@ -300,10 +321,17 @@ function ensureStarted() {
   })
 }
 
-/** 拉取会话列表 */
+/** 拉取会话列表（重置：从第一页开始拉取） */
 export function loadConversations() {
   conv.loading = true
-  send('conv.list', {})
+  send('conv.list', { page: 1, pageSize: conv.pageSize })
+}
+
+/** 加载更多历史会话（列表滚动到底部时翻下一页） */
+export function loadMoreConversations() {
+  if (conv.loading || conv.loadingMore || !conv.hasMore) return
+  conv.loadingMore = true
+  send('conv.list', { page: conv.currentPage + 1, pageSize: conv.pageSize })
 }
 
 /** 新建对话（服务端创建并激活，conv.activated 广播驱动现场切换） */
@@ -589,7 +617,7 @@ export function useChatStore() {
   return {
     chat, conv, socketState,
     submitMessage, stopGeneration, retryLastTurn, decideInterrupt, approveAllInterrupt,
-    loadConversations, newConversation, switchConversation, renameConversation, deleteConversation,
+    loadConversations, loadMoreConversations, newConversation, switchConversation, renameConversation, deleteConversation,
     loadMessages, loadMoreMessages,
   }
 }

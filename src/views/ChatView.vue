@@ -15,7 +15,7 @@
       <!-- 会话侧栏：历史对话列表 + 新建 -->
       <aside class="conv-panel">
         <button class="btn conv-new" @click="onNewConv">＋ 新建对话</button>
-        <div class="conv-list">
+        <div class="conv-list" ref="convListRef" @scroll="onConvListScroll">
           <div
             v-for="c in conv.list"
             :key="c.id"
@@ -45,7 +45,14 @@
               </div>
             </template>
           </div>
-          <div v-if="!conv.list.length" class="conv-empty">还没有对话</div>
+          <!-- 无限滚动加载更多：滚动到底部自动加载，加载中显示转圈 -->
+          <div v-if="conv.loadingMore" class="conv-more-hint">
+            <span class="conv-spinner"></span> 加载中…
+          </div>
+          <div v-else-if="conv.hasMore && conv.list.length" class="conv-more-hint clickable" @click="onLoadMoreConvs">
+            加载更多
+          </div>
+          <div v-if="!conv.list.length && !conv.loading" class="conv-empty">还没有对话</div>
         </div>
       </aside>
 
@@ -264,7 +271,7 @@ import DocumentAttachment from '../components/DocumentAttachment.vue'
 // 会话状态与 WS 事件订阅已提升到模块级单例（useChatStore）：
 // 切换 tab 导致本组件卸载时，流式数据仍在后台接收与累积；
 // 重新挂载直接恢复现场继续渲染，不再出现"切走就停止渲染"的问题。
-const { chat, conv, socketState, submitMessage, stopGeneration, retryLastTurn, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation, loadMoreMessages } = useChatStore()
+const { chat, conv, socketState, submitMessage, stopGeneration, retryLastTurn, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation, loadMoreConversations, loadMoreMessages } = useChatStore()
 const { hasAttachments, isProcessing, handleFiles, buildAttachments, clearAllAttachments } = useFileUpload()
 // 语音朗读（TTS）：播放状态（模块级，跨 tab 存活）+ 播放/停止/切换
 const { speaking, playMessage, loadConfig: loadTtsConfig } = useTTS()
@@ -273,6 +280,7 @@ const messages = chat.messages
 const draft = ref('')
 const generating = computed(() => chat.generating)
 const listRef = ref(null)
+const convListRef = ref(null)
 const fileInputRef = ref(null)
 const isDragOver = ref(false)
 const previewImageUrl = ref(null)
@@ -355,6 +363,32 @@ function onDeleteConv(c) {
   if (!window.confirm(`删除对话「${c.title || '新对话'}」？消息记录仍会保留在本地。`)) return
   deleteConversation(c.id)
 }
+
+// ---------- 会话列表无限滚动 ----------
+// 滚动到底部附近时自动加载下一页（阈值 40px）
+function onConvListScroll() {
+  const el = convListRef.value
+  if (!el) return
+  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+  if (nearBottom) loadMoreConversations()
+}
+
+// 底部"加载更多"点击兜底：容器内容不足无法滚动时仍能手动触发
+function onLoadMoreConvs() {
+  loadMoreConversations()
+}
+
+// 列表长度变化后，若容器内容不足以产生滚动条（无法触发 scroll 事件），主动补拉下一页
+watch(
+  () => conv.list.length,
+  () => {
+    nextTick(() => {
+      const el = convListRef.value
+      if (!el || !conv.hasMore || conv.loadingMore) return
+      if (el.scrollHeight <= el.clientHeight) loadMoreConversations()
+    })
+  }
+)
 
 const connText = computed(() => ({ open: '● 已连接', connecting: '○ 连接中…', reconnecting: '○ 重连中…', closed: '○ 未连接' }[socketState.status] || '○ 未连接'))
 const connClass = computed(() => socketState.status === 'open' ? 'online' : 'offline')
@@ -648,6 +682,11 @@ onMounted(() => {
 .conv-rename-input { flex: 1; min-width: 0; background: #0f172a; border: 1px solid #6366f1; border-radius: 6px; color: #e2e8f0; padding: 4px 8px; font-size: 13px; font-family: inherit; }
 .conv-rename-input:focus { outline: none; }
 .conv-empty { text-align: center; color: #64748b; font-size: 13px; margin-top: 20px; }
+/* 会话列表底部"加载更多"提示（无限滚动） */
+.conv-more-hint { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 0; color: #64748b; font-size: 12px; }
+.conv-more-hint.clickable { cursor: pointer; transition: color 0.15s; }
+.conv-more-hint.clickable:hover { color: #94a3b8; }
+.conv-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #64748b; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
 /* 窄屏折叠侧栏 */
 @media (max-width: 900px) {
   .conv-panel { width: 48px; min-width: 48px; padding: 8px 4px; }

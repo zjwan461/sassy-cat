@@ -14,7 +14,7 @@ import logging
 import time
 import uuid
 
-from sqlalchemy import delete as sa_delete, select, update
+from sqlalchemy import delete as sa_delete, func, select, update
 
 from server.db.database import get_session
 from server.db.models import Conversation, SystemMeta
@@ -105,6 +105,28 @@ async def list_sorted() -> list[dict]:
             )
         ).scalars().all()
         return [_to_dict(c) for c in rows]
+
+
+async def list_page(page: int = 1, page_size: int = 20) -> tuple[list[dict], int]:
+    """分页查询会话（按 updatedAt 倒序），返回 (items, total)。
+
+    offset/limit 分页供前端无限滚动加载更多；total 用于判定是否还有下一页。
+    """
+    page = max(1, int(page or 1))
+    page_size = max(1, int(page_size or 20))
+    async with get_session() as session:
+        total = (
+            await session.execute(select(func.count()).select_from(Conversation))
+        ).scalar() or 0
+        rows = (
+            await session.execute(
+                select(Conversation)
+                .order_by(Conversation.updated_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        ).scalars().all()
+        return [_to_dict(c) for c in rows], total
 
 
 async def active_id() -> str:

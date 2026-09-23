@@ -539,7 +539,7 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
     # 新会话首条消息：截断生成标题并刷新列表（auto_title 仅在真实改名时返回）
     if await conversations.auto_title(session_id, content) is not None:
         await hub.publish_all(
-            envelope("conv.list.result", {"items": await conversations.list_sorted()})
+            envelope("conv.list.result", await _conv_list_payload(1, CONV_PAGE_SIZE))
         )
     await conversations.touch(session_id)
     cancel = threading.Event()
@@ -755,12 +755,38 @@ async def _handle_llm_test(ws, payload: dict):
         await _send(ws, envelope("llm.test.result", {"ok": False, "error": str(e)}))
 
 
+# 会话列表分页：默认每页条数（前端无限滚动加载更多）
+CONV_PAGE_SIZE = 20
+
+
+async def _conv_list_payload(page=1, page_size=CONV_PAGE_SIZE) -> dict:
+    """构造会话列表分页响应（按 updatedAt 倒序），供 conv.list 与刷新广播复用。"""
+    page = max(1, int(page or 1))
+    page_size = max(1, int(page_size or CONV_PAGE_SIZE))
+    items, total = await conversations.list_page(page, page_size)
+    return {
+        "items": items,
+        "page": page,
+        "pageSize": page_size,
+        "total": total,
+        "hasMore": page * page_size < total,
+    }
+
+
 async def _handle_conv(ws, mtype: str, payload: dict, room_ref: dict):
     """conv.* 会话管理消息路由。room_ref 持有本连接的房间 id（可变，支持切换后迁移）。"""
     if mtype == "conv.list":
         await _send(
             ws,
-            envelope("conv.list.result", {"items": await conversations.list_sorted()}),
+            envelope(
+                "conv.list.result",
+                await _conv_list_payload(
+                    payload.get("page") or 1,
+                    payload.get("pageSize")
+                    or payload.get("page_size")
+                    or CONV_PAGE_SIZE,
+                ),
+            ),
         )
     elif mtype == "conv.create":
         conv = await conversations.create()
@@ -783,7 +809,7 @@ async def _handle_conv(ws, mtype: str, payload: dict, room_ref: dict):
             )
             return
         await hub.publish_all(
-            envelope("conv.list.result", {"items": await conversations.list_sorted()})
+            envelope("conv.list.result", await _conv_list_payload(1, CONV_PAGE_SIZE))
         )
     elif mtype == "conv.delete":
         cid = payload.get("id") or ""
@@ -793,7 +819,7 @@ async def _handle_conv(ws, mtype: str, payload: dict, room_ref: dict):
             return
         # 删除的是激活会话：active_id() 已自动回退，广播让所有窗口跟随切换
         await hub.publish_all(
-            envelope("conv.list.result", {"items": await conversations.list_sorted()})
+            envelope("conv.list.result", await _conv_list_payload(1, CONV_PAGE_SIZE))
         )
         active = await conversations.get(await conversations.active_id())
         if active:

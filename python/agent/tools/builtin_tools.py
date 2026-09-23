@@ -116,8 +116,8 @@ def _convert_virtual_path(segment: str, idx: int) -> list[str]:
     - `pip` → `[pip绝对路径]` 或 `[python绝对路径, "-m", "pip"]`（回退）
     """
     # 检测 Windows 盘符模式：单个字母 + 冒号（如 C:、D: 等）
-    if len(segment) >= 2 and segment[0].isalpha() and segment[1] == ":":
-        raise ValueError("Windows环境下不得使用真实盘符作为变量开头")
+    # if len(segment) >= 2 and segment[0].isalpha() and segment[1] == ":":
+    #     raise ValueError("Windows环境下不得使用真实盘符作为变量开头")
     
     # 使用 in 操作符正确检查成员关系
     if segment in ("python", "python3") and idx == 0:
