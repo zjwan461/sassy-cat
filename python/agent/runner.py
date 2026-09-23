@@ -35,6 +35,14 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
+def _safe_put(q: janus.Queue, event: dict):
+    """向消费端投递事件；消费端可能已因取消而提前关闭队列，此时静默丢弃。"""
+    try:
+        q.sync_q.put(event)
+    except Exception:
+        pass
+
+
 def _recursion_limit() -> int:
     """从运行时配置读取单轮最大递归步数（优先从 active profile 读取，兼容旧顶层 agent 段），非法值回退为 100"""
     cfg = config_loader.current()
@@ -134,7 +142,7 @@ def _worker_stream(
             if isinstance(msg_chunk, AIMessageChunk):
                 usage_metadata = msg_chunk.usage_metadata
                 if usage_metadata and usage_metadata is not None:
-                    q.sync_q.put({"kind": "usage", "usage_metadata": usage_metadata})
+                    _safe_put(q, {"kind": "usage", "usage_metadata": usage_metadata})
             cb = msg_chunk.content_blocks
             if not cb:
                 continue
@@ -142,7 +150,7 @@ def _worker_stream(
                 for event in _extract_item(item, msg_chunk):
                     if event["kind"] == "delta":
                         final_parts.append(event["text"])
-                    q.sync_q.put(event)
+                    _safe_put(q, event)
 
         # 流结束后检查是否停在 interrupt（待确认）
         if not cancel.is_set():
@@ -154,20 +162,21 @@ def _worker_stream(
                         for itr in getattr(task, "interrupts", []) or []:
                             interrupts.append(getattr(itr, "value", None))
                     if interrupts:
-                        q.sync_q.put(
-                            {"kind": "interrupt", "payload": {"actions": interrupts}}
+                        _safe_put(
+                            q,
+                            {"kind": "interrupt", "payload": {"actions": interrupts}},
                         )
-                        q.sync_q.put({"kind": "done", "text": "".join(final_parts)})
+                        _safe_put(q, {"kind": "done", "text": "".join(final_parts)})
                         return
             except Exception as e:
                 logger.warning(f"检查 interrupt 状态失败: {e}")
 
-        q.sync_q.put({"kind": "done", "text": "".join(final_parts)})
+        _safe_put(q, {"kind": "done", "text": "".join(final_parts)})
     except Exception as e:
         logger.exception("agent.stream 异常")
         code, msg = classify_error(e)
         # raw 仅用于日志/调试，不下发前端；message 为面向用户的友好文案
-        q.sync_q.put({"kind": "error", "code": code, "message": msg, "raw": str(e)})
+        _safe_put(q, {"kind": "error", "code": code, "message": msg, "raw": str(e)})
 
 
 async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event):
@@ -187,7 +196,15 @@ async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event
     thread.start()
     try:
         while True:
-            event = await q.async_q.get()
+            try:
+                event = await asyncio.wait_for(q.async_q.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                # 每 0.1s 主动轮询取消信号：worker 线程在工具执行 / 上游缓冲等
+                # 无 chunk 阶段会长时间阻塞，仅靠其 chunk 边界的取消检查会让
+                # "停止"延迟数秒甚至更久；未取到事件且已取消即立即结束本轮
+                if cancel_event.is_set():
+                    break
+                continue
             yield event
             if event["kind"] in ("done", "error"):
                 break
@@ -220,7 +237,13 @@ async def resume_turn(
     thread.start()
     try:
         while True:
-            event = await q.async_q.get()
+            try:
+                event = await asyncio.wait_for(q.async_q.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                # 见 run_turn：主动轮询取消，避免无 chunk 阶段停止延迟
+                if cancel_event.is_set():
+                    break
+                continue
             yield event
             if event["kind"] in ("done", "error"):
                 break
@@ -249,7 +272,13 @@ async def retry_turn(thread_id: str, cancel_event: threading.Event):
     thread.start()
     try:
         while True:
-            event = await q.async_q.get()
+            try:
+                event = await asyncio.wait_for(q.async_q.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                # 见 run_turn：主动轮询取消，避免无 chunk 阶段停止延迟
+                if cancel_event.is_set():
+                    break
+                continue
             yield event
             if event["kind"] in ("done", "error"):
                 break

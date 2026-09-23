@@ -250,6 +250,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
 
     tool_call_result = []  # 工具调用的结果
     usage_metadata = None  # token 用量（流式过程中累积，done 时随消息落库）
+    finalized = False  # 本轮是否已由 done/error 正常收尾（取消提前结束则为 False）
 
     async def flush():
         nonlocal buffer, args_buffer, last_flush
@@ -355,6 +356,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                     },
                 )
             elif kind == "done":
+                finalized = True
                 await flush()
                 final_text = event.get("text", "")
                 await emit("chat.completed", {"msgId": msg_id, "text": final_text})
@@ -380,6 +382,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                     )
                 )
             elif kind == "error":
+                finalized = True
                 await flush()
                 err_msg = event.get("message") or "生成失败，请重试"
                 await emit(
@@ -409,6 +412,31 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                         error=err_msg,
                     )
                 )
+        if not finalized and cancel.is_set():
+            # 生成器因取消而提前结束（未产出 done/error）：收尾本轮——
+            # flush 已缓冲内容、广播完成并落库已生成的部分内容，
+            # 让前端与多窗口即时同步结束、刷新后仍能看到停止时的内容
+            await flush()
+            await emit(
+                "chat.completed", {"msgId": msg_id, "text": "".join(content_parts)}
+            )
+            asyncio.create_task(
+                _save_or_update_assistant_message_sage(
+                    session_id=session_id,
+                    msg_id=msg_id,
+                    content="".join(content_parts),
+                    reasoning="".join(reasoning_parts) if reasoning_parts else None,
+                    tool_calls=tool_call if tool_call else None,
+                    tool_call_args=(
+                        tool_call_args_list if tool_call_args_list else None
+                    ),
+                    tool_call_result=(
+                        tool_call_result if tool_call_result else None
+                    ),
+                    usage_metadata=usage_metadata,
+                    error="",
+                )
+            )
     except Exception as e:
         logger.exception("stream turn 异常")
         code, msg = runner.classify_error(e)

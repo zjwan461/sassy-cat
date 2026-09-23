@@ -102,6 +102,8 @@ function ensureStarted() {
       last.id = p.msgId
       last.streaming = true
       last.thinking = false
+      // 新一轮复用该消息：清除上一轮的"已停止"锁定，允许继续接收流式事件
+      last.stopped = false
       // 重试：清空上一条失败回复的内容与错误标记，重新开始
       // （与服务端 _handle_chat_retry 重置落库行为保持一致）
       if (wasErrored) {
@@ -135,17 +137,18 @@ function ensureStarted() {
   })
   on('chat.delta', (p) => {
     const m = chat.messages.find((x) => x.id === p.msgId)
-    if (m) {
-      // 收到正文 delta 时，标记思考阶段结束，并立即折叠深度思考区域
-      if (m.thinking) {
-        m.thinking = false
-        m.reasoningOpen = false
-      }
-      m.content += p.text
+    // 已停止的轮次丢弃迟到增量：停止后内容不再增长，也不被补全
+    if (!m || m.stopped) return
+    // 收到正文 delta 时，标记思考阶段结束，并立即折叠深度思考区域
+    if (m.thinking) {
+      m.thinking = false
+      m.reasoningOpen = false
     }
+    m.content += p.text
   })
   on('agent.reasoning', (p) => {
     const m = chat.messages.find((x) => x.id === p.msgId)
+    if (!m || m.stopped) return
     if (m) {
       m.reasoning = (m.reasoning || '') + (p.text || '')
       // 思考阶段进行中（chat.started 已点亮 thinking，如中断续跑场景）时保持展开；
@@ -161,6 +164,11 @@ function ensureStarted() {
   })
   on('chat.completed', (p) => {
     const m = chat.messages.find((x) => x.id === p.msgId)
+    if (m && m.stopped) {
+      // 用户已停止：只结束流式态，不用服务端全文覆盖已展示的部分内容
+      m.streaming = false
+      return
+    }
     if (m) {
       m.streaming = false
       m.thinking = false
@@ -173,6 +181,8 @@ function ensureStarted() {
   })
   on('chat.error', (p) => {
     const m = chat.messages.find((x) => x.id === p.msgId)
+    // 已停止的轮次不再展示错误（可能是取消引发的收尾异常）
+    if (m && m.stopped) return
     if (m) {
       m.streaming = false
       m.error = p.message || '生成失败'
@@ -190,6 +200,7 @@ function ensureStarted() {
   })
   on('agent.tool_call', (p) => {
     const m = chat.messages.find((x) => x.id === p.msgId)
+    if (m && m.stopped) return
     if (m && p.phase === 'start') {
       // 保存 toolCallId：供 tool_result 精准回填结果到对应步骤
       // （无 id 时回退为"最近未完成步骤"匹配，见 agent.tool_result）
@@ -199,7 +210,7 @@ function ensureStarted() {
   on('agent.tool_args', (p) => {
     // 参数增量片段追加到最近一个进行中的工具步骤，流式展示
     const m = chat.messages.find((x) => x.id === p.msgId)
-    if (!m || !m.tools || !m.tools.length) return
+    if (!m || m.stopped || !m.tools || !m.tools.length) return
     const active = [...m.tools].reverse().find((t) => !t.done)
     if (active) {
       active.args = prettyArgs((active.args || '') + (p.args || ''))
@@ -209,7 +220,7 @@ function ensureStarted() {
     // 工具执行结果：优先按 toolCallId 精准匹配；无 id 时回退到
     // 最近一个未完成（或名称匹配）的步骤，标记完成并回填执行结果
     const m = chat.messages.find((x) => x.id === p.msgId)
-    if (!m || !m.tools || !m.tools.length) return
+    if (!m || m.stopped || !m.tools || !m.tools.length) return
     let t = null
     if (p.toolCallId) t = m.tools.find((x) => x.toolCallId === p.toolCallId)
     if (!t && p.toolCallId) t = [...m.tools].reverse().find((x) => x.name === p.toolName && !x.done)
@@ -224,6 +235,7 @@ function ensureStarted() {
     // 每个 AI 消息块都可能携带 usage_metadata（通常最后一块才是完整累计值），
     // 直接覆盖存储，前端取最终值展示；字段可能为空串/空对象，统一忽略
     const m = chat.messages.find((x) => x.id === p.msgId)
+    if (m && m.stopped) return
     if (m && p.usage_metadata && Object.keys(p.usage_metadata).length) {
       m.usage = p.usage_metadata
     }
@@ -361,7 +373,21 @@ export function submitMessage(text, attachments = []) {
 
 /** 停止当前轮次生成 */
 export function stopGeneration() {
+  // 先下发取消帧（服务端据此终止 worker），并立刻做乐观复位：
+  // 停止按钮 / 打字光标即时消失，不必等服务端在 chunk 边界真正终止后回帧。
+  // 服务端在工具执行、上游缓冲等无 chunk 阶段可能长时间无响应，纯等回帧会让
+  // "停止"延迟数秒以上；标记 stopped 后，迟到的 delta/completed 不再改动内容，
+  // 避免停止后文本仍继续增长或被突然补全为完整回复。
   send('chat.cancel', { sessionId: chat.convId || socketState.sessionId })
+  chat.generating = false
+  for (const m of chat.messages) {
+    if (m.role === 'assistant' && m.streaming) {
+      m.streaming = false
+      m.thinking = false
+      m.reasoningOpen = false
+      m.stopped = true
+    }
+  }
 }
 
 /** 重试上一轮失败的生成：不新增用户消息，是否重试完全由用户决定 */
