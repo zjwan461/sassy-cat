@@ -116,6 +116,7 @@ function ensureStarted() {
         last.content = ''
         last.reasoning = ''
         last.tools = []
+        last.segments = null
         last.usage = undefined
         last.error = null
         last.errorCode = null
@@ -564,6 +565,10 @@ function transformMessage(item) {
     interruptDecisions: interruptDecisions,
     usage: item.usageMetadata,
     error: item.error || null,
+    // 子 agent 来源还原：历史里存了 subagentName / 分段时，刷新后仍按来源分段渲染
+    subagentName: item.subagentName || null,
+    segments:
+      Array.isArray(item.segments) && item.segments.length ? item.segments : null,
   }
 }
 

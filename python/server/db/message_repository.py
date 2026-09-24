@@ -32,6 +32,8 @@ async def save_message(
     tool_call_result: Optional[list] = None,
     usage_metadata: Optional[dict] = None,
     error: Optional[str] = None,
+    subagent_name: Optional[str] = None,
+    segments: Optional[list] = None,
 ) -> bool:
     """
     保存消息到数据库。
@@ -68,6 +70,8 @@ async def save_message(
                 tool_call_result=json.dumps(tool_call_result, ensure_ascii=False) if tool_call_result else None,
                 usage_metadata=json.dumps(usage_metadata, ensure_ascii=False) if usage_metadata else None,
                 error=error,
+                subagent_name=subagent_name,
+                segments=json.dumps(segments, ensure_ascii=False) if segments else None,
             )
             session.add(msg)
             await session.commit()
@@ -91,6 +95,8 @@ async def update_message(
     tool_call_result: Optional[list] = None,
     usage_metadata: Optional[dict] = None,
     error: Optional[str] = None,
+    subagent_name: Optional[str] = None,
+    segments: Optional[list] = None,
 ) -> bool:
     """
     更新消息到数据库。
@@ -146,6 +152,10 @@ async def update_message(
                 msg.usage_metadata = json.dumps(usage_metadata, ensure_ascii=False)
             if error is not None:
                 msg.error = error
+            if subagent_name is not None:
+                msg.subagent_name = subagent_name
+            if segments is not None:
+                msg.segments = json.dumps(segments, ensure_ascii=False)
             
             await session.commit()
             logger.debug(f"消息已更新: id={id}")
@@ -264,6 +274,8 @@ async def get_messages_by_session(
                     "toolCallResult": msg.tool_call_result,
                     "usageMetadata": json.loads(msg.usage_metadata) if msg.usage_metadata else None,
                     "error": msg.error,
+                    "subagentName": msg.subagent_name,
+                    "segments": json.loads(msg.segments) if msg.segments else None,
                     "attachments": [
                         {
                             "id": att.id,
@@ -343,6 +355,8 @@ async def get_message_by_id(msg_id: str) -> Optional[dict]:
                 "toolCallResult": json.loads(msg.tool_call_result) if msg.tool_call_result else None,
                 "usageMetadata": json.loads(msg.usage_metadata) if msg.usage_metadata else None,
                 "error": msg.error,
+                "subagentName": msg.subagent_name,
+                "segments": json.loads(msg.segments) if msg.segments else None,
                 "attachments": [
                     {
                         "id": att.id,

@@ -138,6 +138,19 @@ async def _save_user_message_safe(
         logger.warning(f"用户消息保存失败 (不影响聊天): {e}")
 
 
+def _merge_agent_segments(base: list | None, extra: list | None) -> list:
+    """把新分段并入已有分段，相邻同来源合并（与前端 segments 的合并语义一致）。"""
+    merged = [dict(seg) for seg in (base or [])]
+    for seg in extra or []:
+        agent = seg.get("agent")
+        text = seg.get("text") or ""
+        if merged and merged[-1].get("agent") == agent:
+            merged[-1]["text"] = (merged[-1].get("text") or "") + text
+        else:
+            merged.append({"agent": agent, "text": text})
+    return merged
+
+
 async def _save_or_update_assistant_message_sage(
     session_id: str,
     msg_id: str,
@@ -149,6 +162,8 @@ async def _save_or_update_assistant_message_sage(
     tool_call_result: list | None = None,
     usage_metadata: dict | None = None,
     error: str | None = None,
+    subagent_name: str | None = None,
+    segments: list | None = None,
 ):
     """安全地保存或更新 AI 消息到数据库，失败不影响聊天"""
     try:
@@ -170,6 +185,11 @@ async def _save_or_update_assistant_message_sage(
             usage_metadata = (message.get("usageMetadata") or {}) | (
                 usage_metadata or {}
             )
+            # 分段来源跨轮次累积（与 content 的拼接语义一致）；None 表示不改动
+            if segments is not None:
+                segments = _merge_agent_segments(message.get("segments"), segments)
+            if subagent_name is not None:
+                subagent_name = message.get("subagentName") or subagent_name
             await update_message(
                 id=msg_id,
                 content=content,
@@ -180,6 +200,8 @@ async def _save_or_update_assistant_message_sage(
                 tool_call_result=tool_call_result,
                 usage_metadata=usage_metadata,
                 error=error,
+                subagent_name=subagent_name,
+                segments=segments,
             )
             logger.debug(f"AI 消息已更新: id={msg_id}")
         else:
@@ -196,6 +218,8 @@ async def _save_or_update_assistant_message_sage(
                 tool_call_result=tool_call_result,
                 usage_metadata=usage_metadata,
                 error=error,
+                subagent_name=subagent_name,
+                segments=segments,
             )
             logger.debug(f"AI 消息已保存: id={msg_id}")
     except Exception as e:
@@ -244,6 +268,8 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     # 用于持久化的累积数据
     content_parts = []
     reasoning_parts = []
+    subagent_name = None  # 本消息的子 agent 来源（含 dsh 产出即记 'dsh'，否则 None）
+    subagent_segments = []  # 分段来源 [{agent, text}]，与实时 chat.delta 同源同序
     tool_call = []  # 工具调用列表
     tool_call_args_list = []  # 工具调用参数列表，与 tool_call 一一对应
     current_tool_index = None  # 当前正在收集参数的工具索引
@@ -254,10 +280,17 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     finalized = False  # 本轮是否已由 done/error 正常收尾（取消提前结束则为 False）
 
     async def flush():
-        nonlocal buffer, buffer_agent, args_buffer, last_flush
+        nonlocal buffer, buffer_agent, args_buffer, last_flush, subagent_name
         if buffer:
             text = "".join(buffer)
             content_parts.append(text)
+            # 记录分段来源（来源切换时 flush 已保证边界），供刷新后还原子 agent 渲染
+            if subagent_segments and subagent_segments[-1]["agent"] == buffer_agent:
+                subagent_segments[-1]["text"] += text
+            else:
+                subagent_segments.append({"agent": buffer_agent, "text": text})
+            if buffer_agent:
+                subagent_name = subagent_name or buffer_agent
             payload = {"msgId": msg_id, "text": text}
             # 本轮带来源标记（如 dsh 子 agent 的产出）时一并下发，前端据此区分展示
             if buffer_agent:
@@ -391,6 +424,10 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                         ),
                         usage_metadata=usage_metadata,
                         error="",
+                        subagent_name=subagent_name,
+                        segments=(
+                            subagent_segments if subagent_name else None
+                        ),
                     )
                 )
             elif kind == "error":
@@ -422,6 +459,10 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                         ),
                         usage_metadata=usage_metadata,
                         error=err_msg,
+                        subagent_name=subagent_name,
+                        segments=(
+                            subagent_segments if subagent_name else None
+                        ),
                     )
                 )
         if not finalized and cancel.is_set():
@@ -447,6 +488,10 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                     ),
                     usage_metadata=usage_metadata,
                     error="",
+                    subagent_name=subagent_name,
+                    segments=(
+                        subagent_segments if subagent_name else None
+                    ),
                 )
             )
     except Exception as e:

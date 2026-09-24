@@ -78,11 +78,11 @@ def _fork_session_id(thread_id: str) -> str:
 
 
 def _iter_assistant_text(event: dict) -> Iterator[str]:
-    """把一条 assistant/message 事件拆成可增量拼接的文本块。
+    """把一条 assistant/message 事件拆成可增量拼接的正文文本块。
 
     dsh 的会话事件是"结算式"的：整块消息一次到达，但 data.stream 里保留了原始
     分块（text-chunks），按原顺序回放即可让前端继续渲染打字动画。
-    reasoning 块不写出去：前端的思考内容走 agent.reasoning 通道，混进正文会污染回复。
+    思考内容（reasoning-chunks）不在这里产出，另行经 _format_reasoning 渲染成引用块。
     """
     data = event.get("data") or {}
 
@@ -161,6 +161,44 @@ def _format_tool_result(event: dict) -> str:
     icon = "❌" if is_error else "✅"
     body = f"{icon} 结果\n```text\n{text}\n```"
     return _blockquote(body) + "\n\n"
+
+
+def _assistant_reasoning_text(event: dict) -> str:
+    """取出 assistant/message 里的深度思考内容（reasoning-chunks 按序拼接）。
+
+    与正文同样是"结算式"的：原始分块留在 data.stream 的 reasoning-chunks 里。
+    事件被压缩/裁剪后无分块时，退回 message.content 里的 reasoning 块。
+    """
+    data = event.get("data") or {}
+
+    text = ""
+    for entry in data.get("stream") or []:
+        if not isinstance(entry, dict) or entry.get("type") != "reasoning-chunks":
+            continue
+        for piece in entry.get("texts") or []:
+            if isinstance(piece, str):
+                text += piece
+    if text:
+        return text
+
+    message = data.get("message") or {}
+    for block in message.get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "reasoning":
+            piece = block.get("reasoning") or block.get("text") or ""
+            if piece:
+                text += piece
+    return text
+
+
+def _format_reasoning(event: dict) -> str | None:
+    """把 dsh 的深度思考渲染成引用块 markdown（全文，不截断）；无内容返回 None。"""
+    text = _assistant_reasoning_text(event).strip("\n")
+    if not text:
+        return None
+    # 引用块内出现 ``` 会开启围栏，一旦不闭合会把后续内容吞进代码块；
+    # 转义掉连续 3 个及以上的反引号，避免破坏外层结构（单个/成对反引号保留行内代码）
+    text = re.sub(r"`{3,}", lambda m: "\\`" * len(m.group(0)), text)
+    return _blockquote(f"💭 深度思考\n{text}") + "\n\n"
 
 
 def _run_blocking(
@@ -244,8 +282,14 @@ async def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
         event = payload.get("event") or {}
         etype = event.get("type")
         if etype == "assistant/message":
-            # 正文：回放 text-chunks（纯工具调用步骤没有 text-chunks，此处为空）
-            pieces: Iterator[str] = _iter_assistant_text(event)
+            # 思考内容先于正文（与生成顺序一致），同样以引用块 markdown 混入正文流；
+            # 正文回放 text-chunks（纯工具调用步骤没有 text-chunks，此处为空）
+            chunks: list[str] = []
+            reasoning = _format_reasoning(event)
+            if reasoning:
+                chunks.append(reasoning)
+            chunks.extend(_iter_assistant_text(event))
+            pieces: Iterator[str] = iter(chunks)
         elif etype == "tool/call":
             # dsh 调用工具：工具名 + 参数，渲染成引用块 markdown 混入正文流
             pieces = iter([_format_tool_call(event)])
