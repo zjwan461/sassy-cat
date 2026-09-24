@@ -5,6 +5,7 @@ writer 现在写的是 {"agent": "dsh", "text": "..."}（runner 的 custom 分�
 本脚本验证：结构一致、同一 thread 复用会话、换 thread 换会话。
 """
 
+import asyncio
 import os
 import sys
 
@@ -26,9 +27,11 @@ class FakeRuntime:
         self.chunks.append(chunk)
 
 
-def run(thread_id, prompt):
+async def run(thread_id, prompt):
     runtime = FakeRuntime(thread_id)
-    out = call_dsh.func(prompt, runtime)
+    # call_dsh 现在是协程（内部换线程跑阻塞的 harness.run），须在事件循环里调用
+    fn = getattr(call_dsh, "coroutine", None) or call_dsh.func
+    out = await fn(prompt, runtime)
     texts = [
         chunk.get("text", "") if isinstance(chunk, dict) else str(chunk)
         for chunk in runtime.chunks
@@ -49,9 +52,13 @@ def run(thread_id, prompt):
     return out
 
 
-run("probe-thread-c", "我叫阿猫，请记住这个名字，只回复两个字：好的")
-run("probe-thread-c", "我叫什么名字？只回答名字")
-run("probe-thread-d", "我叫什么名字？只回答名字")
+async def main():
+    await run("probe-thread-c", "我叫阿猫，请记住这个名字，只回复两个字：好的")
+    await run("probe-thread-c", "我叫什么名字？只回答名字")
+    await run("probe-thread-d", "我叫什么名字？只回答名字")
+
+
+asyncio.run(main())
 
 print("=== thread -> dsh session ===")
 print(subagent_tool._THREAD_SESSIONS)
