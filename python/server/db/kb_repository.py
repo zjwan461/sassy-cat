@@ -103,7 +103,7 @@ def list_kbs_sync() -> list[dict]:
 
     场景：wrap_model_call 中间件在模型调用前同步执行，无法 await 异步的
     list_kbs()，也不能用 asyncio.run()（该线程可能已有运行中的事件循环，
-    如 agent.stream() 内部）。这里用标准库 sqlite3 直读并聚合，只返回
+    如 agent.astream() 执行期间）。这里用标准库 sqlite3 直读并聚合，只返回
     注入提示所需的字段。
     """
     try:

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from langchain.agents.middleware import before_model, wrap_model_call
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 @before_model
-def trim_messages(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
+async def trim_messages(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
     """Keep only the last few messages to fit context window."""
     messages = state["messages"]
 
@@ -158,7 +159,7 @@ def _format_profile(profile: OwnerProfile | dict) -> str:
 
 
 @wrap_model_call
-def inject_base_info(request, handler):
+async def inject_base_info(request, handler):
     """把 store 中的用户画像和系统信息拼接进 system message，供模型高频感知主人信息和硬件环境。
 
     注意：create_agent 传入的 system_prompt 不在 state["messages"] 里，
@@ -167,10 +168,10 @@ def inject_base_info(request, handler):
     """
     sys_msg = request.system_message
     if sys_msg is None:
-        return handler(request)
+        return await handler(request)
 
-    # 获取用户画像
-    user_info = _coerce_profile(request.runtime.store.get(("users",), USER_ID))
+    # 获取用户画像（异步 store：中间件在事件循环内执行，须用 await aget）
+    user_info = _coerce_profile(await request.runtime.store.aget(("users",), USER_ID))
     profile_text = _format_profile(user_info) if user_info else ""
 
     # 获取系统信息
@@ -202,9 +203,9 @@ def inject_base_info(request, handler):
     new_content = "\n\n".join(parts) if len(parts) > 1 else base
 
     if new_content == content:
-        return handler(request)  # 内容无变化，原样透传
+        return await handler(request)  # 内容无变化，原样透传
 
-    return handler(request.override(system_message=SystemMessage(content=new_content)))
+    return await handler(request.override(system_message=SystemMessage(content=new_content)))
 
 
 # 知识库段分隔标记：用于幂等注入（重建时先剥离旧段再拼新段）
@@ -212,24 +213,24 @@ KB_MARKER = "[知识库]"
 
 
 @wrap_model_call
-def inject_kb_info(request, handler):
+async def inject_kb_info(request, handler):
     """把用户拥有的知识库列表注入 system message，引导模型判断是否需要调用 search_from_kb 搜索知识库。
 
     注意：
-    - 必须保持同步实现：本项目用同步 agent.stream() 执行，langchain 在同步
-      路径只组装 wrap_model_call 链，async-only 中间件（仅 awrap_model_call）
-      在同步调用下会直接抛 NotImplementedError；
-    - 知识库列表用 list_kbs_sync()（标准库 sqlite3 直读），不可在已有运行中
-      事件循环的线程里调用 asyncio.run()；
+    - 必须提供异步实现：本项目用 agent.astream() 执行，LangChain 的异步路径只认
+      awrap_model_call，只定义同步 wrap_model_call 会直接抛 NotImplementedError；
+      这里用 async def + @wrap_model_call 注册异步钩子；
+    - 知识库列表用 list_kbs_sync()（标准库 sqlite3 直读），经 asyncio.to_thread
+      包装，避免阻塞事件循环；
     - 必须在 inject_base_info 之后注册（middleware 按顺序执行），且采用追加
       而非整体替换，避免覆盖原始 system prompt 与画像/系统信息等段落。
     """
     sys_msg = request.system_message
     if sys_msg is None:
-        return handler(request)
+        return await handler(request)
 
-    # 同步拉取知识库列表（含文档数与分块数，不依赖 async 引擎与事件循环）
-    kbs = list_kbs_sync()
+    # 拉取知识库列表（含文档数与分块数；同步 sqlite 直读，to_thread 包装避免阻塞循环）
+    kbs = await asyncio.to_thread(list_kbs_sync)
 
     # 幂等处理：先剥离旧的知识库段，再拼接最新内容
     content = str(sys_msg.content)
@@ -259,7 +260,7 @@ def inject_kb_info(request, handler):
         new_content = base
 
     if new_content == content:
-        return handler(request)  # 内容无变化，原样透传
+        return await handler(request)  # 内容无变化，原样透传
 
-    return handler(request.override(system_message=SystemMessage(content=new_content)))
+    return await handler(request.override(system_message=SystemMessage(content=new_content)))
 

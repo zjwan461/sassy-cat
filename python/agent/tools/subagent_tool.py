@@ -105,7 +105,7 @@ def _iter_assistant_text(event: dict) -> Iterator[str]:
 
 
 @tool
-def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
+async def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
     """把任务委托给 deepseek harness（dsh）执行，并把执行过程与结果流式返回。
 
     dsh 是一套独立的 agent 运行时（自带 shell / str_replace_editor / present
@@ -120,7 +120,7 @@ def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
     """
     writer = runtime.stream_writer
 
-    writer({"agent": "dsh", "text": "dsh start handle"})
+    # writer({"agent": "dsh", "text": "dsh start handle"})
 
     thread_id = ""
     config = getattr(runtime, "config", None) or {}
@@ -177,5 +177,5 @@ def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
         writer({"agent": "dsh", "text": f"dsh error: {exc}"})
         return f"dsh 执行失败: {exc}"
 
-    writer({"agent": "dsh", "text": "dsh finish handle"})
+    # writer({"agent": "dsh", "text": "dsh finish handle"})
     return result.final_response or "deepseek harness job finished"

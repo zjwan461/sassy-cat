@@ -7,13 +7,13 @@ AgentHolder：按当前配置构建/重建 deep agent 的单例容器。
 """
 
 import logging
-import sqlite3
 import threading
 
+import aiosqlite
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
-from langgraph.checkpoint.sqlite import SqliteSaver
-from langgraph.store.sqlite import SqliteStore
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.store.sqlite.aio import AsyncSqliteStore
 
 
 import config_loader
@@ -39,69 +39,79 @@ from agent.middlewares import trim_messages, inject_base_info, inject_kb_info
 
 logger = logging.getLogger(__name__)
 
-# ====================== SQLite 生命周期（连接 + 单例持久层） ======================
-# 服务 lifespan 启动时 init_db() 打开、shutdown 时 close_db() 关闭。
+# ====================== SQLite 生命周期（异步连接 + 单例持久层） ======================
+# 服务 lifespan 启动时 await init_db() 打开、shutdown 时 await close_db() 关闭。
 #
-# 为什么 SqliteSaver / SqliteStore 也必须是进程级单例：
-# 两者内部各自用 self.lock 保护对连接的 BEGIN/COMMIT。如果每次 _build()
-# 都 new 一套，配置变更重建 agent 后，旧实例仍被进行中的流式回复持有，
-# 新旧两个 SqliteStore 共享同一条连接但锁不同，BEGIN/COMMIT 交错即报
-# "cannot commit - no transaction is active" 或事务嵌套错误。
-# 单例后全部 DB 访问收敛到同一把锁，agent 重建只换 LLM/prompt，不换持久层。
+# 为什么用 AsyncSqliteSaver / AsyncSqliteStore：
+# agent 现经 agent.astream 在事件循环内执行，LangGraph 的异步执行循环会直接
+# await checkpointer.aget_tuple/aput/aput_writes 与 store.abatch。同步版
+# SqliteSaver / SqliteStore 的异步方法会抛 NotImplementedError，故必须换成异步实现。
 #
-# isolation_level=None（autocommit）：SqliteStore 显式执行 BEGIN/COMMIT，
+# 为什么 saver / store 仍共用同一条连接 + 同一把锁：
+# AsyncSqliteSaver 与 AsyncSqliteStore 各自在事务里显式 BEGIN/COMMIT。若二者
+# 共用一条 aiosqlite 连接却各持一把锁，BEGIN/COMMIT 会交错，报
+# "cannot commit - no transaction is active" 或事务嵌套错误。单例 + 复用 saver
+# 的锁后全部 DB 事务串行化，agent 重建只换 LLM/prompt，不换持久层。
+#
+# isolation_level=None（autocommit）：AsyncSqliteStore 显式执行 BEGIN/COMMIT，
 # 默认隐式事务模式会与之冲突（"cannot start a transaction within a transaction"）。
-_db_conn: sqlite3.Connection | None = None
-_db_saver: SqliteSaver | None = None
-_db_store: SqliteStore | None = None
+_db_conn: aiosqlite.Connection | None = None
+_db_saver: AsyncSqliteSaver | None = None
+_db_store: AsyncSqliteStore | None = None
 _db_lock = threading.Lock()
 
 
-def init_db(db_url: str | None = None) -> sqlite3.Connection:
-    """打开（或复用）项目级共享 SQLite 连接与持久层单例，幂等。"""
+async def init_db(db_url: str | None = None) -> aiosqlite.Connection:
+    """打开（或复用）项目级共享 SQLite 异步连接与持久层单例，幂等。
+
+    必须在运行中的事件循环内 await —— AsyncSqliteSaver / AsyncSqliteStore 依赖
+    get_running_loop 绑定自身的事件循环与锁，无法在同步上下文（线程外）构建。
+    """
     global _db_conn, _db_saver, _db_store
-    with _db_lock:
-        if _db_conn is None:
-            _db_conn = sqlite3.connect(
-                db_url or DB_URL,
-                check_same_thread=False,
-                isolation_level=None,  # autocommit，见上方说明
-            )
-            _db_saver = SqliteSaver(_db_conn)
-            _db_store = SqliteStore(_db_conn)
-            # 共用同一把锁：saver 与 store 的所有 DB 访问全局串行，
-            # 杜绝 store 的显式 BEGIN/COMMIT 与 saver 的写入在同一连接上交错
-            _db_saver.lock = _db_store.lock
-            logger.info("SQLite 共享连接与持久层单例已初始化")
+    if _db_conn is not None:
         return _db_conn
+    conn = await aiosqlite.connect(
+        db_url or DB_URL,
+        isolation_level=None,  # autocommit，见上方说明
+    )
+    saver = AsyncSqliteSaver(conn)
+    store = AsyncSqliteStore(conn)
+    # 复用同一把锁：saver 与 store 的所有 DB 事务全局串行，
+    # 杜绝 store 的显式 BEGIN/COMMIT 与 saver 的写入在同一连接上交错
+    store.lock = saver.lock
+    await saver.setup()
+    await store.setup()
+    with _db_lock:
+        _db_conn, _db_saver, _db_store = conn, saver, store
+    logger.info("SQLite 共享异步连接与持久层单例已初始化")
+    return conn
 
 
-def get_checkpointer() -> SqliteSaver:
-    """获取共享 checkpointer 单例（惰性初始化）。"""
-    init_db()
-    assert _db_saver is not None
+def get_checkpointer() -> AsyncSqliteSaver:
+    """获取共享 checkpointer 单例（须先 await init_db()）。"""
+    if _db_saver is None:
+        raise RuntimeError("agent 持久层未初始化：请先 await agent.engine.init_db()")
     return _db_saver
 
 
-def get_store() -> SqliteStore:
-    """获取共享 store 单例（惰性初始化）。"""
-    init_db()
-    assert _db_store is not None
+def get_store() -> AsyncSqliteStore:
+    """获取共享 store 单例（须先 await init_db()）。"""
+    if _db_store is None:
+        raise RuntimeError("agent 持久层未初始化：请先 await agent.engine.init_db()")
     return _db_store
 
 
-def close_db() -> None:
+async def close_db() -> None:
     """关闭共享连接与持久层（服务 shutdown 时调用）。"""
     global _db_conn, _db_saver, _db_store
     with _db_lock:
-        if _db_conn is not None:
-            try:
-                _db_conn.close()
-            finally:
-                _db_conn = None
-                _db_saver = None
-                _db_store = None
-            logger.info("SQLite 共享连接已关闭")
+        conn = _db_conn
+        _db_conn = None
+        _db_saver = None
+        _db_store = None
+    if conn is not None:
+        await conn.close()
+        logger.info("SQLite 共享连接已关闭")
 
 
 class AgentHolder:

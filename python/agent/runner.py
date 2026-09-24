@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Agent 流式运行器：在独立线程消费 langgraph agent.stream，
-经 janus 队列桥接回 asyncio 事件循环，产出结构化事件。
+Agent 流式运行器：在 asyncio 事件循环内消费 langgraph agent.astream，
+经 asyncio 队列转发为结构化事件（生产者任务 + 主动取消轮询）。
 
 事件类型（dict）：
   {"kind": "delta", "text": str}                    # 流式 token
@@ -16,7 +16,6 @@ import asyncio
 import logging
 import threading
 
-import janus
 from langgraph.types import Command
 from langchain.messages import AIMessageChunk, ToolMessage
 
@@ -33,14 +32,6 @@ except Exception:  # pragma: no cover
         pass
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_put(q: janus.Queue, event: dict):
-    """向消费端投递事件；消费端可能已因取消而提前关闭队列，此时静默丢弃。"""
-    try:
-        q.sync_q.put(event)
-    except Exception:
-        pass
 
 
 def _recursion_limit() -> int:
@@ -123,13 +114,13 @@ def _extract_item(item: dict, msg_chunk):
     return []
 
 
-def _worker_stream(
-    agent, input_payload, config, q: janus.Queue, cancel: threading.Event
+async def _worker_stream(
+    agent, input_payload, config, q: asyncio.Queue, cancel: threading.Event
 ):
-    """在线程内运行阻塞的 agent.stream，事件推入 q.sync_q"""
+    """在事件循环内运行异步的 agent.astream，事件推入 asyncio 队列 q"""
     final_parts = []
     try:
-        for _ , stream_mode, chunk in agent.stream(
+        async for _ , stream_mode, chunk in agent.astream(
             input_payload,
             config=config,
             stream_mode=["messages", "custom"],
@@ -143,7 +134,7 @@ def _worker_stream(
                 if isinstance(msg_chunk, AIMessageChunk):
                     usage_metadata = msg_chunk.usage_metadata
                     if usage_metadata and usage_metadata is not None:
-                        _safe_put(q, {"kind": "usage", "usage_metadata": usage_metadata})
+                        await q.put({"kind": "usage", "usage_metadata": usage_metadata})
                 cb = msg_chunk.content_blocks
                 if not cb:
                     continue
@@ -151,79 +142,91 @@ def _worker_stream(
                     for event in _extract_item(item, msg_chunk):
                         if event["kind"] == "delta":
                             final_parts.append(event["text"])
-                        _safe_put(q, event)
+                        await q.put(event)
             elif stream_mode == "custom":
                 # custom 事件来自工具里的 runtime.stream_writer，结构为
                 # {"agent": "dsh", "text": "<增量文本>"}；兼容直接写 str 的旧写法
+                #
+                # 注意：来源标签不能存进 `agent` 变量——它是本函数的 graph 形参，
+                # 覆盖后流尾的 agent.aget_state() 会拿到字符串（interrupt 检查失效）
                 if isinstance(chunk, dict):
-                    agent = chunk.get("agent") or "dsh"
+                    agent_label = chunk.get("agent") or "dsh"
                     text = chunk.get("text") or ""
                 else:
-                    agent, text = "dsh", str(chunk)
+                    agent_label, text = "dsh", str(chunk)
                 # 同时计入本轮全文：done 的 final_text 既用于 chat.completed，
                 # 也是 ws_agent 落库的正文，漏掉这段会让显示与历史不一致
                 if text:
                     final_parts.append(text)
-                _safe_put(q, {"kind": "delta", "text": text, "agent": agent})
+                await q.put({"kind": "delta", "text": text, "agent": agent_label})
 
         # 流结束后检查是否停在 interrupt（待确认）
         if not cancel.is_set():
             try:
-                state = agent.get_state(config)
+                state = await agent.aget_state(config)
                 if state.next:  # 存在待执行节点 => 被 interrupt 挂起
                     interrupts = []
-                    for task in state.tasks:
-                        for itr in getattr(task, "interrupts", []) or []:
+                    for state_task in state.tasks:
+                        for itr in getattr(state_task, "interrupts", []) or []:
                             interrupts.append(getattr(itr, "value", None))
                     if interrupts:
-                        _safe_put(
-                            q,
-                            {"kind": "interrupt", "payload": {"actions": interrupts}},
+                        await q.put(
+                            {"kind": "interrupt", "payload": {"actions": interrupts}}
                         )
-                        _safe_put(q, {"kind": "done", "text": "".join(final_parts)})
+                        await q.put({"kind": "done", "text": "".join(final_parts)})
                         return
             except Exception as e:
                 logger.warning(f"检查 interrupt 状态失败: {e}")
 
-        _safe_put(q, {"kind": "done", "text": "".join(final_parts)})
+        await q.put({"kind": "done", "text": "".join(final_parts)})
+    except asyncio.CancelledError:
+        # 消费端提前结束本轮时取消本任务，直接向上传播，勿转成 error 事件
+        raise
     except Exception as e:
-        logger.exception("agent.stream 异常")
+        logger.exception("agent.astream 异常")
         code, msg = classify_error(e)
         # raw 仅用于日志/调试，不下发前端；message 为面向用户的友好文案
-        _safe_put(q, {"kind": "error", "code": code, "message": msg, "raw": str(e)})
+        await q.put({"kind": "error", "code": code, "message": msg, "raw": str(e)})
 
 
-async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event):
-    """发起新一轮对话，异步产出事件"""
-    version, agent = holder.get()
-    q = janus.Queue()
-    config = {
-        "configurable": {"thread_id": thread_id},
-        "recursion_limit": _recursion_limit(),
-    }
-    payload = {"messages": [{"role": "user", "content": user_text}]}
-    thread = threading.Thread(
-        target=_worker_stream,
-        args=(agent, payload, config, q, cancel_event),
-        daemon=True,
+async def _drive_stream(agent, input_payload, config, cancel_event: threading.Event):
+    """驱动 _worker_stream：生产者任务写入 asyncio 队列，消费端每 0.1s 主动轮询取消信号。
+
+    即便 agent 处于工具执行 / 上游缓冲等无 chunk 阶段，也能在取消后立即结束本轮，
+    避免"停止"延迟数秒（与旧线程 + janus 方案保持一致的响应语义）。
+    """
+    q: asyncio.Queue = asyncio.Queue()
+    task = asyncio.create_task(
+        _worker_stream(agent, input_payload, config, q, cancel_event)
     )
-    thread.start()
     try:
         while True:
             try:
-                event = await asyncio.wait_for(q.async_q.get(), timeout=0.1)
+                event = await asyncio.wait_for(q.get(), timeout=0.1)
             except asyncio.TimeoutError:
-                # 每 0.1s 主动轮询取消信号：worker 线程在工具执行 / 上游缓冲等
-                # 无 chunk 阶段会长时间阻塞，仅靠其 chunk 边界的取消检查会让
-                # "停止"延迟数秒甚至更久；未取到事件且已取消即立即结束本轮
-                if cancel_event.is_set():
+                # 未取到事件且已取消即立即结束本轮；生产者已结束且队列空亦收尾
+                if cancel_event.is_set() or task.done():
                     break
                 continue
             yield event
             if event["kind"] in ("done", "error"):
                 break
     finally:
-        q.close()
+        # 不再需要生产者输出：取消其任务，停止后台 astream 消费
+        if not task.done():
+            task.cancel()
+
+
+async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event):
+    """发起新一轮对话，异步产出事件"""
+    version, agent = holder.get()
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": _recursion_limit(),
+    }
+    payload = {"messages": [{"role": "user", "content": user_text}]}
+    async for event in _drive_stream(agent, payload, config, cancel_event):
+        yield event
 
 
 async def resume_turn(
@@ -237,32 +240,13 @@ async def resume_turn(
     （见 HITL middleware::_process_decision），可用于把用户新消息带入本轮。
     """
     version, agent = holder.get()
-    q = janus.Queue()
     config = {
         "configurable": {"thread_id": thread_id},
         "recursion_limit": _recursion_limit(),
     }
     payload = Command(resume={"decisions": decisions})
-    thread = threading.Thread(
-        target=_worker_stream,
-        args=(agent, payload, config, q, cancel_event),
-        daemon=True,
-    )
-    thread.start()
-    try:
-        while True:
-            try:
-                event = await asyncio.wait_for(q.async_q.get(), timeout=0.1)
-            except asyncio.TimeoutError:
-                # 见 run_turn：主动轮询取消，避免无 chunk 阶段停止延迟
-                if cancel_event.is_set():
-                    break
-                continue
-            yield event
-            if event["kind"] in ("done", "error"):
-                break
-    finally:
-        q.close()
+    async for event in _drive_stream(agent, payload, config, cancel_event):
+        yield event
 
 
 async def retry_turn(thread_id: str, cancel_event: threading.Event):
@@ -273,28 +257,9 @@ async def retry_turn(thread_id: str, cancel_event: threading.Event):
     仅当线程仍存在待执行节点时有效；调用方需先校验（见 ws_agent._handle_chat_retry）。
     """
     version, agent = holder.get()
-    q = janus.Queue()
     config = {
         "configurable": {"thread_id": thread_id},
         "recursion_limit": _recursion_limit(),
     }
-    thread = threading.Thread(
-        target=_worker_stream,
-        args=(agent, None, config, q, cancel_event),
-        daemon=True,
-    )
-    thread.start()
-    try:
-        while True:
-            try:
-                event = await asyncio.wait_for(q.async_q.get(), timeout=0.1)
-            except asyncio.TimeoutError:
-                # 见 run_turn：主动轮询取消，避免无 chunk 阶段停止延迟
-                if cancel_event.is_set():
-                    break
-                continue
-            yield event
-            if event["kind"] in ("done", "error"):
-                break
-    finally:
-        q.close()
+    async for event in _drive_stream(agent, None, config, cancel_event):
+        yield event

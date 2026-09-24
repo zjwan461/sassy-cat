@@ -482,7 +482,7 @@ async def _pending_interrupt_decisions(session_id: str, content: str):
     """
     try:
         _, agent = holder.get()
-        state = agent.get_state({"configurable": {"thread_id": session_id}})
+        state = await agent.aget_state({"configurable": {"thread_id": session_id}})
         if not (state and state.next):
             return None
         # decisions 数量必须与挂起的 action_requests 总数一致（middleware 校验）
@@ -660,7 +660,7 @@ async def _handle_chat_retry(ws, payload: dict):
     pending = False
     try:
         _, agent = holder.get()
-        state = agent.get_state({"configurable": {"thread_id": session_id}})
+        state = await agent.aget_state({"configurable": {"thread_id": session_id}})
         pending = bool(state and state.next)
     except Exception as e:
         logger.warning(f"重试前校验待执行状态失败: {e}")
@@ -709,7 +709,7 @@ async def _handle_tool_confirm(ws, payload: dict):
     # 广播 expired 让前端置灰失效。
     try:
         _, agent = holder.get()
-        state = agent.get_state({"configurable": {"thread_id": session_id}})
+        state = await agent.aget_state({"configurable": {"thread_id": session_id}})
         pending = bool(state and state.next)
     except Exception as e:
         logger.warning(f"resume 前校验挂起状态失败: {e}")
