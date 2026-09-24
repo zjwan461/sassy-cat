@@ -24,7 +24,6 @@ from agent.tools.builtin_tools import (
     get_date_time,
     internet_search,
     run_command,
-    run_python,
     save_user_info,
 )
 from agent.tools.reminder_tools import (
@@ -34,6 +33,7 @@ from agent.tools.reminder_tools import (
     cancel_reminder,
 )
 from agent.tools.rag_tools import search_from_kb
+from agent.tools.subagent_tool import call_dsh
 from agent.constant import DB_URL, WORK_DIR
 from agent.middlewares import trim_messages, inject_base_info, inject_kb_info
 
@@ -127,7 +127,6 @@ class AgentHolder:
                 get_date_time,
                 internet_search,
                 run_command,
-                # run_python,
                 save_user_info,
                 create_skill,
                 create_reminder,
@@ -135,6 +134,7 @@ class AgentHolder:
                 complete_reminder,
                 cancel_reminder,
                 search_from_kb,
+                call_dsh,
             ],
             interrupt_on=interrupt_on,
             backend=FilesystemBackend(root_dir=WORK_DIR, virtual_mode=True),

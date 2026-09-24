@@ -1,0 +1,59 @@
+# Profile patch: add a real file-editing tool to the API service's agent.
+#
+# Why this exists
+# ---------------
+# The shipped `sdk-minimal` profile exposes exactly ONE tool: a persistent
+# shell (`bash`). To write a file the model must emit the whole file inside a
+# single `cat > file << 'EOF' ... EOF` command, JSON-escaped, in one model
+# response. For anything long that fails in two independent ways:
+#
+#   1. it exceeds the per-response output cap, so the tool-call JSON is cut off
+#      mid-string and the turn dies with `Unterminated string` / INVALID_ARGS;
+#   2. even within the cap, deep heredoc/JSON escaping of Markdown + code
+#      blocks is fragile.
+#
+# Observed: a request for a detailed FastAPI document stopped at 16,087 output
+# tokens while still on its 22-chapter outline, losing all of it. A short
+# question answered fine from the same deployment, which is what ruled out the
+# bridge and the gateway.
+#
+# What this adds
+# --------------
+# `str_replace_editor` (create / str_replace / insert / view) plus the local
+# filesystem provider it depends on. The model can then create a file and append
+# to it section by section, so no single response has to carry the whole
+# document, and a partial run still leaves the finished sections on disk.
+#
+# Security note: this does NOT widen access. The shell tool in this same profile
+# can already read and write anything the process can reach, and `sdk-minimal`
+# pins danger-full-access. This patch changes HOW the agent writes, not WHAT it
+# may touch. Container isolation remains the boundary.
+#
+# Applied via DeepSeekHarness(patches=(...)) -> `dsh --profile <p> --patch <file>`.
+# Patches are applied last, so these rows win over the bundle's defaults.
+
+- insert:
+    - id: fs-local
+      name: '@deepseek-ai/dsh-fs-local'
+      config:
+        cwd: !!js process.cwd()
+    - id: tool-str-replace-editor
+      name: '@deepseek-ai/dsh-tool-str-replace-editor'
+    # `present` is what produces the "files delivered this turn" declaration.
+    # It is NOT in the sdk-minimal bundle and there is no automatic diffing of
+    # the workspace: the agent has to declare its deliverables explicitly, and
+    # the tool description requires that call whenever it produces an output the
+    # user asked to receive. Without this row the agent has no way to tell the
+    # bridge which files matter, so the API has nothing to link to.
+    #
+    # Verified: with this row the model is offered ['present', 'bash',
+    # 'str_replace_editor'], and a present call emits a `deliverables/presented`
+    # session event carrying {turn, callId, files:[{path, description}]} — which
+    # arrives on the same notification stream the bridge already consumes.
+    #
+    # It needs an `fs` provider (the fs-local row above) and the turnBoundary
+    # session projection, which sdk-minimal already includes.
+    - id: tool-present
+      name: '@deepseek-ai/dsh-tool-present'
+      config:
+        maxFiles: 8

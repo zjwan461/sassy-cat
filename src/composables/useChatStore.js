@@ -151,6 +151,13 @@ function ensureStarted() {
       m.reasoningOpen = false
     }
     m.content += p.text
+    // 按来源分段记录：agent 为空 = 主 agent 自己的正文，带值时 = 某个子 agent
+    // （如 dsh / DeepSeek Harness）的产出，渲染时据此区分展示
+    const agent = p.agent || null
+    if (!m.segments) m.segments = []
+    const last = m.segments[m.segments.length - 1]
+    if (last && last.agent === agent) last.text += p.text
+    else m.segments.push({ agent, text: p.text })
   })
   on('agent.reasoning', (p) => {
     const m = chat.messages.find((x) => x.id === p.msgId)
@@ -181,6 +188,11 @@ function ensureStarted() {
       m.reasoningOpen = false
       // 以服务端最终全文为准（若比增量拼接更完整）
       if (p.text && p.text.length > m.content.length) m.content = p.text
+      // segments 只是增量拼接出来的展示分段：与服务端全文对不上时丢弃，
+      // 退化为整体渲染，避免分段内容与正文错位
+      if (m.segments && m.segments.map((s) => s.text).join('') !== m.content) {
+        m.segments = null
+      }
     }
     // 仅当前轮次的完成才复位 generating：旧轮次迟到的 completed 不得打断新轮次
     if (p.msgId === currentMsgId) chat.generating = false

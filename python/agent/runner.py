@@ -129,28 +129,42 @@ def _worker_stream(
     """在线程内运行阻塞的 agent.stream，事件推入 q.sync_q"""
     final_parts = []
     try:
-        for _, chunk in agent.stream(
+        for _ , stream_mode, chunk in agent.stream(
             input_payload,
             config=config,
-            stream_mode="messages",
+            stream_mode=["messages", "custom"],
             subgraphs=True,
         ):
             if cancel.is_set():
                 logger.info("收到取消信号，终止流")
                 break
-            msg_chunk = chunk[0]
-            if isinstance(msg_chunk, AIMessageChunk):
-                usage_metadata = msg_chunk.usage_metadata
-                if usage_metadata and usage_metadata is not None:
-                    _safe_put(q, {"kind": "usage", "usage_metadata": usage_metadata})
-            cb = msg_chunk.content_blocks
-            if not cb:
-                continue
-            for item in cb:  # 遍历全部块，避免同帧多块时丢事件
-                for event in _extract_item(item, msg_chunk):
-                    if event["kind"] == "delta":
-                        final_parts.append(event["text"])
-                    _safe_put(q, event)
+            if stream_mode == "messages":
+                msg_chunk = chunk[0]
+                if isinstance(msg_chunk, AIMessageChunk):
+                    usage_metadata = msg_chunk.usage_metadata
+                    if usage_metadata and usage_metadata is not None:
+                        _safe_put(q, {"kind": "usage", "usage_metadata": usage_metadata})
+                cb = msg_chunk.content_blocks
+                if not cb:
+                    continue
+                for item in cb:  # 遍历全部块，避免同帧多块时丢事件
+                    for event in _extract_item(item, msg_chunk):
+                        if event["kind"] == "delta":
+                            final_parts.append(event["text"])
+                        _safe_put(q, event)
+            elif stream_mode == "custom":
+                # custom 事件来自工具里的 runtime.stream_writer，结构为
+                # {"agent": "dsh", "text": "<增量文本>"}；兼容直接写 str 的旧写法
+                if isinstance(chunk, dict):
+                    agent = chunk.get("agent") or "dsh"
+                    text = chunk.get("text") or ""
+                else:
+                    agent, text = "dsh", str(chunk)
+                # 同时计入本轮全文：done 的 final_text 既用于 chat.completed，
+                # 也是 ws_agent 落库的正文，漏掉这段会让显示与历史不一致
+                if text:
+                    final_parts.append(text)
+                _safe_put(q, {"kind": "delta", "text": text, "agent": agent})
 
         # 流结束后检查是否停在 interrupt（待确认）
         if not cancel.is_set():

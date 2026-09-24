@@ -91,7 +91,22 @@
                 />
               </div>
               <template v-if="isAssistant(m)">
-                <MarkdownRenderer :content="m.content" :done="!m.streaming" />
+                <!-- 按来源分段渲染：带 agent 的段落来自子 agent（如 DeepSeek Harness），
+                     单独成块并标注来源，与主 agent 的正文区分开 -->
+                <template v-if="m.segments && m.segments.length">
+                  <div
+                    v-for="(seg, i) in m.segments"
+                    :key="i"
+                    class="msg-segment"
+                    :class="{ 'sub-agent': seg.agent }"
+                  >
+                    <div v-if="seg.agent" class="sub-agent-tag">
+                      🤖 来自子 Agent · {{ agentLabel(seg.agent) }}
+                    </div>
+                    <MarkdownRenderer :content="seg.text" :done="!m.streaming" />
+                  </div>
+                </template>
+                <MarkdownRenderer v-else :content="m.content" :done="!m.streaming" />
               </template>
               <template v-else>{{ m.content }}</template>
             </div>
@@ -415,6 +430,14 @@ function isAssistant(m) {
   return m.role === 'assistant'
 }
 
+// 子 agent 来源标识：来自后端 chat.delta 帧的 agent 字段（dsh 工具经 runner 的
+// custom 分支带出），仅用于展示文案，未知来源回退为原样显示 id
+const SUB_AGENT_LABELS = { dsh: 'DeepSeek Harness' }
+
+function agentLabel(id) {
+  return SUB_AGENT_LABELS[id] || id
+}
+
 // ---------- 语音朗读（TTS） ----------
 // 当前消息是否正在朗读（播放中按钮高亮为停止图标）
 function isSpeaking(m) {
@@ -717,6 +740,9 @@ onMounted(() => {
 .msg-content { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 10px 14px; color: #e2e8f0; white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 .msg-content.md-mode { white-space: normal; }
 .msg.user .msg-content { background: #4338ca; border-color: #4f46e5; }
+/* 子 agent（dsh / DeepSeek Harness）产出的段落：左侧竖线 + 标签，区别于主 agent 正文 */
+.msg-segment.sub-agent { margin: 6px 0; padding: 8px 10px 8px 12px; border-left: 3px solid #6366f1; background: #0b1220; border-radius: 0 8px 8px 0; }
+.sub-agent-tag { display: inline-flex; align-items: center; gap: 4px; margin-bottom: 4px; font-size: 12px; color: #a5b4fc; }
 .cursor { animation: blink 0.8s infinite; }
 .cursor-at-end { display: inline-block; margin-left: 4px; vertical-align: middle; }
 @keyframes blink { 50% { opacity: 0; } }

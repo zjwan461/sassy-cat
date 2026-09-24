@@ -237,6 +237,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     _running_turns += 1
 
     buffer = []
+    buffer_agent = None  # 当前 buffer 的来源：None=主 agent 自己，'dsh'=子 agent 产出
     args_buffer = []
     last_flush = time.monotonic()
 
@@ -253,12 +254,17 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     finalized = False  # 本轮是否已由 done/error 正常收尾（取消提前结束则为 False）
 
     async def flush():
-        nonlocal buffer, args_buffer, last_flush
+        nonlocal buffer, buffer_agent, args_buffer, last_flush
         if buffer:
             text = "".join(buffer)
             content_parts.append(text)
-            await emit("chat.delta", {"msgId": msg_id, "text": text})
+            payload = {"msgId": msg_id, "text": text}
+            # 本轮带来源标记（如 dsh 子 agent 的产出）时一并下发，前端据此区分展示
+            if buffer_agent:
+                payload["agent"] = buffer_agent
+            await emit("chat.delta", payload)
             buffer = []
+            buffer_agent = None
         if args_buffer:
             args_text = "".join(args_buffer)
             # 将工具参数追加到当前工具的参数中
@@ -272,6 +278,12 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
         async for event in gen:
             kind = event["kind"]
             if kind == "delta":
+                agent = event.get("agent")
+                # 来源切换（主 agent <-> 子 agent）时先把上一段冲刷掉：否则两种来源
+                # 的文本会被拼进同一帧，前端无法判断哪一段来自子 agent
+                if buffer and agent != buffer_agent:
+                    await flush()
+                buffer_agent = agent
                 buffer.append(event["text"])
                 if (
                     time.monotonic() - last_flush >= FLUSH_INTERVAL
