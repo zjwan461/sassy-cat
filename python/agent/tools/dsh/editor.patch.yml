@@ -23,6 +23,28 @@
 # filesystem provider it depends on. The model can then create a file and append
 # to it section by section, so no single response has to carry the whole
 # document, and a partial run still leaves the finished sections on disk.
+# Later additions: the todo tool, filesystem search, and basic compaction.
+#
+# Two ways a row here can fail to load
+# ------------------------------------
+# Both are HARD failures: the loader rejects the whole tree instead of skipping
+# the row, so dsh never finishes booting and the SDK's `initialize` just times
+# out with a stderr tail to go on. Neither is visible in `--dump-config`, which
+# only composes the tree (good for typos and duplicate ids, and for checking
+# what sdk-minimal already provides — e.g. do NOT re-add its own
+# `dsh-tool-pwsh-persistent`).
+#
+#   1. a required config key that has no default =>
+#      `invalid config: $.<key> missing required value`
+#      (tool-todo needs allowParallelInProgress, tool-fs-search needs
+#      sampleOverCapGlobResults — both verified missing in this runtime);
+#   2. a service no mounted row provides =>
+#      `<pkg>: pending (waiting for service: <name>)`
+#      (compaction-basic needs tokenMeter, hence the extra token-meter row).
+#
+# So verify each new row by booting once and reading the model's tool list back
+# from the `request/header` session event:
+#   .venv\Scripts\python.exe tests\tmp_dsh_plugin_probe.py
 #
 # Security note: this does NOT widen access. The shell tool in this same profile
 # can already read and write anything the process can reach, and `sdk-minimal`
@@ -57,3 +79,40 @@
       name: '@deepseek-ai/dsh-tool-present'
       config:
         maxFiles: 8
+
+    # Last batch: todo / search / compaction. Verified by booting the real
+    # harness: the model's tools go from
+    #   ['present', 'pwsh', 'str_replace_editor']
+    # to
+    #   ['glob', 'grep', 'present', 'pwsh', 'str_replace_editor', 'todo_write']
+    # and a plan-writing prompt makes `todo/write` reach the notification stream.
+
+    # Todo list. Emits the `todo/write` session event as a FULL SNAPSHOT of the
+    # list, not a delta — observed 4 times in one turn, each repeating the whole
+    # list, so a renderer must diff and only emit on change. Event shape:
+    # {todos: [{content, status}]} with status pending / in_progress seen so far.
+    # The model-facing tool name is `todo_write`, not `todo`.
+    # allowParallelInProgress is required and has no default.
+    - id: tool-todo
+      name: '@deepseek-ai/dsh-tool-todo'
+      config:
+        allowParallelInProgress: true
+
+    # Glob / grep. Before this row the only way to search was hand-rolled pwsh
+    # (a plain `ls -la` fails on PowerShell, and the model burned several steps
+    # discovering that). sampleOverCapGlobResults is required, no default.
+    - id: tool-fs-search
+      name: '@deepseek-ai/dsh-tool-fs-search'
+      config:
+        sampleOverCapGlobResults: false
+
+    # Provides nothing model-facing; it exists only to supply the `tokenMeter`
+    # service that compaction-basic injects. Kept above its consumer on purpose.
+    - id: token-meter
+      name: '@deepseek-ai/dsh-token-meter'
+
+    # Basic compaction. sdk-minimal ships without it, so a long multi-step task
+    # eventually runs into the context ceiling with no way to summarize away the
+    # old turns. Emits compaction/start|summary|end.
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'

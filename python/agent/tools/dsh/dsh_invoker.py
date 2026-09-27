@@ -25,6 +25,28 @@ DEEPSEEK_BASE_URL / DEEPSEEK_API_KEY -> dsh-llm-deepseek 的端点解析：
     config.baseURL ?? $DEEPSEEK_BASE_URL ?? https://api.deepseek.com
 即环境变量优先于 profile 里写死的 baseURL，且是"每个请求解析"，换地址不需要
 改 patch 文件、不需要重启。
+
+system prompt 的传递链路
+-----------------------
+DeepSeekHarness(env={"DSH_SYSTEM_PROMPT": ...}) -> 子进程环境变量 -> sdk-minimal
+里 system-prompt 行的 personaPrefix：
+    process.env.DSH_SYSTEM_PROMPT ?? 'You are a helpful software engineer assistant.'
+该行 includeHarnessIdentity / includeRuntimeContext 都是 false，所以 dsh 的系统
+消息基本就是这一段；不给这个变量，dsh 用它自己的英文默认值（实测 system/message
+的内容就是那句英文）。
+
+取值优先级：config.user.json 的 agent.profiles.<active>.dshSystemPrompt
+（兼容顶层 agent.dshSystemPrompt）-> DEFAULT_SYSTEM_PROMPT。
+
+为什么不复用 agent/prompts.py 里主 agent 的 prompt（persona + RUNTIME_SKELETON）
+------------------------------------------------------------------------------
+那两段是给"能对话、有确认 UI、有全套项目工具"的主 agent 写的，dsh 三者都不具备：
+  - 它要求调用 save_user_info / create_reminder / search_from_kb，而 dsh 的工具
+    清单只有 shell / 编辑器 / present / glob / grep / todo（见 editor.patch.yml），
+    硬套只会让它编造不存在的工具调用；
+  - 它要求高危操作等用户确认，而这条链路是单向事件流，没有回执通道；
+  - 它要求文件建在 /tmp、/data 这类虚拟路径，而 dsh 的工作目录是真实目录
+    （runtime/.dsh/workspace），shell 必须用当前平台的原生路径。
 """
 
 from __future__ import annotations
@@ -61,6 +83,56 @@ DSH_PROFILE = "sdk-minimal"
 FALLBACK_BASE_URL = "http://localhost:8080/v1"
 FALLBACK_API_KEY = "sk-xxx"
 FALLBACK_MODEL = "Qwen3.6-35B"
+
+# 平台相关的 shell 指引：sdk-minimal 的 shell 工具本身就是平台二选一
+# （--dump-config 里 persistent-bash 在 win32 上 disabled、persistent-pwsh 反之），
+# 所以 Windows 上模型拿到的是 pwsh、macOS/Linux 上是 bash。写死任一种都会在另一个
+# 平台上说错工具名与路径风格，因此拆出来按 sys.platform 选。
+# 提示词里用 {shell_guidance} 占位，由 shell_guidance() 展开。
+SHELL_GUIDANCE_WINDOWS = (
+    "- 需要 shell 时注意这是真实的 PowerShell（pwsh）环境：当前目录用 `Get-Location` 看，"
+    "路径用原生 Windows 写法（C:\\...），不要写成 Linux 风格的 /tmp、/data 这类虚拟路径。"
+)
+SHELL_GUIDANCE_POSIX = (
+    "- 需要 shell 时注意这是真实的 bash 环境：当前目录用 `pwd` 看，"
+    "路径用 POSIX 写法（/Users/... 或 /home/...），不要写成不存在的虚拟路径约定。"
+)
+
+
+def shell_guidance(platform: str | None = None) -> str:
+    """按运行平台挑 shell 指引（默认取当前进程的 sys.platform）。"""
+    current = platform or sys.platform
+    return SHELL_GUIDANCE_WINDOWS if current.startswith("win") else SHELL_GUIDANCE_POSIX
+
+
+# dsh 的系统提示词（DSH_SYSTEM_PROMPT）。它是"被委托的单向执行者"而不是聊天对象：
+# 看不到主对话、没有确认 UI、工具集也不同，所以单独写一份，别复用主 agent 的
+# persona/skeleton（理由见模块 docstring）。
+DEFAULT_SYSTEM_PROMPT = """你是「优墨」的动手子代理，跑在一个独立的 dsh(DeepSeek Harness) 工作进程里。
+
+你只拿到被委托的那一件事：调用方给出的任务描述就是你的全部上下文，不要指望能看到用户与优墨的对话历史。
+
+任务规划（重要）：
+- 硬规则：只要这件事**需要调用工具两次以上**，就属于多步任务，必须先把 todo_write 建好再动手。
+  不要用"这题很机械""我几步就能写完"当理由跳过——多步且机械，正是最该用清单的场景。
+- 只有"一次工具调用就能彻底做完"的事（一问一答、单条命令、单次读写单个文件）才不必建清单。
+- 清单写 3~7 项，每项是一个能独立完成、能验证的动作，例如"创建 X 文件""运行 Y 并确认输出"。
+- 第一步就建清单，这是默认动作：不需要调用方特地要求，也不要等"摸清情况之后"再补。
+- 执行中每完成一项就立刻用 todo_write 更新状态（进行中/已完成），不要攒到最后一次性补写。
+  注意它是**全量覆盖**：每次都要把整份清单（含未变的项）重新提交。
+- 收尾时把所有项都标记为已完成再汇报；确实没做完的项要如实说明，不要留着不更新。
+  "我先看看再说""边做边想下一步"都不算完成了规划。
+工作方式：
+- 先看清现状再动手：用 glob/grep 找文件、读文件确认内容，不要凭记忆猜目录结构或文件内容。
+{shell_guidance}
+- 写文件优先用 str_replace_editor（可分节追加），别把整份文件塞进一条 shell 命令——heredoc 与多行字符串的转义都很脆，还容易撞上单次响应的输出上限。
+- 产出需要交给用户的文件时，用 present 声明。
+
+边界：
+- 没有交互界面：任何"等待用户确认/回答"的操作都不会有人回应。不要提问、不要等许可，直接用工具把任务做完。
+- 只动与任务相关的文件，不要删除或覆盖无关内容。
+- 完成后用一两句话汇报：做了什么、结果如何、有没有失败或没做完的部分。
+"""
 # 输出上限必须显式给：llm-deepseek 适配器默认 256000，而 DashScope 的 qwen 系
 # 只接受 [1, 131072]，不给会直接被 400
 # InternalError.Algo.InvalidParameter 挡下来（实测）。可用
@@ -103,12 +175,25 @@ def load_llm_settings(config_path: str) -> dict[str, Any]:
     # 项目配置里没有就不传，让适配器默认值生效
     reasoning_effort = extra.get("reasoningEffort") or None
 
+    # 系统提示词同样优先读配置：profile 里的 dshSystemPrompt -> 顶层兼容字段
+    # -> 内置默认（见常量处的说明）
+    agent_profile = cfg.active_agent_profile() or {}
+    configured_prompt = agent_profile.get("dshSystemPrompt") or cfg.get(
+        "agent.dshSystemPrompt"
+    )
+    system_prompt = (
+        str(configured_prompt).strip() if configured_prompt else DEFAULT_SYSTEM_PROMPT.strip()
+    )
+    # {shell_guidance} 按当前平台展开；配置里自定义的 prompt 也可以用它
+    system_prompt = system_prompt.replace("{shell_guidance}", shell_guidance())
+
     logger.info(
-        "dsh LLM: route=%s model=%s baseUrl=%s maxTokens=%s",
+        "dsh LLM: route=%s model=%s baseUrl=%s maxTokens=%s systemPrompt=%d字",
         DSH_ROUTE,
         model,
         base_url,
         max_tokens,
+        len(system_prompt),
     )
     return {
         "base_url": base_url,
@@ -116,6 +201,7 @@ def load_llm_settings(config_path: str) -> dict[str, Any]:
         "model": model,
         "max_tokens": max_tokens,
         "reasoning_effort": reasoning_effort,
+        "system_prompt": system_prompt,
     }
 
 
@@ -137,8 +223,10 @@ def build_harness(settings: dict[str, Any]) -> DeepSeekHarness:
         # `--patch <单个字符 resolved 后的绝对路径>`，dsh 在第一个字符上就
         # failed to read overlay 崩掉
         patches=(PATCH_FILE,),
-        # client 侧是 os.environ.copy() 再 update，所以这里只需增量注入
-        env={"DSH_HOME": DSH_HOME},
+        # client 侧是 os.environ.copy() 再 update，所以这里只需增量注入。
+        # DSH_SYSTEM_PROMPT 被 sdk-minimal 的 system-prompt 行读作 personaPrefix
+        # （`process.env.DSH_SYSTEM_PROMPT ?? '<英文默认>'`），链路见模块 docstring。
+        env={"DSH_HOME": DSH_HOME, "DSH_SYSTEM_PROMPT": settings["system_prompt"]},
         # 以下两项由 SDK 写成 DEEPSEEK_BASE_URL / DEEPSEEK_API_KEY 传给 dsh 子进程
         base_url=settings["base_url"],
         api_key=settings["api_key"],

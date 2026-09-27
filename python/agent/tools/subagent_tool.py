@@ -2,6 +2,7 @@ import asyncio
 import json
 from langchain.tools import tool, ToolRuntime
 import logging
+import random
 import re
 import threading
 import uuid
@@ -106,6 +107,39 @@ def _iter_assistant_text(event: dict) -> Iterator[str]:
                 yield text
 
 
+# ---------- 打字机输出 ----------
+# dsh 是"结算式"的：一个 step 的正文会作为一批 text-chunks 同时到达，整批 piece
+# 会在同一个事件循环 tick 里被写出去，前端看到的是一段文字"瞬间出现"。把每个
+# piece 再随机切成 1~3 个字、逐片写出并 sleep 一下，才有打字机的观感——只切片
+# 不加延迟是没用的，因为它们本来就挤在同一个 tick。
+#
+# 两个系数都可调：
+#   - 每片字数 1~3（平均 2 字）：越小越"逐字"，总时长越长
+#   - 每片间隔 _TYPEWRITER_DELAY_SECONDS：总时长 ≈ 字数 / 2 × 间隔，
+#     即 1000 字约 5 秒；设成 0 即关掉打字机效果
+# 注意 Windows 上 asyncio.sleep 的计时精度约 15.6ms，间隔给到 0.01 以下实际仍
+# 接近 0.015，调参时以这个下限为基准。
+_TYPEWRITER_MIN_CHARS = 1
+_TYPEWRITER_MAX_CHARS = 3
+_TYPEWRITER_DELAY_SECONDS = 0.01
+
+_TYPEWRITER_RNG = random.Random()
+
+
+def _slice_for_typewriter(text: str) -> Iterator[str]:
+    """把一段文本随机切成 1~3 个字的碎片，供打字机逐片写出。
+
+    按字符切（中文一个字即一片），不插入额外换行或空格，因此把所有碎片按序
+    拼回去与原文完全一致——只是中间态不完整。
+    """
+    index = 0
+    total = len(text)
+    while index < total:
+        step = _TYPEWRITER_RNG.randint(_TYPEWRITER_MIN_CHARS, _TYPEWRITER_MAX_CHARS)
+        yield text[index : index + step]
+        index += step
+
+
 # 工具结果正文超过该字数就截断，避免 dsh 的 shell / 文件输出把回复正文淹没
 _TOOL_RESULT_MAX_CHARS = 500
 
@@ -201,6 +235,71 @@ def _format_reasoning(event: dict) -> str | None:
     return _blockquote(f"💭 深度思考\n{text}") + "\n\n"
 
 
+# todo 清单状态用 unicode 符号表示：markdown-it 没挂 task-list 插件，
+# "- [x] ..." 会原样显示成文本，符号则渲染稳定
+_TODO_MARKS = {
+    "completed": "☑",
+    "in_progress": "▶",
+    "pending": "☐",
+}
+
+
+def _format_todos(event: dict, previous: str) -> tuple[str, str]:
+    """把一条 todo/write 快照渲染成引用块里的任务清单，返回 (文本, 新指纹)。
+
+    todo/write 是**全量快照**而非增量：dsh 每结束一步就重发整份清单（实测一轮
+    4 次，且每次状态都变）。清单与上次相同时返回空文本让调用方跳过，避免把
+    同一份清单在正文里刷很多遍。
+    """
+    todos = (event.get("data") or {}).get("todos")
+    if not isinstance(todos, list) or not todos:
+        return "", previous
+
+    fingerprint = json.dumps(todos, ensure_ascii=False, sort_keys=True)
+    if fingerprint == previous:
+        return "", previous
+
+    lines: list[str] = []
+    done = 0
+    for item in todos:
+        if not isinstance(item, dict):
+            continue
+        if item.get("status") == "completed":
+            done += 1
+        mark = _TODO_MARKS.get(item.get("status"), "☐")
+        content = str(item.get("content") or "").strip() or "(未命名)"
+        lines.append(f"- {mark} {content}")
+
+    body = f"📋 待办（{done}/{len(todos)} 完成）\n" + "\n".join(lines)
+    return _blockquote(body) + "\n\n", fingerprint
+
+
+def _format_compaction(event: dict) -> str | None:
+    """把 compaction/* 事件压成一行提示；没有信息量的阶段返回 None。
+
+    长任务里 dsh 会把旧历史总结/裁剪掉，这行能解释"它怎么突然记不住前面了"。
+    """
+    data = event.get("data") or {}
+    etype = event.get("type")
+
+    if etype == "compaction/summary":
+        count = len(data.get("shadowedSeqs") or [])
+        tokens = data.get("shadowedTokenCount")
+        detail = f"{count} 条 / 约 {tokens} tokens" if tokens else f"{count} 条"
+        return _blockquote(f"🗜️ 已压缩历史：{detail}") + "\n\n"
+    if etype == "compaction/prune":
+        count = len(data.get("shadowedSeqs") or [])
+        return _blockquote(f"🗜️ 已裁剪历史：{count} 条") + "\n\n"
+    if etype == "compaction/end":
+        error = data.get("error")
+        # 成功时上面 summary 已经交代过，不必再来一行；只有失败才补一条
+        if error:
+            return _blockquote(f"🗜️ 上下文压缩失败：{error}") + "\n\n"
+        return None
+    # compaction/start 单独出现没有信息量
+    return None
+
+
 def _run_blocking(
     prompt: str,
     thread_id: str,
@@ -251,6 +350,8 @@ async def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
 
     注意：stream_writer 写出的结构是 {"agent": "dsh", "text": "..."}，
     runner 的 custom 分支会从里面取 text 作为正文增量、agent 作为来源标记。
+    正文会按 1~3 个字一片逐片写出（打字机效果，见 _TYPEWRITER_* 常量），
+    工具块 / 待办 / 思考这些结构块整块写出。
     """
     writer = runtime.stream_writer
 
@@ -261,11 +362,20 @@ async def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
         thread_id = str(configurable["thread_id"])
 
     loop = asyncio.get_running_loop()
-    # 工作线程 -> 事件循环的单向通道：on_notification 只投递，不直接碰 writer
+    # 工作线程 -> 事件循环的单向通道：on_notification 只投递，不直接碰 writer。
+    # 队列元素是 (文本, 是否按打字机输出)：只有模型正文逐字蹦，工具块/待办/思考
+    # 这些"结构块"整块输出——切碎它们没有观感收益，还会让围栏代码块在中间态
+    # 反复破框。
     queue: asyncio.Queue = asyncio.Queue()
+
+    def push(text: str, *, prose: bool) -> None:
+        """把一段文本交给事件循环侧写出（本函数在工作线程里被调用）。"""
+        loop.call_soon_threadsafe(queue.put_nowait, (text, prose))
 
     # 只把根会话的正文写出去：subagent 子会话的事件不该串进这条回复
     root_session: dict = {"id": None}
+    # 上一份 todo 快照的指纹（todo/write 是全量重发，靠它去重）
+    todo_state: dict = {"fingerprint": ""}
 
     def on_notification(notification: Any) -> None:
         if notification.method != "session.event":
@@ -283,23 +393,45 @@ async def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
         etype = event.get("type")
         if etype == "assistant/message":
             # 思考内容先于正文（与生成顺序一致），同样以引用块 markdown 混入正文流；
-            # 正文回放 text-chunks（纯工具调用步骤没有 text-chunks，此处为空）
-            chunks: list[str] = []
+            # 正文回放 text-chunks（纯工具调用步骤没有 text-chunks，此处为空）。
+            # 思考块整块输出，正文交给打字机逐片蹦。
             reasoning = _format_reasoning(event)
             if reasoning:
-                chunks.append(reasoning)
-            chunks.extend(_iter_assistant_text(event))
-            pieces: Iterator[str] = iter(chunks)
-        elif etype == "tool/call":
-            # dsh 调用工具：工具名 + 参数，渲染成引用块 markdown 混入正文流
-            pieces = iter([_format_tool_call(event)])
-        elif etype == "tool/result":
-            # dsh 工具执行结果：同样以引用块 markdown 追加
-            pieces = iter([_format_tool_result(event)])
-        else:
+                push(reasoning, prose=False)
+            for piece in _iter_assistant_text(event):
+                push(piece, prose=True)
             return
-        for piece in pieces:
-            loop.call_soon_threadsafe(queue.put_nowait, piece)
+        if etype == "tool/call":
+            # dsh 调用工具：工具名 + 参数，渲染成引用块 markdown 混入正文流
+            push(_format_tool_call(event), prose=False)
+            return
+        if etype == "tool/result":
+            # dsh 工具执行结果：同样以引用块 markdown 追加
+            push(_format_tool_result(event), prose=False)
+            return
+        if etype == "todo/write":
+            # 待办清单：全量快照，清单没变时（返回空文本）直接跳过
+            text, todo_state["fingerprint"] = _format_todos(
+                event, todo_state["fingerprint"]
+            )
+            if text:
+                push(text, prose=False)
+            return
+        if etype.startswith("compaction/"):
+            # 上下文压缩：只在有信息量的阶段输出一行
+            piece = _format_compaction(event)
+            if piece:
+                push(piece, prose=False)
+            return
+
+    async def write_piece(text: str, prose: bool) -> None:
+        """写出一段内容：正文逐片蹦（打字机），结构块整块输出。"""
+        if not prose:
+            writer({"agent": "dsh", "text": text})
+            return
+        for fragment in _slice_for_typewriter(text):
+            writer({"agent": "dsh", "text": fragment})
+            await asyncio.sleep(_TYPEWRITER_DELAY_SECONDS)
 
     # 换线程执行阻塞的 harness.run；同时在事件循环上把队列里的片段实时写出
     run_task = asyncio.create_task(
@@ -315,17 +447,18 @@ async def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
     try:
         while not run_task.done():
             try:
-                piece = await asyncio.wait_for(queue.get(), timeout=0.1)
+                piece, prose = await asyncio.wait_for(queue.get(), timeout=0.1)
             except asyncio.TimeoutError:
                 continue
-            writer({"agent": "dsh", "text": piece})
-        # 线程已结束：冲刷队列尾部残余（最后几段的投递回调可能刚执行完）
+            await write_piece(piece, prose)
+        # 线程已结束：冲刷队列尾部残余（最后几段的投递回调可能刚执行完）。
+        # 尾部同样走 write_piece，否则积压的最后一大段会一次性蹦出来，效果全无。
         while True:
             try:
-                piece = queue.get_nowait()
+                piece, prose = queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            writer({"agent": "dsh", "text": piece})
+            await write_piece(piece, prose)
         result = run_task.result()
     except Exception as exc:
         logger.exception("dsh 委托执行失败")

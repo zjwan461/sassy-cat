@@ -100,30 +100,72 @@ def run_python(code: str):
     return "\n".join(output)
 
 
-def _convert_virtual_path(segment: str, idx: int) -> list[str]:
+# Windows 命令行开关：/c、/k、/A、/c:xxx、/TS、/help、/? ...
+# 这些片段虽然以 / 开头，但绝不是虚拟路径，必须原样保留，
+# 否则 ["cmd", "/c", ...] 会被改写成 cmd <work_dir>\c，cmd 进入交互式 shell。
+_WIN_SWITCH_RE = re.compile(r"^/[?A-Za-z](?::.*)?$")
+_WIN_UPPER_SWITCH_RE = re.compile(r"^/[A-Z][A-Z0-9]{1,4}$")
+# 常见长开关名（含 start 的 /wait、/min、/max、/node 等），避免被误当虚拟路径
+_LONG_SWITCH_NAMES = {
+    "help", "version", "quiet", "silent", "yes", "no", "force", "verbose",
+    "wait", "min", "max", "node", "affinity", "low", "normal", "high",
+    "realtime", "abovenormal", "belownormal", "separate", "shared",
+}
+
+
+def _looks_like_switch(segment: str) -> bool:
+    """判断片段是命令行开关（/c、/A、/TS、/help、/?）而非虚拟路径。"""
+    if not segment.startswith("/") or segment.startswith("//"):
+        return False
+    if segment.startswith("/?") or _WIN_SWITCH_RE.fullmatch(segment):
+        return True
+    body = segment[1:]
+    if "/" in body or "\\" in body:
+        return False
+    if _WIN_UPPER_SWITCH_RE.fullmatch(segment):
+        return True
+    return body.lower() in _LONG_SWITCH_NAMES
+
+
+def _convert_virtual_path(segment: str, idx: int, prev: str | None = None) -> list[str]:
     """将单个虚拟路径片段转换为真实路径。
 
     返回一个列表，因为某些命令（如 pip）可能需要展开为多个片段。
 
     如果片段以 / 开头且后面跟着的是目录名（不是 - 开头的参数），
     则认为是 FilesystemBackend 的虚拟路径，转换为基于 work_dir 的真实路径。
+    但命令行开关（/c、/k、/A、/TS、/help、/?）必须原样保留，
+    否则 cmd /c 会被改写成 cmd <work_dir>\\c，cmd 进入交互式 shell、打印版本
+    横幅后立即退出（退出码 0，但命令实际上从未执行）。
+    相对路径（./x、../x）统一规范化为基于 work_dir 的绝对路径，
+    避免 start/浏览器等宿主程序按自己的当前目录去解析。
 
     例如：
     - `/skills/weather-skill/scripts/fetch_weather.py`
       → `work_dir\\skills\\weather-skill\\scripts\\fetch_weather.py`（Windows）
+    - `/c` → `/c`（不变，是 cmd 开关）
+    - `./code/index.html` → `work_dir\\code\\index.html`（规范化为绝对路径）
     - `-v` → `-v`（不变，因为是参数）
     - `echo` → `echo`（不变）
     - `pip` → `[pip绝对路径]` 或 `[python绝对路径, "-m", "pip"]`（回退）
+
+    参数 prev 为前一片段：python/pip 出现在数组首位，或紧跟 cmd /c 之后，
+    都视为“命令名位置”，会被替换为项目解释器的绝对路径
+    （避免 pyenv 之类 .bat 垫片在多层 cmd 下把参数当批处理语法解析）。
     """
     # 检测 Windows 盘符模式：单个字母 + 冒号（如 C:、D: 等）
     # if len(segment) >= 2 and segment[0].isalpha() and segment[1] == ":":
     #     raise ValueError("Windows环境下不得使用真实盘符作为变量开头")
     
+    # 命令名位置：数组首位，或紧跟 cmd /c（/k）之后
+    at_command_position = idx == 0 or (
+        prev is not None and (prev.lower() in ("/c", "/k") or _is_cmd_program(prev))
+    )
     # 使用 in 操作符正确检查成员关系
-    if segment in ("python", "python3") and idx == 0:
+    if segment in ("python", "python3") and at_command_position:
         # 使用项目中实际可用的 Python 解释器绝对路径
         return [_find_python()]
-    elif segment in ("pip", "pip3") and idx == 0:
+    elif segment in ("pip", "pip3") and at_command_position:
         # pip 通常与 Python 解释器在同一目录
         python_exe = Path(_find_python())
         pip_exe = python_exe.parent / ("pip.exe" if os.name == "nt" else "pip")
@@ -132,6 +174,12 @@ def _convert_virtual_path(segment: str, idx: int) -> list[str]:
         # pip 独立可执行文件不存在，回退到 python -m pip
         return [_find_python(), "-m", "pip"]
 
+    # 开关参数优先判断，绝不能当作虚拟路径拼接
+    if _looks_like_switch(segment):
+        return [segment]
+    # 相对路径规范化为 work_dir 下的绝对路径（start、浏览器等靠此定位文件）
+    if segment.startswith(("./", "../", ".\\", "..\\")):
+        return [os.path.normpath(os.path.join(work_dir, segment))]
     if not segment.startswith("/"):
         return [segment]
     # 去掉前导 /，得到相对路径
@@ -147,6 +195,202 @@ def _convert_virtual_path(segment: str, idx: int) -> list[str]:
     return [real_path]
 
 
+def _is_cmd_program(segment: str) -> bool:
+    """判断片段是否为 cmd / cmd.exe（兼容绝对路径写法）。"""
+    return os.path.basename(segment).lower() in ("cmd", "cmd.exe")
+
+
+def _comspec() -> str:
+    """取 cmd.exe 的完整路径（COMSPEC 缺失时回退到系统目录）。"""
+    comspec = os.environ.get("COMSPEC")
+    if comspec:
+        return comspec
+    system_root = os.environ.get("SystemRoot") or r"C:\Windows"
+    return os.path.join(system_root, "System32", "cmd.exe")
+
+
+def _validate_windows_command(real_command: list[str]) -> str | None:
+    """Windows 下对 cmd 调用做前置校验，返回错误说明（None 表示可以执行）。
+
+    cmd 不带 /c 时会进入交互式 shell：打印版本横幅后立刻退出，
+    退出码是 0，但期望的命令从未执行——这是最隐蔽的“假成功”。
+    """
+    if os.name != "nt" or not real_command:
+        return None
+    if not _is_cmd_program(real_command[0]):
+        return None
+    lowered = [seg.lower() for seg in real_command[1:]]
+    if "/c" in lowered:
+        return None
+    if "/k" in lowered:
+        return (
+            "命令未执行：本工具是非交互环境，cmd /k 会保留 shell 并等待输入，拿不到结果。"
+            '请改用 /c（执行后退出），例如 ["cmd", "/c", "dir"]。'
+        )
+    return (
+        "命令未执行：Windows 下调用 cmd 必须紧跟 /c（执行后退出）开关。"
+        "当前调用缺少 /c，cmd 会进入交互式 shell：打印版本横幅后立即退出，"
+        "退出码虽然是 0，但命令实际上没有执行。"
+        '正确写法示例：["cmd", "/c", "dir", "/skills"]、'
+        '["cmd", "/c", "start", "", "/code/index.html"]。'
+    )
+
+
+# `start` 打开本地文件时用于识别“文件类参数”的扩展名
+_START_TARGET_EXT_RE = re.compile(
+    r"\.(?:html?|xhtml|pdf|txt|md|json|csv|log|xml|png|jpe?g|gif|svg|webp|bmp"
+    r"|mp[34]|wav|docx?|xlsx?|pptx?)$",
+    re.IGNORECASE,
+)
+
+
+def _needs_start_title(segment: str) -> bool:
+    """判断 `start` 之后的首个参数是否会被 cmd 误当作窗口标题。"""
+    stripped = segment.strip()
+    bare = stripped.strip("\"'")
+    if not bare:
+        return False
+    # 带引号时，旧版 cmd 会把第一个带引号参数当作标题
+    if stripped != bare:
+        return True
+    if " " in bare or "\t" in bare:
+        return True
+    if bare.startswith(("/", "\\", "./", "../", ".\\", "..\\", "~")):
+        return True
+    if re.match(r"^[A-Za-z]:[\\/]", bare):
+        return True
+    return bool(_START_TARGET_EXT_RE.search(bare))
+
+
+def _fix_start_title(real_command: list[str]) -> list[str]:
+    """`start` 后紧跟路径/带引号参数时自动补一个空标题 ""。
+
+    cmd 的 start 语法是 `start ["title"] [/switch] program [args]`：
+    若省略标题而第一个参数带引号或形如路径，cmd 会把它当成窗口标题，
+    结果是什么都没打开（退出码仍是 0）。
+    """
+    if os.name != "nt":
+        return real_command
+    fixed: list[str] = []
+    for i, seg in enumerate(real_command):
+        fixed.append(seg)
+        if seg.lower() != "start" or i + 1 >= len(real_command):
+            continue
+        nxt = real_command[i + 1]
+        if not nxt or _looks_like_switch(nxt):
+            continue
+        if _needs_start_title(nxt):
+            fixed.append("")
+    return fixed
+
+
+def _looks_like_local_file_arg(segment: str) -> bool:
+    """判断 `start` 之后的某个片段是否指向本地文件（排除 URL、开关、程序名）。"""
+    bare = segment.strip().strip("\"'")
+    if not bare or "://" in bare:
+        return False
+    if any(ch in bare for ch in "%*?"):  # 含环境变量/通配符，无法静态校验
+        return False
+    if _looks_like_switch(bare) or bare.startswith("-"):
+        return False
+    if re.match(r"^[A-Za-z]:[\\/]", bare) or os.path.isabs(bare):
+        return True
+    if bare.startswith(("/", "\\", "./", "../", ".\\", "..\\")):
+        return True
+    if "\\" in bare or "/" in bare:
+        return True
+    return bool(_START_TARGET_EXT_RE.search(bare))
+
+
+def _check_start_targets(real_command: list[str]) -> str | None:
+    """`start` 打开本地文件时先确认文件存在，避免退出码 0 的假成功。"""
+    if os.name != "nt":
+        return None
+    for i, seg in enumerate(real_command):
+        if seg.lower() != "start":
+            continue
+        for cand in real_command[i + 1:]:
+            # start 的开关（/wait、/min、/B 等）不是文件路径，跳过
+            if cand.startswith("/") and not cand.startswith("//"):
+                continue
+            if not _looks_like_local_file_arg(cand):
+                continue
+            raw = cand.strip().strip("\"'")
+            target = os.path.normpath(raw if os.path.isabs(raw) else os.path.join(work_dir, raw))
+            if not os.path.exists(target):
+                return (
+                    f"命令未执行：`start` 要打开的本地文件不存在 —— {raw}\n"
+                    f"解析后的真实路径：{target}\n"
+                    f"提示：虚拟路径以工作目录 {work_dir} 为根"
+                    f"（/skills/... → {os.path.join(work_dir, 'skills')}\\...）。"
+                    "请先用 list_files / read_file 确认真实位置后重试。"
+                )
+    return None
+
+
+def _is_start_command(real_command: list[str]) -> bool:
+    """命令中是否包含 start（用于结果说明：start 不等待目标程序）。"""
+    return any(seg.lower() == "start" for seg in real_command)
+
+
+def _windows_console_codepage() -> str | None:
+    """取 Windows 控制台（OEM）代码页，cmd 内置命令的输出字节就是用它编码的。"""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+
+        oem = int(ctypes.windll.kernel32.GetOEMCP())
+        return f"cp{oem}" if oem else None
+    except Exception:
+        return None
+
+
+def _decode_candidates() -> list[str]:
+    """待尝试的解码方案，按可靠性排序并去重。
+
+    本进程常被注入 PYTHONUTF8=1 / PYTHONIOENCODING=utf-8，
+    此时 locale.getpreferredencoding() 会返回 utf-8，
+    而 cmd 的 dir/echo 等输出仍是 GBK/cp936 字节，直接用 locale 解码会得到一串
+    替换字符（乱码）。所以必须显式把系统控制台代码页作为兜底候选。
+    """
+    names = [
+        "utf-8",  # 现代 CLI、被 PYTHONUTF8=1 影响的子进程
+        _windows_console_codepage(),  # cmd 内置命令（dir/echo/type...）
+        locale.getpreferredencoding(False),
+        "gbk",
+    ]
+    seen: set[str] = set()
+    result: list[str] = []
+    for name in names:
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(name)
+    return result
+
+
+def _decode_output(data: bytes | None) -> str:
+    """解码子进程输出：UTF-8 严格优先，失败回退系统控制台代码页。"""
+    if not data:
+        return ""
+    candidates = _decode_candidates()
+    for enc in candidates:
+        try:
+            return data.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    # 混合编码等极端情况：用最可能的代码页做替换解码，保证不抛异常
+    fallback = _windows_console_codepage() or "utf-8"
+    try:
+        return data.decode(fallback, errors="replace")
+    except LookupError:
+        return data.decode("utf-8", errors="replace")
+
+
 @tool
 def run_command(command: list[str], timeout: int = 60):
     """执行系统命令，返回执行结果。
@@ -157,6 +401,21 @@ def run_command(command: list[str], timeout: int = 60):
     调用如python,pip,java,node,npm,pnpm,go ... 等等开发常用命令时，不要使用绝对路径，只能使用命令本身。如：直接用python,java等，不要使用/home/user/java 这种绝对路径。
     Windows环境下不得使用真实盘符作为变量开头，比如D:/python.exe等。
 
+    当前平台为 Windows，执行细节（正常写法不受影响）：
+    1. 本工具以原生 argv 执行命令，不做额外的 shell 包装，参数与引号原样传递
+       （["python", "-c", "print(1)"] 这类带引号参数不会再被吞掉）。
+    2. 执行 cmd 内置命令（dir/echo/type/copy/start 等）请写成 ["cmd", "/c", ...]，
+       /c 表示执行完就退出；缺少 /c 的调用会被直接拒绝，因为 cmd 会进入交互式
+       shell、只打印版本横幅就退出（退出码 0 但没有执行任何命令）。
+       不带 cmd 前缀的内置命令（如 ["dir", "/skills"]）会自动补上 cmd /c。
+       /c、/k、/A、/wait 这类开关会原样保留，不会被当虚拟路径。
+    3. 用浏览器/默认程序打开本地文件，用 start 并紧跟一个空标题 ""，例如：
+       ["cmd", "/c", "start", "", "/code/index.html"]
+       否则 cmd 会把第一个参数当成窗口标题，结果什么都没打开。工具会自动补空标题，
+       并在打开前校验文件是否存在（不存在直接报错，不会假成功）。
+    4. 虚拟路径以工作目录为根：/code/x.html → <工作目录>\\code\\x.html。
+       子代理（dsh）的产物在 /.dsh/workspace/ 下，例如 /.dsh/workspace/index.html。
+
     参数：
       timeout: 命令执行超时时间（秒），默认 60。执行耗时较长的任务（如安装依赖、编译、下载等）请适当调大。
     """
@@ -166,37 +425,70 @@ def run_command(command: list[str], timeout: int = 60):
         # 遍历每个片段，将虚拟路径转换为真实路径（每个片段可能展开为多个）
         real_command = []
         for idx, seg in enumerate(command):
-            real_command.extend(_convert_virtual_path(seg, idx))
-        # 拼接为字符串用于 shell 执行（支持 dir、echo 等 shell 内置命令）
-        # Windows 用 list2cmdline，POSIX 用 shlex.join，避免跨平台转义语义错乱
+            real_command.extend(
+                _convert_virtual_path(seg, idx, command[idx - 1] if idx else None)
+            )
+        # cmd 缺少 /c 时是“退出码 0 但什么都没执行”的假成功，先拦下来
+        problem = _validate_windows_command(real_command)
+        if problem:
+            return problem
+        # start 后直接跟路径/带引号参数时补空标题，避免被当成窗口标题
+        real_command = _fix_start_title(real_command)
+        # start 打开的本地文件先校验存在性，避免“以为打开了其实没有”
+        problem = _check_start_targets(real_command)
+        if problem:
+            return problem
+        # Windows 用 list2cmdline（仅用于日志/回显），POSIX 用 shlex.join
         if os.name == "nt":
             command_str = subprocess.list2cmdline(real_command)
         else:
             command_str = shlex.join(real_command)
-        # 编码按操作系统活动代码页选择（Windows 常见 GBK/cp936，POSIX 为 UTF-8）
-        encoding = locale.getpreferredencoding(False) if os.name == "nt" else "utf-8"
-        result = subprocess.run(
-            command_str,
-            shell=True,
-            capture_output=True,
-            text=True,
-            encoding=encoding,
-            errors="replace",
-            timeout=timeout,
-            cwd=work_dir,
-        )
+        # 输出按字节捕获，再由 _decode_output 择优解码（UTF-8 优先，回退系统代码页）
+        if os.name == "nt":
+            # 不用 shell=True：Python 会把命令包成 cmd.exe /c "<命令>"，
+            # 当命令含引号（如 ["python", "-c", "print(1)"]）时会被 cmd 的引号剥离
+            # 规则弄坏，表现为“退出码 0 但没有任何输出”；命令本身以 cmd 开头时
+            # 还会多传一个引号（echo hello 变成 hello"）。这里改用原生 argv：
+            # cmd 调用直接透传，其余命令显式套一层 cmd /c，既保住 dir/echo/start
+            # 等内置命令能力，又保证参数与引号原样传递。
+            if _is_cmd_program(real_command[0]):
+                run_args: list[str] | str = list(real_command)
+            else:
+                run_args = [_comspec(), "/c", *real_command]
+            result = subprocess.run(
+                run_args,
+                shell=False,
+                capture_output=True,
+                timeout=timeout,
+                cwd=work_dir,
+                # 非交互环境：显式关闭 stdin，避免误起的交互式 shell 挂着等输入
+                stdin=subprocess.DEVNULL,
+            )
+        else:
+            result = subprocess.run(
+                command_str,
+                shell=True,
+                capture_output=True,
+                timeout=timeout,
+                cwd=work_dir,
+                stdin=subprocess.DEVNULL,
+            )
     except subprocess.TimeoutExpired:
         return f"执行超时（超过 {timeout} 秒），命令：{command_str}"
     except Exception as e:
         return f"执行失败：{e}，命令：{command_str}"
 
+    stdout = _decode_output(result.stdout)
+    stderr = _decode_output(result.stderr)
     output = [f"退出码：{result.returncode}"]
-    if result.stdout:
-        output.append(f"标准输出：\n{result.stdout}")
-    if result.stderr:
-        output.append(f"错误输出：\n{result.stderr}")
-    if not result.stdout and not result.stderr:
+    if stdout:
+        output.append(f"标准输出：\n{stdout}")
+    if stderr:
+        output.append(f"错误输出：\n{stderr}")
+    if not stdout and not stderr:
         output.append("（无任何输出）")
+    if result.returncode == 0 and _is_start_command(real_command):
+        output.append("（start 已把目标交给系统打开：退出码 0 只表示启动请求成功，不代表目标程序已完成）")
     return "\n".join(output)
 
 
