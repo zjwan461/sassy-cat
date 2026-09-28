@@ -52,6 +52,23 @@ DEFAULTS = {
             "delete": True,
         },
     },
+    # dsh(DeepSeek Harness) 子代理：独立于 llm/agent 配置档的全局配置块，
+    # 与「设置 → dsh 子代理」卡片一一对应，由 agent/tools/dsh/dsh_invoker.py 读取
+    "dsh": {
+        # 是否复用主 Agent 当前激活的 LLM（llm.profiles.<activeProfile>）；默认开启
+        "useMainLlm": True,
+        # useMainLlm=False 时生效的独立 LLM 连接参数（provider 对 dsh 无意义，其路由名固定）
+        "llm": {
+            "baseUrl": "",
+            "apiKey": "",
+            "model": "",
+        },
+        # 留空表示使用 dsh_invoker.DEFAULT_SYSTEM_PROMPT；同一段文本也写在 config.json 的
+        # dsh.systemPrompt 里供设置页直接展示与编辑，改动默认提示词时两处需同步
+        "systemPrompt": "",
+        "maxTokens": 131072,  # dsh 输出上限；DashScope qwen 系只接受 [1,131072]
+        "reasoningEffort": "",  # ""=不指定；off/low/high/max（仅 deepseek-official 适配器识别）
+    },
     "server": {
         "wsPort": 8790,
         "host": "127.0.0.1",

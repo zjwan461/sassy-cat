@@ -142,6 +142,64 @@
       </div>
     </section>
 
+    <!-- dsh 子代理（DeepSeek Harness） -->
+    <section class="card wide">
+      <div class="card-header">dsh 子代理（DeepSeek Harness）</div>
+      <div class="card-body form">
+        <div class="field">
+          <label class="check"><input type="checkbox" v-model="form.dshUseMainLlm" /> 复用主 Agent 的 LLM</label>
+          <span class="hint">
+            勾选时 dsh 直接使用「模型连接」中当前激活的配置档（{{ mainLlmSummary }}）；取消勾选则使用下方独立连接参数
+          </span>
+        </div>
+        <!-- 复用主 Agent LLM 时，独立连接参数整组隐藏（值仍随保存一起落盘，不丢失） -->
+        <template v-if="!form.dshUseMainLlm">
+          <div class="field">
+            <label>Base URL</label>
+            <input v-model="form.dshBaseUrl" placeholder="http://localhost:8080/v1" />
+          </div>
+          <div class="field">
+            <label>API Key</label>
+            <div class="key-row">
+              <input v-model="form.dshApiKey" :type="showDshKey ? 'text' : 'password'" placeholder="sk-..." @focus="revealDshKey" />
+              <button class="mini" @click="showDshKey = !showDshKey">{{ showDshKey ? '隐藏' : '显示' }}</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>模型名称</label>
+            <input v-model="form.dshModel" placeholder="Qwen3.6-35B" />
+            <span class="hint">dsh 路由名固定为 deepseek-official，模型 id 原样透传给网关，填服务商/自建服务实际使用的模型名</span>
+          </div>
+        </template>
+        <div class="field">
+          <label>系统提示词</label>
+          <textarea v-model="form.dshSystemPrompt" rows="12" class="mono persona"
+            placeholder="留空则使用内置默认 dsh 提示词"></textarea>
+          <span class="hint">{{ form.dshSystemPrompt.length }} 字 · 支持 {shell_guidance} 变量，会在运行平台展开为 pwsh / bash 指引</span>
+        </div>
+        <div class="field">
+          <label>最大输出 tokens</label>
+          <div class="stepper">
+            <button type="button" class="step-btn" @click="step('dshMaxTokens', -1024, 1, DSH_MAX_TOKENS_LIMIT)" :disabled="form.dshMaxTokens <= 1">−</button>
+            <input type="number" v-model.number="form.dshMaxTokens" min="1" :max="DSH_MAX_TOKENS_LIMIT" class="step-input"
+              @blur="clamp('dshMaxTokens', 1, DSH_MAX_TOKENS_LIMIT, DSH_MAX_TOKENS_LIMIT)" />
+            <button type="button" class="step-btn" @click="step('dshMaxTokens', 1024, 1, DSH_MAX_TOKENS_LIMIT)" :disabled="form.dshMaxTokens >= DSH_MAX_TOKENS_LIMIT">+</button>
+          </div>
+          <span class="hint">dsh 单次响应的输出上限，范围 1~131072（DashScope qwen 系只接受该区间，默认 131072）</span>
+        </div>
+        <div class="field">
+          <label>推理强度（reasoningEffort）</label>
+          <select v-model="form.dshReasoningEffort">
+            <option v-for="o in dshReasoningEffortOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>
+          <span class="hint">仅 dsh 适配器识别（deepseek-official）；与主 Agent 的「额外参数」互不影响</span>
+        </div>
+        <div class="actions">
+          <button class="btn" @click="resetDshPrompt">恢复默认提示词</button>
+        </div>
+      </div>
+    </section>
+
     <!-- 知识库（RAG） -->
     <section class="card">
       <div class="card-header">知识库（RAG）</div>
@@ -415,8 +473,22 @@ const activeProfile = ref('default')
 const profiles = ref({})
 const activeAgentProfile = ref('default')
 const agentProfiles = ref({})
+// 主 Agent 当前激活 LLM 摘要：dsh 勾选「复用主 Agent」时用于提示实际生效的连接
+const mainLlmSummary = computed(() => {
+  const p = profiles.value[activeProfile.value] || {}
+  return `${p.model || '未设置模型'} · ${p.baseUrl || '未设置 Base URL'}`
+})
 // 提醒气泡显示时长可选值（秒），范围 3~30
 const reminderDurationOptions = [3, 5, 8, 10, 15, 20, 30]
+// dsh 子代理：输出上限（DashScope qwen 系只接受 [1,131072]）与推理强度可选值
+const DSH_MAX_TOKENS_LIMIT = 131072
+const dshReasoningEffortOptions = [
+  { value: '', label: '不指定（适配器默认）' },
+  { value: 'off', label: 'off（关闭思考）' },
+  { value: 'low', label: 'low' },
+  { value: 'high', label: 'high' },
+  { value: 'max', label: 'max' },
+]
 // 高危工具人工确认清单（与 Python agent/engine.py 的 interrupt_on 工具集对应）
 const interruptTools = [
   { name: 'run_command', label: '执行命令（run_command）' },
@@ -438,6 +510,9 @@ const form = reactive({
   ragEmbedBaseUrl: '', ragEmbedApiKey: '', ragOcrEngine: 'docling',
   ragLocalDownloaded: false,
   proxyEnabled: false, proxyHttp: '', proxyHttps: '', proxyNoProxy: '',
+  // dsh 子代理（顶层独立配置块 dsh.*）
+  dshUseMainLlm: true, dshBaseUrl: '', dshApiKey: '', dshModel: '',
+  dshSystemPrompt: '', dshMaxTokens: DSH_MAX_TOKENS_LIMIT, dshReasoningEffort: '',
   voiceEnabled: false, voiceEngine: 'web-speech', voiceAutoRead: false,
   voiceVoiceName: '', voiceRate: 1, voicePitch: 1
 })
@@ -448,6 +523,10 @@ const hotkeyStatus = ref(null)
 const showKey = ref(false)
 const showTavilyKey = ref(false)
 const showRagKey = ref(false)
+const showDshKey = ref(false)
+const dshKeyRevealed = ref(false)
+// 模板层（config.json）内置默认 dsh 提示词，供「恢复默认提示词」还原
+const defaultDshPrompt = ref('')
 const extraError = ref('')
 const testing = ref(false)
 const testResult = ref(null)
@@ -603,6 +682,19 @@ async function loadConfig() {
   // 记录已保存的 Embedding 配置，用于判断用户是否切换了模型
   savedEmbedType = form.ragEmbedType
   savedEmbedModel = form.ragEmbedModel
+  // dsh 子代理（顶层独立配置块，缺省视为「复用主 Agent LLM」）
+  form.dshUseMainLlm = cfg.dsh?.useMainLlm !== false
+  form.dshBaseUrl = cfg.dsh?.llm?.baseUrl || ''
+  const dshKey = cfg.dsh?.llm?.apiKey || ''
+  form.dshApiKey = dshKey.length > 3 ? '***' + dshKey.slice(-3) : dshKey
+  form.dshModel = cfg.dsh?.llm?.model || ''
+  form.dshSystemPrompt = cfg.dsh?.systemPrompt || ''
+  form.dshMaxTokens = cfg.dsh?.maxTokens ?? DSH_MAX_TOKENS_LIMIT
+  form.dshReasoningEffort = cfg.dsh?.reasoningEffort || ''
+  dshKeyRevealed.value = false
+  // 内置默认 dsh 提示词取自模板层（用户层只会覆盖它，取不回来）
+  const tpl = await api.getConfigTemplate?.()
+  if (tpl && tpl.success) defaultDshPrompt.value = tpl.template?.dsh?.systemPrompt || ''
 }
 
 // ---------- 快捷键录制 ----------
@@ -769,6 +861,18 @@ async function revealKey() {
   if (res.success) { form.apiKey = res.apiKey; keyRevealed.value = true }
 }
 
+// dsh 独立 LLM 的 apiKey 同样是掩码展示，聚焦输入框时按需拉取真实值
+async function revealDshKey() {
+  if (dshKeyRevealed.value) return
+  const res = await api.getRawDshKey?.()
+  if (res && res.success) { form.dshApiKey = res.apiKey; dshKeyRevealed.value = true }
+}
+
+function resetDshPrompt() {
+  form.dshSystemPrompt = defaultDshPrompt.value
+  showToast('已恢复默认 dsh 提示词（保存后生效）')
+}
+
 async function saveAll() {
   validateExtra()
   if (extraError.value) return showToast('额外参数 JSON 无效，未保存')
@@ -808,6 +912,13 @@ async function saveAll() {
     { path: 'rag.embeddingModel.type', value: form.ragEmbedType === 'remote' ? 'remote' : 'local' },
     { path: 'rag.embeddingModel.baseUrl', value: form.ragEmbedBaseUrl.trim() },
     { path: 'rag.ocrEngine', value: form.ragOcrEngine === 'markitdown' ? 'markitdown' : 'docling' },
+    // dsh 子代理（顶层独立配置块）
+    { path: 'dsh.useMainLlm', value: !!form.dshUseMainLlm },
+    { path: 'dsh.llm.baseUrl', value: form.dshBaseUrl.trim() },
+    { path: 'dsh.llm.model', value: form.dshModel.trim() },
+    { path: 'dsh.systemPrompt', value: form.dshSystemPrompt },
+    { path: 'dsh.maxTokens', value: Number(form.dshMaxTokens) || DSH_MAX_TOKENS_LIMIT },
+    { path: 'dsh.reasoningEffort', value: form.dshReasoningEffort || '' },
   ]
   // 本地模式的模型名由智能下载写入（downloadModel 内即时落盘），保存时不覆盖；
   // 仅远程模式允许用户自定义模型名
@@ -830,11 +941,15 @@ async function saveAll() {
   if (!String(form.tavilyApiKey).startsWith('***')) {
     patches.push({ path: 'agent.tavilyApiKey', value: form.tavilyApiKey.trim() })
   }
+  // dsh 独立 LLM 的 apiKey：同样仅在非掩码时写入
+  if (!String(form.dshApiKey).startsWith('***')) {
+    patches.push({ path: 'dsh.llm.apiKey', value: form.dshApiKey.trim() })
+  }
   const res = await api.setConfigMany(patches)
   if (!res.success) return showToast('保存失败: ' + (res.message || ''))
   keyRevealed.value = false
   // 通知 Python 热重建 agent（同时让 agent.ocrEngine / rag 配置热重载）
-  send('config.invalidate', { paths: ['llm', 'agent', 'rag'] })
+  send('config.invalidate', { paths: ['llm', 'agent', 'rag', 'dsh'] })
   showToast('已保存，配置热生效 ✓')
   await loadConfig()
   // 同步 TTS 运行时状态（自动朗读设置即时对聊天页生效）
@@ -1048,6 +1163,10 @@ onMounted(() => {
   .settings-grid .card:nth-child(2) {
     grid-column: 1 / -1;
   }
+}
+/* 内容较长的卡片（如 dsh 子代理）显式占满整行，不依赖 nth-child 位置 */
+.settings-grid .card.wide {
+  grid-column: 1 / -1;
 }
 .page-header { margin-bottom: 20px; }
 .page-title { font-size: 26px; font-weight: 700; color: #f1f5f9; margin-bottom: 6px; }

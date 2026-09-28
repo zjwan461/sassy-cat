@@ -699,6 +699,12 @@ ipcMain.handle('config:get', () => {
   return { success: true, config: configStore.getMasked() };
 });
 
+// 模板层默认值（只读）：供渲染层「恢复默认」按钮取内置默认文本（如 dsh 系统提示词）
+ipcMain.handle('config:get-template', () => {
+  if (!configStore) return { success: false, message: '配置未初始化' };
+  return { success: true, template: configStore.getTemplate() };
+});
+
 ipcMain.handle('config:set', (event, { path: cfgPath, value }) => {
   if (!configStore) return { success: false, message: '配置未初始化' };
   return configStore.setByDotted(cfgPath, value);
@@ -714,6 +720,12 @@ ipcMain.handle('config:get-raw-profile-key', (event, profileName) => {
   if (!configStore) return { success: false };
   const profiles = configStore.merged.llm?.profiles || {};
   return { success: true, apiKey: profiles[profileName]?.apiKey || '' };
+});
+
+// dsh 子代理独立 LLM 的 apiKey（未掩码）：同上，仅在渲染层聚焦输入框时按需拉取
+ipcMain.handle('config:get-raw-dsh-key', () => {
+  if (!configStore) return { success: false };
+  return { success: true, apiKey: configStore.merged.dsh?.llm?.apiKey || '' };
 });
 
 // Agent 服务就绪信息（WS 端口等）

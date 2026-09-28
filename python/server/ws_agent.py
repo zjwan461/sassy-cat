@@ -956,6 +956,16 @@ async def ws_agent_endpoint(ws: WebSocket):
                 elif mtype == "config.invalidate":
                     config_loader.reload_config()
                     holder.invalidate()
+                    # dsh 子代理的 harness 是进程级单例，不会随主 agent 重建而刷新；
+                    # 这里显式置脏，让下一次委托用上最新配置（无需手动重启服务进程）
+                    try:
+                        from agent.tools import subagent_tool
+
+                        subagent_tool.invalidate_harness()
+                    except Exception:
+                        logger.warning(
+                            "dsh harness 失效失败（未安装 dsh 时属预期）", exc_info=True
+                        )
                     await _send(
                         ws,
                         envelope(

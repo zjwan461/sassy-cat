@@ -31,19 +31,42 @@ _SESSION_LOCK = threading.RLock()
 _THREAD_SESSIONS: dict[str, str] = {}
 
 
+# 配置变更后置脏标记：下次委托时重建 harness。此处不直接 close，避免与正在执行的
+# harness.run 抢 _HARNESS_LOCK（_run_blocking 持锁期间可能正在跑一轮长任务）。
+_HARNESS_STALE = False
+
+
+def invalidate_harness() -> None:
+    """配置变更后调用（见 server/ws_agent.py 的 config.invalidate 分支）。
+
+    只置脏标记、不关停实例：真正的重建推迟到下一次 call_dsh，在 _HARNESS_LOCK
+    内完成，既保证配置热生效（无需重启服务），又不会打断进行中的委托。
+    """
+    global _HARNESS_STALE
+    _HARNESS_STALE = True
+
+
 def _get_harness():
-    """惰性创建并复用 dsh runtime（连接参数全部来自 config.user.json）。"""
-    global _HARNESS
-    if _HARNESS is None:
+    """惰性创建并复用 dsh runtime（连接参数全部来自 config.user.json）。
+
+    不变量：必须在 _HARNESS_LOCK 内调用（唯一调用点 _run_blocking 已持锁），
+    否则 _drop_harness() 的 close 可能打断正在执行的一轮。
+    """
+    global _HARNESS, _HARNESS_STALE
+    if _HARNESS is None or _HARNESS_STALE:
+        if _HARNESS is not None:
+            _drop_harness()
         settings = dsh_invoker.load_llm_settings(dsh_invoker.resolve_config_path())
         _HARNESS = dsh_invoker.build_harness(settings)
+        _HARNESS_STALE = False
     return _HARNESS
 
 
 def _drop_harness() -> None:
-    """丢弃当前实例：子进程异常退出后，下次调用重建一个干净的。"""
-    global _HARNESS
+    """丢弃当前实例：子进程异常退出 / 配置变更后，下次调用重建一个干净的。"""
+    global _HARNESS, _HARNESS_STALE
     harness, _HARNESS = _HARNESS, None
+    _HARNESS_STALE = False
     if harness is not None:
         try:
             harness.close()

@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """通过 dsh(DeepSeek Harness)Python SDK 跑一轮对话的最小可运行示例。
 
-LLM 连接参数不写死在本文件：model / apiKey / baseUrl 全部从项目运行配置
-（config.user.json 的 llm.profiles.<activeProfile> 段）读取，与 agent/llms.py
-里 langchain 走的是同一份配置，避免两处连接参数漂移。
+LLM 连接参数不写死在本文件：默认复用主 Agent 当前激活的 LLM
+（config.user.json 的 llm.profiles.<activeProfile> 段），与 agent/llms.py
+里 langchain 走的是同一份配置，避免两处连接参数漂移；
+设置页「dsh 子代理」可关闭该复用（dsh.useMainLlm=false），改读顶层 dsh.llm 的独立连接。
 
 为什么路由名固定是 deepseek-official
 ------------------------------------
@@ -35,8 +36,9 @@ DeepSeekHarness(env={"DSH_SYSTEM_PROMPT": ...}) -> 子进程环境变量 -> sdk-
 消息基本就是这一段；不给这个变量，dsh 用它自己的英文默认值（实测 system/message
 的内容就是那句英文）。
 
-取值优先级：config.user.json 的 agent.profiles.<active>.dshSystemPrompt
-（兼容顶层 agent.dshSystemPrompt）-> DEFAULT_SYSTEM_PROMPT。
+取值优先级：config.user.json 顶层 dsh.systemPrompt（设置页「dsh 子代理」卡片写入）
+（兼容 agent.profiles.<active>.dshSystemPrompt / 顶层 agent.dshSystemPrompt）
+-> DEFAULT_SYSTEM_PROMPT。
 
 为什么不复用 agent/prompts.py 里主 agent 的 prompt（persona + RUNTIME_SKELETON）
 ------------------------------------------------------------------------------
@@ -84,6 +86,10 @@ FALLBACK_BASE_URL = "http://localhost:8080/v1"
 FALLBACK_API_KEY = "sk-xxx"
 FALLBACK_MODEL = "Qwen3.6-35B"
 
+# reasoningEffort 是 deepseek-official 适配器自有的标识符；白名单之外的值会被 dsh 的
+# initialize schema 拒掉（整个子代理起不来），因此做过滤而不是原样透传
+DSH_REASONING_EFFORTS = ("off", "low", "high", "max")
+
 # 平台相关的 shell 指引：sdk-minimal 的 shell 工具本身就是平台二选一
 # （--dump-config 里 persistent-bash 在 win32 上 disabled、persistent-pwsh 反之），
 # 所以 Windows 上模型拿到的是 pwsh、macOS/Linux 上是 bash。写死任一种都会在另一个
@@ -108,6 +114,8 @@ def shell_guidance(platform: str | None = None) -> str:
 # dsh 的系统提示词（DSH_SYSTEM_PROMPT）。它是"被委托的单向执行者"而不是聊天对象：
 # 看不到主对话、没有确认 UI、工具集也不同，所以单独写一份，别复用主 agent 的
 # persona/skeleton（理由见模块 docstring）。
+# 注意：同一段文本作为默认值写在 resources/config.json 的 dsh.systemPrompt 里
+# （设置页直接展示、可编辑），修改默认提示词时两处必须同步；配置非空时以配置为准。
 DEFAULT_SYSTEM_PROMPT = """你是「优墨」的动手子代理，跑在一个独立的 dsh(DeepSeek Harness) 工作进程里。
 
 你只拿到被委托的那一件事：调用方给出的任务描述就是你的全部上下文，不要指望能看到用户与优墨的对话历史。
@@ -155,32 +163,97 @@ def resolve_config_path(explicit: str | None = None) -> str:
     return os.getenv("SASSY_CAT_CONFIG") or paths.data_path("config.user.json")
 
 
+def read_dsh_block(cfg) -> dict[str, Any]:
+    """读取顶层 dsh 配置块（设置页「dsh 子代理」卡片写入），归纳出四组取值。
+
+    含旧配置只读回退（不自动迁移、不写盘）：
+      - 输出上限 / 推理强度：老版本写在 llm.profiles.<active>.extraParams.*
+      - 系统提示词：老版本写在 agent.profiles.<active>.dshSystemPrompt / 顶层 agent.dshSystemPrompt
+    """
+    block = cfg.get("dsh") or {}
+    dsh_llm = block.get("llm") or {}
+    extra = (cfg.active_llm_profile() or {}).get("extraParams") or {}
+    agent_profile = cfg.active_agent_profile() or {}
+
+    # 是否复用主 Agent 激活的 LLM；缺省（None）视为开启
+    use_main_llm = block.get("useMainLlm")
+    use_main_llm = True if use_main_llm is None else bool(use_main_llm)
+
+    # config_loader.DEFAULTS 会把 dsh.maxTokens 填成内置默认，于是"用户没配"与
+    # "用户显式配成默认值"在合并后的配置里不可区分。这里把「缺失或等于内置默认」
+    # 一律视为未配置，让升级前写在 llm.*.extraParams.maxTokens 的旧值仍能生效；
+    # 用户在设置页保存过一次后，该键会被显式落盘，之后即按显式值优先。
+    raw_max_tokens = block.get("maxTokens")
+    if raw_max_tokens is None or raw_max_tokens == FALLBACK_MAX_TOKENS:
+        legacy = extra.get("maxTokens")
+        if legacy is not None:
+            raw_max_tokens = legacy  # 旧位置回退
+
+    raw_effort = block.get("reasoningEffort") or extra.get("reasoningEffort") or ""
+
+    configured_prompt = (
+        block.get("systemPrompt")
+        or agent_profile.get("dshSystemPrompt")  # 旧位置回退
+        or cfg.get("agent.dshSystemPrompt")  # 旧·顶层回退
+    )
+
+    return {
+        "use_main_llm": use_main_llm,
+        "llm": dsh_llm,
+        "system_prompt": configured_prompt,
+        "max_tokens": raw_max_tokens,
+        "reasoning_effort": str(raw_effort).strip(),
+    }
+
+
 def load_llm_settings(config_path: str) -> dict[str, Any]:
-    """读取 active LLM profile，翻译成 DeepSeekHarness 的连接参数。"""
+    """读取 dsh 配置（顶层 dsh 块 + 主 Agent LLM 复用开关），翻译成 DeepSeekHarness 的连接参数。"""
     cfg = config_loader.load_config(config_path)
     profile = cfg.active_llm_profile() or {}
-    extra = profile.get("extraParams") or {}
+    dsh = read_dsh_block(cfg)
 
-    base_url = (profile.get("baseUrl") or "").strip() or FALLBACK_BASE_URL
-    api_key = (profile.get("apiKey") or "").strip() or FALLBACK_API_KEY
-    model = (profile.get("model") or "").strip() or FALLBACK_MODEL
+    # 连接参数：默认复用主 Agent 激活 profile；关闭复用时走 dsh 独立连接
+    if dsh["use_main_llm"]:
+        conn = profile
+        llm_source = "main"
+    else:
+        conn = dsh["llm"]
+        llm_source = "dsh"
 
-    # initialize 只接受 positive safe integer：配置里写成 "131072" 会被 schema 拒掉
-    raw_max_tokens = extra.get("maxTokens")
-    max_tokens = (
-        int(raw_max_tokens) if raw_max_tokens is not None else FALLBACK_MAX_TOKENS
-    )
+    base_url = (conn.get("baseUrl") or "").strip() or FALLBACK_BASE_URL
+    api_key = (conn.get("apiKey") or "").strip() or FALLBACK_API_KEY
+    model = (conn.get("model") or "").strip() or FALLBACK_MODEL
 
-    # reasoningEffort 是适配器自有的标识符（deepseek-official 支持 off/low/high/max），
-    # 项目配置里没有就不传，让适配器默认值生效
-    reasoning_effort = extra.get("reasoningEffort") or None
+    # initialize 只接受 positive safe integer：写成 "131072" 或非正整数会被 schema 拒掉，
+    # 因此这里做解析 + 回退，绝不把非法值透传给 dsh
+    max_tokens = FALLBACK_MAX_TOKENS
+    if dsh["max_tokens"] is not None:
+        try:
+            parsed = int(dsh["max_tokens"])
+            if parsed > 0:
+                max_tokens = parsed
+            else:
+                logger.warning(
+                    "dsh.maxTokens=%r 非正整数，回退 %d", dsh["max_tokens"], FALLBACK_MAX_TOKENS
+                )
+        except (TypeError, ValueError):
+            logger.warning(
+                "dsh.maxTokens=%r 无法解析为整数，回退 %d",
+                dsh["max_tokens"],
+                FALLBACK_MAX_TOKENS,
+            )
 
-    # 系统提示词同样优先读配置：profile 里的 dshSystemPrompt -> 顶层兼容字段
-    # -> 内置默认（见常量处的说明）
-    agent_profile = cfg.active_agent_profile() or {}
-    configured_prompt = agent_profile.get("dshSystemPrompt") or cfg.get(
-        "agent.dshSystemPrompt"
-    )
+    # 白名单外的 reasoningEffort 一律不传（非法枚举会让 dsh initialize 失败）
+    effort = dsh["reasoning_effort"]
+    if effort and effort not in DSH_REASONING_EFFORTS:
+        logger.warning(
+            "dsh.reasoningEffort=%r 不在 %s 内，已忽略", effort, DSH_REASONING_EFFORTS
+        )
+        effort = ""
+    reasoning_effort = effort or None
+
+    # 系统提示词：配置优先，留空用内置默认
+    configured_prompt = dsh["system_prompt"]
     system_prompt = (
         str(configured_prompt).strip() if configured_prompt else DEFAULT_SYSTEM_PROMPT.strip()
     )
@@ -188,11 +261,14 @@ def load_llm_settings(config_path: str) -> dict[str, Any]:
     system_prompt = system_prompt.replace("{shell_guidance}", shell_guidance())
 
     logger.info(
-        "dsh LLM: route=%s model=%s baseUrl=%s maxTokens=%s systemPrompt=%d字",
+        "dsh LLM: route=%s model=%s baseUrl=%s maxTokens=%s reasoningEffort=%s "
+        "llmSource=%s systemPrompt=%d字",
         DSH_ROUTE,
         model,
         base_url,
         max_tokens,
+        reasoning_effort,
+        llm_source,
         len(system_prompt),
     )
     return {
