@@ -100,10 +100,18 @@
                     class="msg-segment"
                     :class="{ 'sub-agent': seg.agent }"
                   >
-                    <div v-if="seg.agent" class="sub-agent-tag">
-                      🤖 来自子 Agent · {{ agentLabel(seg.agent) }}
-                    </div>
-                    <MarkdownRenderer :content="seg.text" :done="!m.streaming" />
+                    <!-- 子 agent 段落：独立嵌套面板 + 头部来源标签，与主 agent 正文明显区分 -->
+                    <template v-if="seg.agent">
+                      <div class="sub-agent-head">
+                        <span class="sub-agent-avatar">🤖</span>
+                        <span class="sub-agent-badge">子 Agent</span>
+                        <span class="sub-agent-name">{{ agentLabel(seg.agent) }}</span>
+                      </div>
+                      <div class="sub-agent-body">
+                        <MarkdownRenderer :content="seg.text" :done="!m.streaming" />
+                      </div>
+                    </template>
+                    <MarkdownRenderer v-else :content="seg.text" :done="!m.streaming" />
                   </div>
                 </template>
                 <MarkdownRenderer v-else :content="m.content" :done="!m.streaming" />
@@ -740,9 +748,38 @@ onMounted(() => {
 .msg-content { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 10px 14px; color: #e2e8f0; white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 .msg-content.md-mode { white-space: normal; }
 .msg.user .msg-content { background: #4338ca; border-color: #4f46e5; }
-/* 子 agent（dsh / DeepSeek Harness）产出的段落：左侧竖线 + 标签，区别于主 agent 正文 */
-.msg-segment.sub-agent { margin: 6px 0; padding: 8px 10px 8px 12px; border-left: 3px solid #6366f1; background: #0b1220; border-radius: 0 8px 8px 0; }
-.sub-agent-tag { display: inline-flex; align-items: center; gap: 4px; margin-bottom: 4px; font-size: 12px; color: #a5b4fc; }
+/* 子 agent（dsh / DeepSeek Harness）产出的段落：整体做成嵌套「引用面板」，
+   渐变强调底 + 紫色左侧竖线 + 头部来源标签，与主 agent 正文形成明显视觉区分 */
+.msg-segment.sub-agent {
+  position: relative;
+  margin: 10px 0;
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  border-left: 3px solid #8b5cf6;
+  border-radius: 10px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 0 0, rgba(139, 92, 246, 0.16), transparent 62%),
+    linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(139, 92, 246, 0.05));
+}
+/* 头部：图标 + 「子 Agent」胶囊徽章 + 来源名称，底部分隔虚线 */
+.sub-agent-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  background: linear-gradient(90deg, rgba(99, 102, 241, 0.28), rgba(99, 102, 241, 0.03));
+  border-bottom: 1px dashed rgba(129, 140, 248, 0.35);
+  font-size: 12px; color: #c7d2fe;
+}
+.sub-agent-avatar { font-size: 13px; line-height: 1; }
+.sub-agent-badge {
+  display: inline-flex; align-items: center;
+  padding: 1px 7px; border-radius: 999px;
+  background: rgba(139, 92, 246, 0.32);
+  color: #e9d5ff; font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+}
+.sub-agent-name { color: #a5b4fc; font-weight: 600; }
+.sub-agent-body { padding: 8px 12px; }
+.sub-agent-body > .markdown-body > :first-child { margin-top: 0; }
+.sub-agent-body > .markdown-body > :last-child { margin-bottom: 0; }
 .cursor { animation: blink 0.8s infinite; }
 .cursor-at-end { display: inline-block; margin-left: 4px; vertical-align: middle; }
 @keyframes blink { 50% { opacity: 0; } }
