@@ -2,7 +2,6 @@ import asyncio
 import json
 from langchain.tools import tool, ToolRuntime
 import logging
-import random
 import re
 import threading
 import uuid
@@ -105,7 +104,7 @@ def _iter_assistant_text(event: dict) -> Iterator[str]:
     """把一条 assistant/message 事件拆成可增量拼接的正文文本块。
 
     dsh 的会话事件是"结算式"的：整块消息一次到达，但 data.stream 里保留了原始
-    分块（text-chunks），按原顺序回放即可让前端继续渲染打字动画。
+    分块（text-chunks），按原顺序回放即可拼回完整正文。
     思考内容（reasoning-chunks）不在这里产出，另行经 _format_reasoning 渲染成引用块。
     """
     data = event.get("data") or {}
@@ -128,39 +127,6 @@ def _iter_assistant_text(event: dict) -> Iterator[str]:
             text = block.get("text") or ""
             if text:
                 yield text
-
-
-# ---------- 打字机输出 ----------
-# dsh 是"结算式"的：一个 step 的正文会作为一批 text-chunks 同时到达，整批 piece
-# 会在同一个事件循环 tick 里被写出去，前端看到的是一段文字"瞬间出现"。把每个
-# piece 再随机切成 1~3 个字、逐片写出并 sleep 一下，才有打字机的观感——只切片
-# 不加延迟是没用的，因为它们本来就挤在同一个 tick。
-#
-# 两个系数都可调：
-#   - 每片字数 1~3（平均 2 字）：越小越"逐字"，总时长越长
-#   - 每片间隔 _TYPEWRITER_DELAY_SECONDS：总时长 ≈ 字数 / 2 × 间隔，
-#     即 1000 字约 5 秒；设成 0 即关掉打字机效果
-# 注意 Windows 上 asyncio.sleep 的计时精度约 15.6ms，间隔给到 0.01 以下实际仍
-# 接近 0.015，调参时以这个下限为基准。
-_TYPEWRITER_MIN_CHARS = 1
-_TYPEWRITER_MAX_CHARS = 3
-_TYPEWRITER_DELAY_SECONDS = 0.01
-
-_TYPEWRITER_RNG = random.Random()
-
-
-def _slice_for_typewriter(text: str) -> Iterator[str]:
-    """把一段文本随机切成 1~3 个字的碎片，供打字机逐片写出。
-
-    按字符切（中文一个字即一片），不插入额外换行或空格，因此把所有碎片按序
-    拼回去与原文完全一致——只是中间态不完整。
-    """
-    index = 0
-    total = len(text)
-    while index < total:
-        step = _TYPEWRITER_RNG.randint(_TYPEWRITER_MIN_CHARS, _TYPEWRITER_MAX_CHARS)
-        yield text[index : index + step]
-        index += step
 
 
 # 工具结果正文超过该字数就截断，避免 dsh 的 shell / 文件输出把回复正文淹没
@@ -370,11 +336,9 @@ async def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
 
     会话按 langchain 的 thread_id 归属：同一会话里多次委托会复用同一个 dsh 会话，
     因此它可以记住前几次委托的内容。
-
     注意：stream_writer 写出的结构是 {"agent": "dsh", "text": "..."}，
     runner 的 custom 分支会从里面取 text 作为正文增量、agent 作为来源标记。
-    正文会按 1~3 个字一片逐片写出（打字机效果，见 _TYPEWRITER_* 常量），
-    工具块 / 待办 / 思考这些结构块整块写出。
+    各类内容都按事件到达顺序整块写出，不做逐字延迟（无打字机效果）。
     """
     writer = runtime.stream_writer
 
@@ -386,14 +350,12 @@ async def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
 
     loop = asyncio.get_running_loop()
     # 工作线程 -> 事件循环的单向通道：on_notification 只投递，不直接碰 writer。
-    # 队列元素是 (文本, 是否按打字机输出)：只有模型正文逐字蹦，工具块/待办/思考
-    # 这些"结构块"整块输出——切碎它们没有观感收益，还会让围栏代码块在中间态
-    # 反复破框。
+    # 队列元素就是要写出的文本片段。
     queue: asyncio.Queue = asyncio.Queue()
 
-    def push(text: str, *, prose: bool) -> None:
+    def push(text: str) -> None:
         """把一段文本交给事件循环侧写出（本函数在工作线程里被调用）。"""
-        loop.call_soon_threadsafe(queue.put_nowait, (text, prose))
+        loop.call_soon_threadsafe(queue.put_nowait, text)
 
     # 只把根会话的正文写出去：subagent 子会话的事件不该串进这条回复
     root_session: dict = {"id": None}
@@ -417,20 +379,19 @@ async def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
         if etype == "assistant/message":
             # 思考内容先于正文（与生成顺序一致），同样以引用块 markdown 混入正文流；
             # 正文回放 text-chunks（纯工具调用步骤没有 text-chunks，此处为空）。
-            # 思考块整块输出，正文交给打字机逐片蹦。
             reasoning = _format_reasoning(event)
             if reasoning:
-                push(reasoning, prose=False)
+                push(reasoning)
             for piece in _iter_assistant_text(event):
-                push(piece, prose=True)
+                push(piece)
             return
         if etype == "tool/call":
             # dsh 调用工具：工具名 + 参数，渲染成引用块 markdown 混入正文流
-            push(_format_tool_call(event), prose=False)
+            push(_format_tool_call(event))
             return
         if etype == "tool/result":
             # dsh 工具执行结果：同样以引用块 markdown 追加
-            push(_format_tool_result(event), prose=False)
+            push(_format_tool_result(event))
             return
         if etype == "todo/write":
             # 待办清单：全量快照，清单没变时（返回空文本）直接跳过
@@ -438,23 +399,14 @@ async def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
                 event, todo_state["fingerprint"]
             )
             if text:
-                push(text, prose=False)
+                push(text)
             return
         if etype.startswith("compaction/"):
             # 上下文压缩：只在有信息量的阶段输出一行
             piece = _format_compaction(event)
             if piece:
-                push(piece, prose=False)
+                push(piece)
             return
-
-    async def write_piece(text: str, prose: bool) -> None:
-        """写出一段内容：正文逐片蹦（打字机），结构块整块输出。"""
-        if not prose:
-            writer({"agent": "dsh", "text": text})
-            return
-        for fragment in _slice_for_typewriter(text):
-            writer({"agent": "dsh", "text": fragment})
-            await asyncio.sleep(_TYPEWRITER_DELAY_SECONDS)
 
     # 换线程执行阻塞的 harness.run；同时在事件循环上把队列里的片段实时写出
     run_task = asyncio.create_task(
@@ -470,18 +422,17 @@ async def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
     try:
         while not run_task.done():
             try:
-                piece, prose = await asyncio.wait_for(queue.get(), timeout=0.1)
+                piece = await asyncio.wait_for(queue.get(), timeout=0.1)
             except asyncio.TimeoutError:
                 continue
-            await write_piece(piece, prose)
-        # 线程已结束：冲刷队列尾部残余（最后几段的投递回调可能刚执行完）。
-        # 尾部同样走 write_piece，否则积压的最后一大段会一次性蹦出来，效果全无。
+            writer({"agent": "dsh", "text": piece})
+        # 线程已结束：冲刷队列尾部残余（最后几段的投递回调可能刚执行完）
         while True:
             try:
-                piece, prose = queue.get_nowait()
+                piece = queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            await write_piece(piece, prose)
+            writer({"agent": "dsh", "text": piece})
         result = run_task.result()
     except Exception as exc:
         logger.exception("dsh 委托执行失败")
