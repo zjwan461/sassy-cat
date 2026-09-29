@@ -150,6 +150,10 @@ FALLBACK_MAX_TOKENS = 131072
 WORKSPACE = os.path.join(WORK_DIR, ".dsh", "workspace")
 DSH_HOME = os.path.join(WORK_DIR, ".dsh", "home")
 PATCH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "editor.patch.yml")
+# 主 Agent 的技能库根目录（runtime/skills）。其结构 <name>/SKILL.md 与 dsh
+# skill-filesystem 的 root 约定一致，因此可直接作为一个 customSkillDir 挂给 dsh，
+# 让子代理复用主 Agent 的同一套技能。经 env DSH_SKILLS_DIR 传给 dsh 子进程。
+SKILLS_ROOT = os.path.join(WORK_DIR, "skills")
 
 
 def resolve_config_path(explicit: str | None = None) -> str:
@@ -302,7 +306,13 @@ def build_harness(settings: dict[str, Any]) -> DeepSeekHarness:
         # client 侧是 os.environ.copy() 再 update，所以这里只需增量注入。
         # DSH_SYSTEM_PROMPT 被 sdk-minimal 的 system-prompt 行读作 personaPrefix
         # （`process.env.DSH_SYSTEM_PROMPT ?? '<英文默认>'`），链路见模块 docstring。
-        env={"DSH_HOME": DSH_HOME, "DSH_SYSTEM_PROMPT": settings["system_prompt"]},
+        # DSH_SKILLS_DIR 被 editor.patch.yml 的 skill-filesystem 行读作 customSkillDirs
+        # （逗号分隔），指向主 Agent 的技能库，使 dsh 与主 Agent 共享同一套 skills。
+        env={
+            "DSH_HOME": DSH_HOME,
+            "DSH_SYSTEM_PROMPT": settings["system_prompt"],
+            "DSH_SKILLS_DIR": SKILLS_ROOT,
+        },
         # 以下两项由 SDK 写成 DEEPSEEK_BASE_URL / DEEPSEEK_API_KEY 传给 dsh 子进程
         base_url=settings["base_url"],
         api_key=settings["api_key"],

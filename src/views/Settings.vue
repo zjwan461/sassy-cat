@@ -147,6 +147,9 @@
       <div class="card-header">dsh 子代理（DeepSeek Harness）</div>
       <div class="card-body form">
         <div class="field">
+          <span class="hint">dsh 会自动带上主 Agent 的 skills：委托执行时会挂载「技能管理」里的同一套技能，按需加载，无需重复配置。</span>
+        </div>
+        <div class="field">
           <label class="check"><input type="checkbox" v-model="form.dshUseMainLlm" /> 复用主 Agent 的 LLM</label>
           <span class="hint">
             勾选时 dsh 直接使用「模型连接」中当前激活的配置档（{{ mainLlmSummary }}）；取消勾选则使用下方独立连接参数
