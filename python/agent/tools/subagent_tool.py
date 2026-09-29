@@ -289,6 +289,57 @@ def _format_compaction(event: dict) -> str | None:
     return None
 
 
+def _result_error_detail(result: Any) -> str:
+    """从 RunResult.events 里抽取 dsh 轮次失败的原因文本。
+
+    dsh 的 turn/end 事件在失败时形如
+    {data: {reason: {kind: "error", error: {message, code}}}}；
+    个别引擎只在 assistant/attempt 的 stream.chunk.finish.failure 里带失败详情。
+    两种都兜一下，拿不到则返回空串。
+    """
+    for event in reversed(getattr(result, "events", None) or []):
+        etype = event.get("type")
+        data = event.get("data") or {}
+        if etype == "turn/end":
+            reason = data.get("reason") or {}
+            err = reason.get("error") or {}
+            detail = err.get("message") or err.get("code")
+            if detail:
+                return str(detail)
+        elif etype == "assistant/attempt":
+            for entry in data.get("stream") or []:
+                if not isinstance(entry, dict):
+                    continue
+                chunk = entry.get("chunk")
+                finish = chunk.get("finish") if isinstance(chunk, dict) else None
+                reason = finish.get("reason") if isinstance(finish, dict) else None
+                failure = reason.get("failure") if isinstance(reason, dict) else None
+                if isinstance(failure, dict):
+                    detail = failure.get("message") or failure.get("code")
+                    if detail:
+                        return str(detail)
+    return ""
+
+
+def _presented_files(result: Any) -> list[str]:
+    """收集本轮 present 声明交付的文件路径（去重保序）。
+
+    dsh 只在模型显式调用 present 时才发 deliverables/presented；当一轮没有助手正文、
+    却确实产出了文件时，用它兜底给出可见的结果，避免退化成"无内容"。
+    """
+    files: list[str] = []
+    seen: set[str] = set()
+    for event in getattr(result, "events", None) or []:
+        if event.get("type") != "deliverables/presented":
+            continue
+        for item in (event.get("data") or {}).get("files") or []:
+            path = item.get("path") if isinstance(item, dict) else None
+            if path and path not in seen:
+                seen.add(path)
+                files.append(str(path))
+    return files
+
+
 def _run_blocking(
     prompt: str,
     thread_id: str,
@@ -439,4 +490,32 @@ async def call_dsh(prompt: str, runtime: ToolRuntime) -> str:
         writer({"agent": "dsh", "text": f"dsh error: {exc}"})
         return f"dsh 执行失败: {exc}"
 
-    return result.final_response or "deepseek harness job finished"
+    # final_response 是 SDK 给出的"本轮最后一条助手正文"。为空时绝不能回落到一句
+    # 假完成占位串——那会把"轮次失败"伪装成"已完成"，主 agent 据此就会谎报结果。
+    # 实网故障即如此：模型网关 TRANSPORT 失败、自动重试耗尽，一个 token 都没产出，
+    # turn/end 的 reason.kind == "error"，final_response 为空 → 曾返回
+    # "deepseek harness job finished"。因此这里按 finish_reason 如实区分。
+    final = result.final_response
+    if final:
+        return final
+
+    reason = result.finish_reason
+    if reason == "error":
+        detail = _result_error_detail(result) or "未知错误"
+        logger.warning("dsh 轮次失败（未产出正文）: %s", detail)
+        writer({"agent": "dsh", "text": f"\n\n❌ dsh 执行失败：{detail}\n\n"})
+        return f"dsh 执行失败（未产出结果）：{detail}"
+
+    if reason == "max-tokens":
+        msg = "dsh 达到输出上限被截断，未产出完整结果，请缩小任务范围后重试"
+        writer({"agent": "dsh", "text": f"\n\n⚠️ {msg}\n\n"})
+        return msg
+
+    files = _presented_files(result)
+    if files:
+        listing = "\n".join(f"- {path}" for path in files)
+        return f"dsh 未返回文本正文，但已交付以下文件：\n{listing}"
+
+    msg = f"dsh 未返回任何文本内容（finish_reason={reason or 'none'}）"
+    writer({"agent": "dsh", "text": f"\n\n⚠️ {msg}\n\n"})
+    return msg
