@@ -495,6 +495,7 @@ const interruptTools = [
   { name: 'write_file', label: '写入文件（write_file）' },
   { name: 'edit_file', label: '编辑文件（edit_file）' },
   { name: 'delete', label: '删除文件（delete）' },
+  { name: 'call_dsh', label: '委托子代理（call_dsh）' },
 ]
 const defaultInterruptOn = () => Object.fromEntries(interruptTools.map((t) => [t.name, true]))
 const form = reactive({

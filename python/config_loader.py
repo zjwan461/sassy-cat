@@ -50,6 +50,7 @@ DEFAULTS = {
             "write_file": True,
             "edit_file": True,
             "delete": True,
+            "call_dsh": True,
         },
     },
     # dsh(DeepSeek Harness) 子代理：独立于 llm/agent 配置档的全局配置块，

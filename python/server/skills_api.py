@@ -15,6 +15,7 @@
 技能名本身也不允许包含路径分隔符或 ".."。
 """
 
+import codecs
 import io
 import logging
 import os
@@ -55,15 +56,19 @@ def _looks_textual(path: str) -> bool:
             head = f.read(8192)
         if b"\x00" in head:
             return False
-        try:
-            head.decode("utf-8")
-        except UnicodeDecodeError:
-            # 前缀截断可能切开多字节字符，回退 GBK 也试一下常见中文编码
+        # 用增量解码器（final=False）：8192 边界恰好切断一个多字节字符
+        # （如中文「：」等 UTF-8 三字节字符）时，末尾残留的不完整序列不算错误，
+        # 避免把正常 UTF-8 文本误判为二进制而禁止在线编辑。
+        for make_decoder in (
+            codecs.getincrementaldecoder("utf-8"),
+            codecs.getincrementaldecoder("gbk"),
+        ):
             try:
-                head.decode("gbk")
+                make_decoder().decode(head, False)
+                return True
             except UnicodeDecodeError:
-                return False
-        return True
+                continue
+        return False
     except OSError:
         return False
 
