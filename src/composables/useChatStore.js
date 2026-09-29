@@ -4,26 +4,18 @@
  * 消息列表、轮次状态以及所有 WebSocket 事件订阅都挂在模块作用域，
  * 与 ChatView 组件的挂载/卸载解耦：切换 tab 时组件销毁也不会停止
  * 流式渲染数据的接收与累积，切回来直接恢复现场继续渲染。
+ *
+ * 多会话现场：每个会话（convId = LangGraph thread_id）各持一份独立现场
+ * （messages / generating / 分页等），`chat` 是对「当前激活会话」现场的响应式视图。
+ * 切换会话只切换激活会话，其他会话的现场原样保留并持续累积——因此切换会话
+ * 不会中断正在进行的对话：后台会话的流式事件按 msgId 归位到其所属现场，
+ * 切回即可看到完整（或仍在流式）的回复。
  */
 import { reactive } from 'vue'
 import { useAgentSocket } from './useAgentSocket'
 import { fetchMessages } from '../api/messages'
 
 const { state: socketState, connect, send, on } = useAgentSocket()
-
-export const chat = reactive({
-  messages: [],
-  generating: false,
-  // 当前会话（对话）：id 即 LangGraph thread_id，由服务端激活会话下发
-  convId: null,
-  convTitle: '',
-  // 分页相关（历史消息通过 HTTP 接口分页加载）
-  currentPage: 1,
-  pageSize: 20,
-  totalMessages: 0,
-  loadingMore: false,
-  hasMore: true,
-})
 
 // 会话列表（元数据来自服务端 SQLite conversations 表，按 updatedAt 倒序）
 // 分页加载：默认每页 20 条，列表滚动到底部时无限加载更多
@@ -37,7 +29,80 @@ export const conv = reactive({
   loadingMore: false,
 })
 
-let currentMsgId = null
+// 当前激活会话（全局唯一，服务端权威）：convId 即 LangGraph thread_id
+const _active = reactive({ convId: null, convTitle: '' })
+
+// 每个会话的独立现场：convId -> 现场对象（消息 / 生成态 / 分页）
+const convStates = new Map()
+
+/** 取（惰性创建）指定会话的现场对象 */
+function stateFor(id) {
+  const key = id || '__default__'
+  let st = convStates.get(key)
+  if (!st) {
+    st = reactive({
+      messages: [],
+      generating: false,
+      currentMsgId: null,
+      currentPage: 1,
+      pageSize: 20,
+      totalMessages: 0,
+      loadingMore: false,
+      hasMore: true,
+    })
+    convStates.set(key, st)
+  }
+  return st
+}
+
+// 对外暴露的 chat 视图：所有读写代理到「当前激活会话」的现场。
+// 切换会话即切换底层现场，模板与交互函数无需感知多会话细节。
+export const chat = new Proxy(
+  {},
+  {
+    get(_t, prop) {
+      if (typeof prop === 'symbol') return undefined
+      if (prop === 'convId') return _active.convId
+      if (prop === 'convTitle') return _active.convTitle
+      return stateFor(_active.convId)[prop]
+    },
+    set(_t, prop, val) {
+      if (prop === 'convId') {
+        _active.convId = val
+        return true
+      }
+      if (prop === 'convTitle') {
+        _active.convTitle = val
+        return true
+      }
+      stateFor(_active.convId)[prop] = val
+      return true
+    },
+    has(_t, prop) {
+      return prop === 'convId' || prop === 'convTitle' || prop in stateFor(_active.convId)
+    },
+  }
+)
+
+// 在所有会话现场中按 msgId 定位消息对象：后台轮次的事件据此归位到对应会话，
+// 与当前展示的是哪个会话无关（切换会话不断流的关键）
+function findMessage(msgId) {
+  if (!msgId) return null
+  for (const st of convStates.values()) {
+    const hit = st.messages.find((x) => x.id === msgId)
+    if (hit) return hit
+  }
+  return null
+}
+
+// 定位「当前轮次」（currentMsgId === msgId）所属的会话现场，用于复位 generating
+function ownerState(msgId) {
+  for (const st of convStates.values()) {
+    if (st.currentMsgId === msgId) return st
+  }
+  return null
+}
+
 let started = false // 幂等守卫：事件订阅只注册一次
 
 // 尝试美化 JSON（参数流式拼接过程中可能不完整，失败则原样展示）
@@ -58,11 +123,12 @@ function interruptActions(payload) {
   } catch { return [] }
 }
 
-// 使所有待确认的 interrupt 卡失效：新消息发送时，服务端会把新消息作为
-// respond 决策消费掉挂起的 interrupt 并直接续跑，旧确认卡若仍可点击，
+// 使指定会话现场内所有待确认的 interrupt 卡失效：新消息发送时，服务端会把新消息
+// 作为 respond 决策消费掉挂起的 interrupt 并直接续跑，旧确认卡若仍可点击，
 // 点下去会触发无效的 tool.confirm，造成消息错乱
-function expirePendingInterrupts() {
-  for (const m of chat.messages) {
+function expirePendingInterrupts(st) {
+  if (!st) return
+  for (const m of st.messages) {
     if (!m.interruptActions?.length) continue
     // 已全部确认的卡片保留展示（决策已送出/已入库），只失效仍有待确认项的卡片，
     // 否则 resume 竞态广播 expired 会把刚点完的确认卡错误替换成"已跳过"
@@ -83,19 +149,22 @@ function ensureStarted() {
   connect()
 
   on('chat.user', (p) => {
-    // 来源不是本窗口的用户消息（如桌宠发的），同步显示
+    // 来源不是本窗口的用户消息（如桌宠发的），按 sessionId 归位到对应会话现场同步显示
     // 注意：chat.user 的 msgId 带 u- 前缀，与 chat.started 的 msgId 不同
-    const existing = chat.messages.find((m) => m.id === p.msgId || (m.role === 'user' && m.content === p.content))
+    const st = stateFor(p.sessionId || _active.convId)
+    const existing = st.messages.find((m) => m.id === p.msgId || (m.role === 'user' && m.content === p.content))
     if (p.source && p.source !== 'main' && !existing) {
-      chat.messages.push({ id: p.msgId, role: 'user', content: p.content })
+      st.messages.push({ id: p.msgId, role: 'user', content: p.content })
     }
   })
   on('chat.started', (p) => {
-    currentMsgId = p.msgId
+    // 按 sessionId 落到对应会话现场（可能是后台会话）
+    const st = stateFor(p.sessionId || _active.convId)
+    st.currentMsgId = p.msgId
     // 检测是否在工具调用/中断后继续输出：若最后一条助手消息有工具或曾中断，则复用该消息而非创建新消息
     // resuming：确认卡已全部决策并送出后 interruptDecisions 已无待确认项，
     // 需靠标记识别"确认后即将续跑"
-    const last = chat.messages[chat.messages.length - 1]
+    const last = st.messages[st.messages.length - 1]
     const hasTools = last?.tools && last.tools.length > 0
     const wasResuming = !!last?.resuming
     const wasErrored = !!last?.error
@@ -138,12 +207,12 @@ function ensureStarted() {
         last.reasoningOpen = true
       }
     } else {
-      chat.messages.push({ id: p.msgId, role: 'assistant', content: '', reasoning: '', reasoningOpen: true, streaming: true, thinking: false, tools: [] })
+      st.messages.push({ id: p.msgId, role: 'assistant', content: '', reasoning: '', reasoningOpen: true, streaming: true, thinking: false, tools: [] })
     }
-    chat.generating = true
+    st.generating = true
   })
   on('chat.delta', (p) => {
-    const m = chat.messages.find((x) => x.id === p.msgId)
+    const m = findMessage(p.msgId)
     // 已停止的轮次丢弃迟到增量：停止后内容不再增长，也不被补全
     if (!m || m.stopped) return
     // 收到正文 delta 时，标记思考阶段结束，并立即折叠深度思考区域
@@ -161,23 +230,21 @@ function ensureStarted() {
     else m.segments.push({ agent, text: p.text })
   })
   on('agent.reasoning', (p) => {
-    const m = chat.messages.find((x) => x.id === p.msgId)
+    const m = findMessage(p.msgId)
     if (!m || m.stopped) return
-    if (m) {
-      m.reasoning = (m.reasoning || '') + (p.text || '')
-      // 思考阶段进行中（chat.started 已点亮 thinking，如中断续跑场景）时保持展开；
-      // 否则沿用正文守卫：一旦消息已开始输出正文，reasoning 只静默追加，
-      // 不再点亮"思考中"或展开思考区
-      if (!m.content || m.thinking) {
-        m.thinking = true
-      } else {
-        m.thinking = false
-        m.reasoningOpen = false
-      }
+    m.reasoning = (m.reasoning || '') + (p.text || '')
+    // 思考阶段进行中（chat.started 已点亮 thinking，如中断续跑场景）时保持展开；
+    // 否则沿用正文守卫：一旦消息已开始输出正文，reasoning 只静默追加，
+    // 不再点亮"思考中"或展开思考区
+    if (!m.content || m.thinking) {
+      m.thinking = true
+    } else {
+      m.thinking = false
+      m.reasoningOpen = false
     }
   })
   on('chat.completed', (p) => {
-    const m = chat.messages.find((x) => x.id === p.msgId)
+    const m = findMessage(p.msgId)
     if (m && m.stopped) {
       // 用户已停止：只结束流式态，不用服务端全文覆盖已展示的部分内容
       m.streaming = false
@@ -196,29 +263,35 @@ function ensureStarted() {
       }
     }
     // 仅当前轮次的完成才复位 generating：旧轮次迟到的 completed 不得打断新轮次
-    if (p.msgId === currentMsgId) chat.generating = false
+    // （按 msgId 定位所属会话现场，后台会话的完成不影响当前展示的会话）
+    const st = ownerState(p.msgId)
+    if (st) st.generating = false
   })
   on('chat.error', (p) => {
-    const m = chat.messages.find((x) => x.id === p.msgId)
+    const m = findMessage(p.msgId)
     // 已停止的轮次不再展示错误（可能是取消引发的收尾异常）
     if (m && m.stopped) return
     if (m) {
       m.streaming = false
       m.error = p.message || '生成失败'
       m.errorCode = p.code || null
-    } else if (p.msgId === currentMsgId) {
-      // 找不到对应消息（多窗口/边界）：兜底挂到当前轮次的消息上，避免错误被静默吞掉
-      const last = chat.messages[chat.messages.length - 1]
-      if (last && last.role === 'assistant') {
-        last.streaming = false
-        last.error = p.message || '生成失败'
-        last.errorCode = p.code || null
+    } else {
+      // 找不到对应消息（多窗口/边界）：兜底挂到该轮次所属会话现场的最后一条助手消息上
+      const st = ownerState(p.msgId)
+      if (st) {
+        const last = st.messages[st.messages.length - 1]
+        if (last && last.role === 'assistant') {
+          last.streaming = false
+          last.error = p.message || '生成失败'
+          last.errorCode = p.code || null
+        }
       }
     }
-    if (p.msgId === currentMsgId) chat.generating = false
+    const st = ownerState(p.msgId)
+    if (st) st.generating = false
   })
   on('agent.tool_call', (p) => {
-    const m = chat.messages.find((x) => x.id === p.msgId)
+    const m = findMessage(p.msgId)
     if (m && m.stopped) return
     if (m && p.phase === 'start') {
       // 保存 toolCallId：供 tool_result 精准回填结果到对应步骤
@@ -228,7 +301,7 @@ function ensureStarted() {
   })
   on('agent.tool_args', (p) => {
     // 参数增量片段追加到最近一个进行中的工具步骤，流式展示
-    const m = chat.messages.find((x) => x.id === p.msgId)
+    const m = findMessage(p.msgId)
     if (!m || m.stopped || !m.tools || !m.tools.length) return
     const active = [...m.tools].reverse().find((t) => !t.done)
     if (active) {
@@ -238,7 +311,7 @@ function ensureStarted() {
   on('agent.tool_result', (p) => {
     // 工具执行结果：优先按 toolCallId 精准匹配；无 id 时回退到
     // 最近一个未完成（或名称匹配）的步骤，标记完成并回填执行结果
-    const m = chat.messages.find((x) => x.id === p.msgId)
+    const m = findMessage(p.msgId)
     if (!m || m.stopped || !m.tools || !m.tools.length) return
     let t = null
     if (p.toolCallId) t = m.tools.find((x) => x.toolCallId === p.toolCallId)
@@ -253,14 +326,14 @@ function ensureStarted() {
   on('agent.usage', (p) => {
     // 每个 AI 消息块都可能携带 usage_metadata（通常最后一块才是完整累计值），
     // 直接覆盖存储，前端取最终值展示；字段可能为空串/空对象，统一忽略
-    const m = chat.messages.find((x) => x.id === p.msgId)
+    const m = findMessage(p.msgId)
     if (m && m.stopped) return
     if (m && p.usage_metadata && Object.keys(p.usage_metadata).length) {
       m.usage = p.usage_metadata
     }
   })
   on('agent.interrupt', (p) => {
-    const m = chat.messages.find((x) => x.id === p.msgId)
+    const m = findMessage(p.msgId)
     if (m) {
       m.interrupt = p
       // 同一助手消息可能多轮 interrupt：服务端把各轮 actions 累积进同一条
@@ -278,14 +351,16 @@ function ensureStarted() {
       m.interruptDecisions = padded.concat(new Array(newActions.length).fill(undefined))
       m.streaming = false
     }
-    if (p.msgId === currentMsgId) chat.generating = false
+    const st = ownerState(p.msgId)
+    if (st) st.generating = false
   })
   // 服务端判定确认卡已失效（resume 时线程已不再挂起）：置灰所有待确认卡。
   // 若此刻并无轮次在流式输出，说明本次 confirm 被拒绝且不会有后续轮次，
   // 复位 generating，避免停止按钮永久卡住。
-  on('agent.interrupt.expired', () => {
-    expirePendingInterrupts()
-    if (!chat.messages.some((m) => m.streaming)) chat.generating = false
+  on('agent.interrupt.expired', (p) => {
+    const st = stateFor(p.sessionId || _active.convId)
+    expirePendingInterrupts(st)
+    if (!st.messages.some((m) => m.streaming)) st.generating = false
   })
   // ---------- 会话管理事件 ----------
   // 首次连通（或重连）时对齐激活会话：进入页面早于 WS 连上的场景，
@@ -294,12 +369,12 @@ function ensureStarted() {
     if (!p.sessionId) return
     loadConversations()
     // 已对齐同一会话（常规重连）：现场保持不动
-    if (chat.convId === p.sessionId) return
+    if (_active.convId === p.sessionId) return
     // 服务端激活会话与本地现场不同（断线期间其他窗口切换/首次进入）：
-    // 丢弃旧会话现场，按新激活会话重建
-    chat.convId = p.sessionId
-    chat.messages.splice(0, chat.messages.length)
-    chat.generating = false
+    // 丢弃该会话的旧现场，按服务端激活会话重建
+    convStates.delete(p.sessionId)
+    _active.convId = p.sessionId
+    _active.convTitle = ''
     loadMessages(true)
   })
   on('conv.list.result', (p) => {
@@ -322,15 +397,14 @@ function ensureStarted() {
     conv.loadingMore = false
   })
   // 激活会话变更（新建/切换/删除回退，含其他窗口触发）：
-  // 清空现场并重新拉取新会话历史；旧轮次事件按 msgId 找不到消息自然丢弃
+  // 只切换「当前展示的会话」——目标会话若已有现场（含后台进行中的轮次）则原样保留，
+  // 仅当从未加载过时才拉取历史。旧会话的现场不销毁，切回即可恢复。
   on('conv.activated', (p) => {
-    if (!p.id || p.id === chat.convId) return
-    chat.convId = p.id
-    chat.convTitle = p.title || ''
-    chat.messages.splice(0, chat.messages.length)
-    chat.generating = false
-    currentMsgId = null
-    loadMessages(true)
+    if (!p.id || p.id === _active.convId) return
+    const cached = convStates.has(p.id)
+    _active.convId = p.id
+    _active.convTitle = p.title || ''
+    if (!cached) loadMessages(true)
   })
 }
 
@@ -371,7 +445,7 @@ export function deleteConversation(id) {
 /** 用户发送消息（支持附件） */
 export function submitMessage(text, attachments = []) {
   ensureStarted()
-  expirePendingInterrupts()
+  expirePendingInterrupts(stateFor(_active.convId))
 
   // 提取图片用于前端渲染
   const images = attachments
@@ -437,7 +511,7 @@ export function retryLastTurn(msgId) {
   chat.generating = true
   send('chat.retry', {
     sessionId: chat.convId || socketState.sessionId,
-    msgId: msgId || currentMsgId,
+    msgId: msgId || chat.currentMsgId,
   })
 }
 
@@ -539,17 +613,15 @@ function transformMessage(item) {
     .map((a) => `data:${a.mimeType || 'image/png'};base64,${a.base64Data}`)
 
   // 转换interruptActions
-  const interruptActions = (JSON.parse(item.interruptActions) || []).map((item) => ({
+  const interruptActions = (JSON.parse(item.interruptActions || 'null') || []).map((item) => ({
     name: item.name,
     argsText: item.args,
   }))
 
   // 转换interruptDecisions：decisions 只含已送出轮次，可能短于累积的
   // actions，补齐 undefined 槽位保证等长（待确认项才能正常渲染按钮）
-  const interruptDecisions = (JSON.parse(item.interruptDecisions) || [])
+  const interruptDecisions = (JSON.parse(item.interruptDecisions || 'null') || [])
   while (interruptDecisions.length < interruptActions.length) interruptDecisions.push(undefined)
-
-  console.log(item)
 
   return {
     id: item.id,
@@ -573,7 +645,7 @@ function transformMessage(item) {
 }
 
 /**
- * 加载历史消息（HTTP 分页接口）
+ * 加载历史消息（HTTP 分页接口）——作用于当前激活会话的现场
  * @param {boolean} reset 是否重置（从第一页开始，清空现有消息）
  */
 export async function loadMessages(reset = false) {

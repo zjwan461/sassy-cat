@@ -255,7 +255,10 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     """消费 runner 事件生成器，节流后 fan-out 到房间"""
 
     async def emit(evt_type: str, payload: dict):
-        await hub.publish(session_id, envelope(evt_type, payload), exclude=None)
+        # 轮次事件广播给所有聊天客户端（而非仅当前会话房间）：切换会话时服务端会把
+        # 连接整房迁移，房间投递会让后台进行的轮次丢失事件；同时给每帧补上 sessionId，
+        # 供多窗口前端按会话归位（主窗口按 msgId 落到对应会话现场，桌宠按激活会话过滤）
+        await hub.publish_all(envelope(evt_type, {"sessionId": session_id, **payload}))
 
     global _running_turns
     _running_turns += 1
@@ -606,12 +609,11 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
         old.set()
     _session_cancel[session_id] = cancel
 
-    # 用户消息回显给房间内所有连接（携带 source 标记，供多窗口同步显示）
+    # 用户消息回显给所有聊天客户端（携带 source/sessionId，供多窗口同步与按会话归位）
     # 注意：chat.user 使用独立的 user_msg_id，避免与助手回复的 msg_id 冲突
     # （否则接收端 find(msgId) 会把 delta 追加到用户气泡上）
     user_msg_id = "u-" + msg_id
-    await hub.publish(
-        session_id,
+    await hub.publish_all(
         envelope(
             "chat.user",
             {
@@ -622,10 +624,10 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
             },
         ),
     )
-    await hub.publish(
-        session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
+    await hub.publish_all(
+        envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
     )
-    await hub.publish(session_id, envelope("pet.command", {"action": "think"}))
+    await hub.publish_all(envelope("pet.command", {"action": "think"}))
 
     # 异步保存用户消息和附件到数据库（不阻塞聊天）
     asyncio.create_task(
@@ -649,7 +651,7 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
     else:
         gen = runner.run_turn(user_content, session_id, cancel)
     await _stream_turn(ws, session_id, gen, msg_id, cancel)
-    await hub.publish(session_id, envelope("pet.command", {"action": "idle"}))
+    await hub.publish_all(envelope("pet.command", {"action": "idle"}))
 
 
 async def _last_user_content(session_id: str) -> str | None:
@@ -695,10 +697,10 @@ async def _handle_chat_retry(ws, payload: dict):
     except Exception as e:
         logger.warning(f"重试前重置消息内容失败 (不影响重试): {e}")
 
-    await hub.publish(
-        session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
+    await hub.publish_all(
+        envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
     )
-    await hub.publish(session_id, envelope("pet.command", {"action": "think"}))
+    await hub.publish_all(envelope("pet.command", {"action": "think"}))
 
     # 线程仍有待执行节点 -> 从 checkpoint 续跑（不产生重复 user 消息）；
     # 否则回退为重发最后一条用户消息（罕见降级，会新增一条 user 消息）
@@ -715,8 +717,7 @@ async def _handle_chat_retry(ws, payload: dict):
     else:
         content = await _last_user_content(session_id)
         if not content:
-            await hub.publish(
-                session_id,
+            await hub.publish_all(
                 envelope(
                     "chat.error",
                     {
@@ -732,7 +733,7 @@ async def _handle_chat_retry(ws, payload: dict):
         gen = runner.run_turn(content, session_id, cancel)
 
     await _stream_turn(ws, session_id, gen, msg_id, cancel)
-    await hub.publish(session_id, envelope("pet.command", {"action": "idle"}))
+    await hub.publish_all(envelope("pet.command", {"action": "idle"}))
 
 
 async def _handle_tool_confirm(ws, payload: dict):
@@ -760,8 +761,8 @@ async def _handle_tool_confirm(ws, payload: dict):
         logger.warning(f"resume 前校验挂起状态失败: {e}")
         pending = True  # 校验异常时保守放行，维持旧行为
     if not pending:
-        await hub.publish(
-            session_id, envelope("agent.interrupt.expired", {"sessionId": session_id})
+        await hub.publish_all(
+            envelope("agent.interrupt.expired", {"sessionId": session_id})
         )
         return
 
@@ -771,8 +772,8 @@ async def _handle_tool_confirm(ws, payload: dict):
     if old:
         old.set()
     _session_cancel[session_id] = cancel
-    await hub.publish(
-        session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
+    await hub.publish_all(
+        envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
     )
 
     if decisions and isinstance(decisions, list):
@@ -939,7 +940,7 @@ async def ws_agent_endpoint(ws: WebSocket):
                     ev = _session_cancel.get(sid)
                     if ev:
                         ev.set()
-                    await hub.publish(sid, envelope("pet.command", {"action": "idle"}))
+                    await hub.publish_all(envelope("pet.command", {"action": "idle"}))
                 elif mtype == "tool.confirm":
                     asyncio.create_task(_handle_tool_confirm(ws, payload))
                 elif mtype.startswith("conv."):

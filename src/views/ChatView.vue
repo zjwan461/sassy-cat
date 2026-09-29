@@ -299,7 +299,9 @@ const { hasAttachments, isProcessing, handleFiles, buildAttachments, clearAllAtt
 // 语音朗读（TTS）：播放状态（模块级，跨 tab 存活）+ 播放/停止/切换
 const { speaking, playMessage, loadConfig: loadTtsConfig } = useTTS()
 
-const messages = chat.messages
+// 当前激活会话的消息列表（chat 为多会话视图代理，切换会话时底层数组引用会变化，
+// 故用 computed 让模板/监听始终读取最新引用）
+const messages = computed(() => chat.messages)
 const draft = ref('')
 const generating = computed(() => chat.generating)
 const listRef = ref(null)
@@ -430,7 +432,7 @@ function onBackToBottom() {
 
 // 流式内容变化时自动滚动到底部（仅在本组件挂载期间生效）
 watch(
-  () => messages.reduce((n, m) => n + (m.content?.length || 0) + (m.reasoning?.length || 0), 0),
+  () => messages.value.reduce((n, m) => n + (m.content?.length || 0) + (m.reasoning?.length || 0), 0),
   scrollBottom
 )
 

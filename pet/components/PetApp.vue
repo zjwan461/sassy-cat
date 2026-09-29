@@ -543,16 +543,21 @@ onMounted(() => {
   connect()
 
   // 聊天内容：主窗口前台激活时直接忽略（内容已在主窗口展示），不改变桌宠状态也不弹气泡
-  on('chat.started', () => {
+  // 轮次事件已改为广播给所有聊天客户端：桌宠只响应“当前激活会话”（sock.sessionId），
+  // 忽略切走后仍在后台进行的其他会话，避免气泡显示非当前对话的内容
+  on('chat.started', (p) => {
+    if (p.sessionId && p.sessionId !== sock.sessionId) return
     if (mainActive.value) return
     setState('think'); if (inputOpen.value) closeInput()
   })
   on('chat.delta', (p) => {
+    if (p.sessionId && p.sessionId !== sock.sessionId) return
     if (mainActive.value) return
     if (state.value !== 'talk') { setState('talk'); typewriteStart(); bubbleKind = 'chat' }
     streamTarget += p.text
   })
   on('chat.completed', (p) => {
+    if (p.sessionId && p.sessionId !== sock.sessionId) return
     if (mainActive.value) { typewriteStop(); streamBuf = ''; streamTarget = ''; setState('idle'); return }
     if (p.text && p.text.length >= streamTarget.length) streamTarget = p.text
     setTimeout(() => {
@@ -584,7 +589,8 @@ onMounted(() => {
       setState('idle'); scheduleNext()
     }, 1400)
   })
-  on('chat.error', () => {
+  on('chat.error', (p) => {
+    if (p.sessionId && p.sessionId !== sock.sessionId) return
     typewriteStop()
     setState('idle')
     if (mainActive.value) return // 主窗口前台时错误已在主窗口呈现，桌宠不再提示
