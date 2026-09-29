@@ -75,7 +75,12 @@
             <!-- 深度思考区域：可折叠，仅在有助手消息且存在 reasoning 内容时显示 -->
             <details v-if="m.reasoning" class="reasoning-block" :open="m.reasoningOpen">
               <summary class="reasoning-summary">💭 深度思考<span v-if="m.thinking" class="thinking-dot">…</span></summary>
-              <div class="reasoning-content">{{ m.reasoning }}</div>
+              <!-- 深度思考内容限高并支持滚轮滚动；流式期间自动跟随到底部（用户手动上翻后暂停） -->
+              <div
+                class="reasoning-content"
+                :ref="(el) => setReasoningEl(m.id, el)"
+                @scroll="onReasoningScroll(m, $event)"
+              >{{ m.reasoning }}</div>
             </details>
             <div v-if="m.content || m.images?.length || docAttachments(m).length" class="msg-content" :class="{ 'md-mode': isAssistant(m) }">
               <!-- 用户消息的图片附件 -->
@@ -322,6 +327,7 @@ function isNearBottom() {
 // 强制滚动到底部并恢复自动跟随（用户主动操作：发消息/切会话/确认/点击浮动按钮）
 function forceScrollBottom() {
   stickToBottom.value = true
+  reasoningUnpinned.clear()
   nextTick(() => {
     if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight
   })
@@ -425,6 +431,36 @@ function scrollBottom() {
   })
 }
 
+// ---------- 深度思考区域：内部滚轮滚动状态 ----------
+// 每条消息的深度思考内容 DOM（限高后可滚动），用于流式期间自动跟随到底部
+const reasoningEls = new Map()
+// 用户手动上翻过的消息 id：暂停自动跟随，回到底部后恢复
+const reasoningUnpinned = new Set()
+
+function setReasoningEl(id, el) {
+  if (el) reasoningEls.set(id, el)
+  else reasoningEls.delete(id)
+}
+
+function isReasoningNearBottom(el) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 40
+}
+
+function onReasoningScroll(m, e) {
+  if (isReasoningNearBottom(e.target)) reasoningUnpinned.delete(m.id)
+  else reasoningUnpinned.add(m.id)
+}
+
+// 流式思考中：让限高的深度思考区域自动滚到最新内容
+function followReasoning() {
+  for (const m of messages.value) {
+    if (!m.thinking) continue
+    const el = reasoningEls.get(m.id)
+    if (!el || reasoningUnpinned.has(m.id)) continue
+    el.scrollTop = el.scrollHeight
+  }
+}
+
 // 浮动按钮点击：回到底部并恢复自动滚动
 function onBackToBottom() {
   forceScrollBottom()
@@ -433,7 +469,10 @@ function onBackToBottom() {
 // 流式内容变化时自动滚动到底部（仅在本组件挂载期间生效）
 watch(
   () => messages.value.reduce((n, m) => n + (m.content?.length || 0) + (m.reasoning?.length || 0), 0),
-  scrollBottom
+  () => {
+    scrollBottom()
+    nextTick(followReasoning)
+  }
 )
 
 function isAssistant(m) {
@@ -796,7 +835,7 @@ onMounted(() => {
 .reasoning-summary::before { content: '▶'; font-size: 10px; transition: transform 0.2s; }
 details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .thinking-dot { color: #6366f1; animation: blink 1s infinite; margin-left: 2px; }
-.reasoning-content { padding: 0 14px 10px 14px; color: #64748b; font-size: 13px; font-style: italic; white-space: pre-wrap; word-break: break-word; line-height: 1.5; border-top: 1px dashed #334155; padding-top: 8px; }
+.reasoning-content { padding: 0 14px 10px 14px; color: #64748b; font-size: 13px; font-style: italic; white-space: pre-wrap; word-break: break-word; line-height: 1.5; border-top: 1px dashed #334155; padding-top: 8px; max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
 
 /* 消息操作条（豆包风格：无边框图标按钮，hover 浅底） */
 .msg-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin-top: 6px; }
