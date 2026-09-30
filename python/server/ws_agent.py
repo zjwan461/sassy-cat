@@ -857,6 +857,21 @@ async def _handle_conv(ws, mtype: str, payload: dict, room_ref: dict):
             )
             return
         await _activate_room(conv, room_ref)
+    elif mtype == "conv.pin":
+        # 置顶 / 取消置顶（pinned 缺省视为置顶，便于前端只发 id 的简写）
+        raw = payload.get("pinned")
+        conv = await conversations.set_pinned(
+            payload.get("id") or "", True if raw is None else bool(raw)
+        )
+        if conv is None:
+            await _send(
+                ws, envelope("error", {"message": f"会话不存在: {payload.get('id')}"})
+            )
+            return
+        # 与 rename/delete 一致：广播列表刷新，桌宠/多窗口同步置顶分组
+        await hub.publish_all(
+            envelope("conv.list.result", await _conv_list_payload(1, CONV_PAGE_SIZE))
+        )
     elif mtype == "conv.rename":
         conv = await conversations.rename(
             payload.get("id") or "", payload.get("title") or ""

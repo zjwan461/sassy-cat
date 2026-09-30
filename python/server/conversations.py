@@ -5,7 +5,9 @@
 - 存储位置：消息数据库 messages.sqlite（server/db），conversations.json 时代已结束，
   旧数据由 seed（server/db/seed.py::seed_import_conversations）一次性导入
 - 消息本体由 message_repository / LangGraph checkpointer 按 session_id（即 thread_id）
-  持久化，本模块只存会话级关键信息：id、标题、创建/更新时间
+  持久化，本模块只存会话级关键信息：id、标题、创建/更新时间、置顶状态
+- 置顶（pinned / pinned_at）：聊天页左侧「置顶」分组的数据来源。列表查询一律
+  置顶优先、置顶组内按置顶时间倒序，由前端按 pinned 字段切分两个分组渲染
 - 激活会话 id 存于 system_meta 表（key = ACTIVE_KEY），任何时刻保证有激活会话
 - 所有对外函数为 async，复用 server.db 的异步会话，失败时抛异常由调用方处理
 """
@@ -42,6 +44,9 @@ def _to_dict(conv: Conversation) -> dict:
         "title": conv.title,
         "createdAt": conv.created_at,
         "updatedAt": conv.updated_at,
+        # 置顶：pinned 供前端分组展示，pinnedAt 供置顶分组内排序（未置顶为 None）
+        "pinned": bool(conv.pinned),
+        "pinnedAt": conv.pinned_at,
     }
 
 
@@ -96,21 +101,33 @@ async def _ensure_active() -> str:
 
 # ---------------- 对外 API（均为异步函数） ----------------
 
+def _list_order():
+    """列表排序：置顶项优先，置顶组内按置顶时间倒序，其余按 updatedAt 倒序。
+
+    SQLite 中 NULL 在 DESC 排序里排最后，因此未置顶项的 pinned_at(NULL) 不干扰，
+    仍由 updated_at 决定先后。
+    """
+    return (
+        Conversation.pinned.desc(),
+        Conversation.pinned_at.desc(),
+        Conversation.updated_at.desc(),
+    )
+
+
 async def list_sorted() -> list[dict]:
-    """全部会话，按 updatedAt 倒序（列表页展示顺序）。"""
+    """全部会话，置顶优先（置顶组内按置顶时间倒序），其余按 updatedAt 倒序。"""
     async with get_session() as session:
         rows = (
-            await session.execute(
-                select(Conversation).order_by(Conversation.updated_at.desc())
-            )
+            await session.execute(select(Conversation).order_by(*_list_order()))
         ).scalars().all()
         return [_to_dict(c) for c in rows]
 
 
 async def list_page(page: int = 1, page_size: int = 20) -> tuple[list[dict], int]:
-    """分页查询会话（按 updatedAt 倒序），返回 (items, total)。
+    """分页查询会话（置顶优先、其后按 updatedAt 倒序），返回 (items, total)。
 
     offset/limit 分页供前端无限滚动加载更多；total 用于判定是否还有下一页。
+    置顶项固定排在首屏（数量有限），前端据此在列表顶部单独渲染「置顶」分组。
     """
     page = max(1, int(page or 1))
     page_size = max(1, int(page_size or 20))
@@ -121,7 +138,7 @@ async def list_page(page: int = 1, page_size: int = 20) -> tuple[list[dict], int
         rows = (
             await session.execute(
                 select(Conversation)
-                .order_by(Conversation.updated_at.desc())
+                .order_by(*_list_order())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             )
@@ -180,6 +197,26 @@ async def touch(conv_id: str) -> None:
             .values(updated_at=_now_ms())
         )
         await session.commit()
+
+
+async def set_pinned(conv_id: str, pinned: bool = True) -> dict | None:
+    """置顶 / 取消置顶会话；id 不存在返回 None。
+
+    置顶时写入 pinnedAt（驱动置顶分组内排序），取消置顶一并清空。
+    不改动 updatedAt：置顶是展示顺序的属性，不应把会话顶到历史列表最前。
+    """
+    async with get_session() as session:
+        conv = (
+            await session.execute(
+                select(Conversation).where(Conversation.id == conv_id)
+            )
+        ).scalar_one_or_none()
+        if conv is None:
+            return None
+        conv.pinned = 1 if pinned else 0
+        conv.pinned_at = _now_ms() if pinned else None
+        await session.commit()
+        return _to_dict(conv)
 
 
 async def rename(conv_id: str, title: str) -> dict | None:

@@ -11,13 +11,13 @@
  * 不会中断正在进行的对话：后台会话的流式事件按 msgId 归位到其所属现场，
  * 切回即可看到完整（或仍在流式）的回复。
  */
-import { reactive } from 'vue'
+import { computed, reactive } from 'vue'
 import { useAgentSocket } from './useAgentSocket'
 import { fetchMessages } from '../api/messages'
 
 const { state: socketState, connect, send, on } = useAgentSocket()
 
-// 会话列表（元数据来自服务端 SQLite conversations 表，按 updatedAt 倒序）
+// 会话列表（元数据来自服务端 SQLite conversations 表：置顶优先、其余按 updatedAt 倒序）
 // 分页加载：默认每页 20 条，列表滚动到底部时无限加载更多
 export const conv = reactive({
   list: [],
@@ -28,6 +28,12 @@ export const conv = reactive({
   hasMore: true,
   loadingMore: false,
 })
+
+// 置顶会话 / 普通历史会话：服务端列表已按「置顶优先 + 置顶时间倒序」返回，
+// 这里仅按 pinned 切分成两个分组，顺序即服务端顺序（前端不再重排）。
+// 左侧栏顶部渲染 pinnedConvs，普通列表渲染 historyConvs。
+export const pinnedConvs = computed(() => conv.list.filter((c) => c.pinned))
+export const historyConvs = computed(() => conv.list.filter((c) => !c.pinned))
 
 // 当前激活会话（全局唯一，服务端权威）：convId 即 LangGraph thread_id
 const _active = reactive({ convId: null, convTitle: '' })
@@ -442,6 +448,11 @@ export function deleteConversation(id) {
   send('conv.delete', { id })
 }
 
+/** 置顶 / 取消置顶对话（服务端持久化并广播列表刷新，多窗口同步） */
+export function setConversationPinned(id, pinned = true) {
+  send('conv.pin', { id, pinned })
+}
+
 /** 用户发送消息（支持附件） */
 export function submitMessage(text, attachments = []) {
   ensureStarted()
@@ -704,9 +715,9 @@ export function useChatStore() {
     loadMessages(true)
   }
   return {
-    chat, conv, socketState,
+    chat, conv, pinnedConvs, historyConvs, socketState,
     submitMessage, stopGeneration, retryLastTurn, decideInterrupt, approveAllInterrupt,
-    loadConversations, loadMoreConversations, newConversation, switchConversation, renameConversation, deleteConversation,
+    loadConversations, loadMoreConversations, newConversation, switchConversation, renameConversation, deleteConversation, setConversationPinned,
     loadMessages, loadMoreMessages,
   }
 }

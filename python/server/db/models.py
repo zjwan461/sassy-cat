@@ -73,6 +73,8 @@ class Conversation(Base):
     - 消息本体仍由 message_repository / LangGraph checkpointer 按 session_id 持久化，
       本表只存会话级关键信息：id（即 thread_id）、标题、创建/更新时间
     - 激活会话 id 存于 system_meta 表（key = ACTIVE_KEY），不单独建表
+    - 置顶：pinned=1 表示置顶（聊天页左侧「置顶」分组展示），pinned_at 记录置顶时刻，
+      置顶项之间按置顶时间倒序；取消置顶时 pinned / pinned_at 一并复位
     """
     __tablename__ = "conversations"
 
@@ -80,6 +82,8 @@ class Conversation(Base):
     title = Column(String, nullable=False)             # 会话标题
     created_at = Column(BigInteger, nullable=False)    # 创建时间戳 (毫秒)
     updated_at = Column(BigInteger, nullable=False, index=True)  # 更新时间戳 (毫秒)，驱动列表排序
+    pinned = Column(Integer, nullable=False, default=0, server_default="0")  # 是否置顶 (1=置顶)
+    pinned_at = Column(BigInteger)                     # 置顶时间戳 (毫秒)，未置顶为 NULL
 
 
 class KnowledgeBase(Base):

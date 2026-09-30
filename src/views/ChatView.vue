@@ -15,41 +15,48 @@
       <!-- 会话侧栏：历史对话列表 + 新建 -->
       <aside class="conv-panel">
         <button class="btn conv-new" @click="onNewConv">＋ 新建对话</button>
-        <div class="conv-list" ref="convListRef" @scroll="onConvListScroll">
-          <div
-            v-for="c in conv.list"
-            :key="c.id"
-            class="conv-item"
-            :class="{ active: c.id === chat.convId }"
-            @click="onSwitchConv(c)"
-          >
-            <template v-if="editingId === c.id">
-              <input
-                ref="renameInputRef"
-                v-model="editingTitle"
-                class="conv-rename-input"
-                @keydown.enter.prevent="commitRename(c)"
-                @keydown.esc="cancelRename"
-                @blur="commitRename(c)"
-                @click.stop
-              />
-            </template>
-            <template v-else>
-              <div class="conv-item-main">
-                <div class="conv-title">{{ c.title || '新对话' }}</div>
-                <div class="conv-time">{{ relTime(c.updatedAt) }}</div>
-              </div>
-              <div class="conv-actions">
-                <button class="conv-action-btn" title="重命名" @click.stop="startRename(c)">✎</button>
-                <button class="conv-action-btn del" title="删除" @click.stop="onDeleteConv(c)">🗑</button>
-              </div>
-            </template>
+        <!-- 置顶分组：与历史列表分区展示。置顶项数量有限，独立于滚动容器，
+             自身超出高度时可单独滚动，不挤占历史列表 -->
+        <div v-if="pinnedConvs.length" class="conv-pinned-group">
+          <div class="conv-group-title">📌 置顶</div>
+          <div class="conv-pinned-list">
+            <ConversationItem
+              v-for="c in pinnedConvs"
+              :key="c.id"
+              :item="c"
+              :active="c.id === chat.convId"
+              :editing="editingId === c.id"
+              v-model:editingTitle="editingTitle"
+              @select="onSwitchConv(c)"
+              @rename-start="startRename(c)"
+              @rename-commit="commitRename(c)"
+              @rename-cancel="cancelRename"
+              @delete="onDeleteConv(c)"
+              @pin-toggle="onTogglePin(c)"
+            />
           </div>
+        </div>
+        <div v-if="pinnedConvs.length" class="conv-group-title">历史对话</div>
+        <div class="conv-list" ref="convListRef" @scroll="onConvListScroll">
+          <ConversationItem
+            v-for="c in historyConvs"
+            :key="c.id"
+            :item="c"
+            :active="c.id === chat.convId"
+            :editing="editingId === c.id"
+            v-model:editingTitle="editingTitle"
+            @select="onSwitchConv(c)"
+            @rename-start="startRename(c)"
+            @rename-commit="commitRename(c)"
+            @rename-cancel="cancelRename"
+            @delete="onDeleteConv(c)"
+            @pin-toggle="onTogglePin(c)"
+          />
           <!-- 无限滚动加载更多：滚动到底部自动加载，加载中显示转圈 -->
           <div v-if="conv.loadingMore" class="conv-more-hint">
             <span class="conv-spinner"></span> 加载中…
           </div>
-          <div v-else-if="conv.hasMore && conv.list.length" class="conv-more-hint clickable" @click="onLoadMoreConvs">
+          <div v-else-if="conv.hasMore && historyConvs.length" class="conv-more-hint clickable" @click="onLoadMoreConvs">
             加载更多
           </div>
           <div v-if="!conv.list.length && !conv.loading" class="conv-empty">还没有对话</div>
@@ -295,11 +302,12 @@ import { useTTS } from '../composables/useTTS'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 import FilePreview from '../components/FilePreview.vue'
 import DocumentAttachment from '../components/DocumentAttachment.vue'
+import ConversationItem from '../components/ConversationItem.vue'
 
 // 会话状态与 WS 事件订阅已提升到模块级单例（useChatStore）：
 // 切换 tab 导致本组件卸载时，流式数据仍在后台接收与累积；
 // 重新挂载直接恢复现场继续渲染，不再出现"切走就停止渲染"的问题。
-const { chat, conv, socketState, submitMessage, stopGeneration, retryLastTurn, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation, loadMoreConversations, loadMoreMessages } = useChatStore()
+const { chat, conv, pinnedConvs, historyConvs, socketState, submitMessage, stopGeneration, retryLastTurn, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation, setConversationPinned, loadMoreConversations, loadMoreMessages } = useChatStore()
 const { hasAttachments, isProcessing, handleFiles, buildAttachments, clearAllAttachments } = useFileUpload()
 // 语音朗读（TTS）：播放状态（模块级，跨 tab 存活）+ 播放/停止/切换
 const { speaking, playMessage, loadConfig: loadTtsConfig } = useTTS()
@@ -342,22 +350,10 @@ function closeImagePreview() {
 }
 
 // ---------- 会话侧栏 ----------
+// 重命名态：同一时刻只允许一条会话处于编辑态，故标题草稿由父组件统一持有，
+// 通过 v-model:editingTitle 透传给对应的 ConversationItem
 const editingId = ref(null)
 const editingTitle = ref('')
-const renameInputRef = ref(null)
-
-function relTime(ts) {
-  if (!ts) return ''
-  const diff = Date.now() - ts
-  const m = Math.floor(diff / 60000)
-  if (m < 1) return '刚刚'
-  if (m < 60) return `${m} 分钟前`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h} 小时前`
-  const d = Math.floor(h / 24)
-  if (d < 7) return `${d} 天前`
-  return new Date(ts).toLocaleDateString('zh-CN')
-}
 
 function onNewConv() {
   newConversation()
@@ -372,10 +368,6 @@ function onSwitchConv(c) {
 function startRename(c) {
   editingId.value = c.id
   editingTitle.value = c.title || ''
-  nextTick(() => {
-    const el = Array.isArray(renameInputRef.value) ? renameInputRef.value[0] : renameInputRef.value
-    el && el.focus()
-  })
 }
 
 function cancelRename() {
@@ -395,6 +387,11 @@ function onDeleteConv(c) {
   deleteConversation(c.id)
 }
 
+// 置顶 / 取消置顶：服务端持久化并广播列表刷新（置顶分组随后自动重排）
+function onTogglePin(c) {
+  setConversationPinned(c.id, !c.pinned)
+}
+
 // ---------- 会话列表无限滚动 ----------
 // 滚动到底部附近时自动加载下一页（阈值 40px）
 function onConvListScroll() {
@@ -409,9 +406,10 @@ function onLoadMoreConvs() {
   loadMoreConversations()
 }
 
-// 列表长度变化后，若容器内容不足以产生滚动条（无法触发 scroll 事件），主动补拉下一页
+// 历史列表长度变化后，若容器内容不足以产生滚动条（无法触发 scroll 事件），主动补拉下一页
+// （监听 historyConvs 而非 conv.list：滚动容器只渲染历史分组，置顶项不计入其内容高度）
 watch(
-  () => conv.list.length,
+  () => historyConvs.value.length,
   () => {
     nextTick(() => {
       const el = convListRef.value
@@ -740,20 +738,13 @@ onMounted(() => {
 .conv-panel { width: 176px; min-width: 176px; display: flex; flex-direction: column; border-right: 1px solid #334155; background: #172033; padding: 8px; gap: 6px; }
 .conv-new { width: 100%; height: 32px; align-self: auto; flex-shrink: 0; font-size: 13px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; font-weight: 600; }
 .conv-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-.conv-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s; }
-.conv-item:hover { background: #273449; }
-.conv-item.active { background: #4f46e533; outline: 1px solid #6366f1; }
-.conv-item-main { flex: 1; min-width: 0; }
-.conv-title { font-size: 12.5px; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.conv-time { font-size: 10px; color: #64748b; margin-top: 1px; }
-.conv-actions { display: none; flex-shrink: 0; gap: 2px; }
-.conv-item:hover .conv-actions { display: flex; }
-.conv-action-btn { border: none; background: transparent; color: #94a3b8; cursor: pointer; font-size: 12px; padding: 4px; border-radius: 4px; }
-.conv-action-btn:hover { background: #334155; color: #e2e8f0; }
-.conv-action-btn.del:hover { color: #f87171; }
-.conv-rename-input { flex: 1; min-width: 0; background: #0f172a; border: 1px solid #6366f1; border-radius: 6px; color: #e2e8f0; padding: 4px 8px; font-size: 13px; font-family: inherit; }
-.conv-rename-input:focus { outline: none; }
+/* 置顶分组：常驻侧栏顶部，不参与历史列表滚动；置顶过多时自身可滚动并夹在 45% 高度内 */
+.conv-pinned-group { flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; max-height: 45%; padding-bottom: 4px; border-bottom: 1px dashed #334155; }
+.conv-pinned-list { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+/* 分组标题（📌 置顶 / 历史对话） */
+.conv-group-title { flex-shrink: 0; padding: 2px 6px; color: #64748b; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; user-select: none; }
 .conv-empty { text-align: center; color: #64748b; font-size: 13px; margin-top: 20px; }
+/* 会话行（.conv-item 及内部元素）样式在 ConversationItem.vue 内，两处分组共用同一行渲染 */
 /* 会话列表底部"加载更多"提示（无限滚动） */
 .conv-more-hint { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 0; color: #64748b; font-size: 12px; }
 .conv-more-hint.clickable { cursor: pointer; transition: color 0.15s; }
@@ -764,8 +755,9 @@ onMounted(() => {
   .conv-panel { width: 48px; min-width: 48px; padding: 8px 4px; }
   .conv-panel .conv-new { font-size: 0; padding: 0; }
   .conv-panel .conv-new::before { content: '＋'; font-size: 18px; }
-  .conv-item-main, .conv-actions { display: none; }
-  .conv-item::before { content: '💬'; font-size: 14px; }
+  /* 只显示图标：分组标题/分隔线省略，置顶项由行内 📌 图标区分 */
+  .conv-group-title { display: none; }
+  .conv-pinned-group { max-height: 50%; padding-bottom: 0; border-bottom: none; }
 }
 
 .msg-list { flex: 1; overflow-y: auto; padding: 16px 20px; padding-bottom: 100px; }
