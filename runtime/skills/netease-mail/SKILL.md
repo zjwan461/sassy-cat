@@ -102,14 +102,30 @@ python scripts/net163_mail.py search --from boss@corp.com --limit 5
 python scripts/net163_mail.py read --uid 12345
 python scripts/net163_mail.py read --uid 12345 --include-html --max-chars 8000
 
-# 发信（先 dry-run 确认一遍，再加附件/HTML）
+# 发信 / 回复 / 转发：一律两段式，先预览再确认
 python scripts/net163_mail.py send --to a@b.com --subject 周报 --body "见附件" --dry-run
-python scripts/net163_mail.py send --to a@b.com --cc c@d.com \
-  --subject 周报 --body-file /code/report.html --html --attach /code/report.pdf
+# → 拿到 confirm_token 后，把内容展示给用户，用户点头再用同一命令 + --confirm 发出
+python scripts/net163_mail.py send --to a@b.com --subject 周报 --body "见附件" \
+  --confirm <token>
+
+# 回复某封（--uid 来自 list/search；自动取 Reply-To + 串联 In-Reply-To/References）
+python scripts/net163_mail.py reply --uid 12345 --body "收到，明天给结论" --dry-run
+python scripts/net163_mail.py reply --uid 12345 --all --body "收到"          # 回复全部
+python scripts/net163_mail.py reply --uid 12345 --no-quote --body "简短回复"  # 不引用原文
+
+# 转发（默认连原邮件附件一起带，--no-attachments 可去掉）
+python scripts/net163_mail.py forward --uid 12345 --to c@d.com --body "请帮忙看下" --dry-run
 ```
 
-**写操作纪律**：`send` 是真实外发动作。首次给用户发信时先跑一遍 `--dry-run`
-把收件人/主题/正文/附件清单展示给用户确认，用户点头后再去掉 `--dry-run` 真正发送。
+**写操作纪律（硬闸门，不是建议）**：`send` / `reply` / `forward` 三个子命令
+**没有 `--confirm <token>` 就一定不会外发**，脚本会直接报错退出。正确流程：
+
+1. 先带 `--dry-run` 跑一遍，输出里有 `confirm_token` 和完整的 `message` 清单；
+2. 把收件人 / 主题 / 正文 / 附件**完整展示给用户**，等用户明确同意；
+3. 用户点头后，用**完全相同的参数**再加 `--confirm <token>` 执行。
+
+令牌是内容哈希：正文、收件人、主题、附件任何一处被改动，旧令牌立即失效，
+脚本会拒绝发送并要求重新预览。令牌一次性，用过即废。**不要为了省事绕过这一步。**
 
 输出全部是 JSON（`ensure_ascii=False`），Agent 可直接解析，无需再加工。
 
@@ -149,6 +165,9 @@ imaplib.Commands["ID"] = ("AUTH",)   # 必须在连接前执行，否则 ID 命�
 | `search` | 按发件人/主题/关键词/日期本地过滤 |
 | `read` | 读某封正文，可选 HTML、截断长度 |
 | `send` | 发信，支持 CC / HTML / 附件 / dry-run |
+| `reply` | 回复，自动取 Reply-To 并串联会话；`--all` 回复全部、`--no-quote` 不引用原文 |
+| `forward` | 转发，默认随带原邮件附件；`--no-attachments` 可去掉 |
+| `drafts` | 列出待确认的预览草稿（对应 `confirm_token`） |
 
 全局与子命令都接受 `--user / --auth-code / --imap-host / --smtp-host / --config`，
 写在子命令前后均可。
@@ -161,9 +180,15 @@ imaplib.Commands["ID"] = ("AUTH",)   # 必须在连接前执行，否则 ID 命�
 python tests/test_net163_mail.py
 ```
 
-10 项用例，全部离线（FakeIMAP 替身），不消耗真实邮箱配额。
-其中 `test_select_without_id_would_fail` 是**反向验证**：
-故意跳过 ID 命令，断言必须抛出 `SELECT Unsafe Login`——保证补丁没被误删。
+43 项用例，全部离线（FakeIMAP / RecordingSMTP 替身），**不消耗真实邮箱配额，也不会真的发出邮件**。
+
+`NetworkTripwire` 在测试期间替换了 `socket.connect`，任何真实网络连接都会直接报错——
+即使将来有人新写测试却忘了打桩，也会立刻失败而不是把邮件发给真人。
+`test_network_tripwire_actually_blocks_real_connections` 是这个断路器本身的反向验证。
+
+另外两个反向验证用例：
+- `test_select_without_id_would_fail`：故意跳过 ID 命令，断言必须抛 `SELECT Unsafe Login`；
+- `test_plain_send_is_blocked`：不带 `--confirm` 发信，断言必须被拦截且 `sent` 为空。
 
 改动脚本后务必重跑；用例失败先看是不是 ID 补丁或 `argparse` 默认值被动了。
 
