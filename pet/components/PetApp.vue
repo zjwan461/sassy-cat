@@ -120,49 +120,9 @@ function setState(s, holdMs = 0) {
   if (holdMs) {
     clearTimeout(timers.hold)
     timers.hold = setTimeout(() => {
-      if (state.value === s) { setState('idle'); scheduleNext() }
+      if (state.value === s) setState('idle')
     }, holdMs)
   }
-}
-
-function walkAround() {
-  if (state.value === 'drag' || !window.petAPI) { setState('idle'); return }
-  // 获取当前位置和屏幕尺寸，限制移动范围
-  window.petAPI.getPosition().then((pos) => {
-    if (!pos) { setState('idle'); return }
-    const screenW = window.screen.width
-    const petW = 120 // SVG 宽度
-    const margin = 20 // 安全边距
-    // 计算可移动范围
-    const maxLeft = -(pos.x - margin) // 向左最多走到 margin
-    const maxRight = screenW - pos.x - petW - margin // 向右最多走到 screenW - margin
-    // 随机目标距离，限制在安全范围内
-    const maxDist = Math.min(240, Math.max(60, Math.min(Math.abs(maxLeft), Math.abs(maxRight))))
-    const total = Math.round((Math.random() - 0.5) * 2 * maxDist)
-    // 确保不越界
-    const clampedTotal = Math.max(maxLeft, Math.min(maxRight, total))
-    if (Math.abs(clampedTotal) < 10) { setState('idle'); scheduleNext(); return }
-    facingLeft.value = clampedTotal < 0
-    const step = clampedTotal / 12
-    let moved = 0
-    setState('walk')
-    clearInterval(timers.walk)
-    timers.walk = setInterval(() => {
-      window.petAPI.moveDelta(step, 0)
-      if (++moved >= 12) {
-        clearInterval(timers.walk)
-        setState('idle')
-        scheduleNext()
-      }
-    }, 45)
-  }).catch(() => { setState('idle') })
-}
-
-function scheduleNext() {
-  clearTimeout(timers.next)
-  timers.next = setTimeout(() => {
-    if (state.value === 'idle') { Math.random() < 0.4 ? walkAround() : scheduleNext() }
-  }, 4000 + Math.random() * 8000)
 }
 
 // ---------- 交互 ----------
@@ -400,10 +360,14 @@ function onMainWindowStateChanged(active) {
   typewriteStop()
   streamBuf = ''; streamTarget = ''
   if (bubbleText.value) hideBubble()
-  if (state.value === 'talk' || state.value === 'think') { setState('idle'); scheduleNext() }
+  if (state.value === 'talk' || state.value === 'think') setState('idle')
 }
 
-// ---------- 拖动（增量移动，主进程节流） ----------
+// ---------- 拖动（窗口位移由主进程按系统光标驱动） ----------
+// 关键：渲染层 MouseEvent.screenX 会随被拖动的窗口一起变化。若据此计算增量再移动窗口，
+// 二者互相耦合——窗口移到新位置后，同一物理位置的光标会算出被反向抵消的增量，
+// 表现为拖动抖动、甚至反向移动（主窗口流式输出时气泡频繁 resize 会放大该现象）。
+// 因此这里只做「是否开始拖动」的判定与状态切换，实际位移交给主进程轮询系统光标完成。
 let dragMoved = false
 function onMouseDown(e) {
   if (e.button !== 0 || !window.petAPI) return
@@ -417,32 +381,31 @@ function onMouseDown(e) {
       showBubble('呼噜噜… 再摸摸嘛～ 😻', 3000)
     }
   }, 600)
-  // 拖动逻辑
+  // 拖动判定
   dragging = true
   dragMoved = false
-  let lastX = e.screenX, lastY = e.screenY
+  const startX = e.screenX, startY = e.screenY
   const moveHandler = (me) => {
-    const ddx = me.screenX - lastX, ddy = me.screenY - lastY
-    lastX = me.screenX; lastY = me.screenY
-    if (Math.abs(ddx) + Math.abs(ddy) > 0) {
+    // 3px 死区：过滤点击时的细微抖动，避免把单击误判成拖动
+    if (Math.abs(me.screenX - startX) + Math.abs(me.screenY - startY) < 3) return
+    // 拖动时取消长按
+    clearTimeout(longPressTimer)
+    longPressing.value = false
+    if (!dragMoved) {
       dragMoved = true
-      // 拖动时取消长按
-      clearTimeout(longPressTimer)
-      longPressing.value = false
-      if (state.value !== 'drag') setState('drag')
-      window.petAPI.moveDelta(ddx, ddy)
+      window.petAPI.dragStart()
     }
+    if (state.value !== 'drag') setState('drag')
   }
   const upHandler = () => {
     document.removeEventListener('mousemove', moveHandler)
     document.removeEventListener('mouseup', upHandler)
     clearTimeout(longPressTimer)
     dragging = false
+    if (dragMoved) window.petAPI.dragEnd()
     // 调用 onMouseUp 统一处理撸猫结束逻辑
     onMouseUp()
-    if (dragMoved && state.value === 'drag') {
-      setState('idle'); scheduleNext()
-    }
+    if (dragMoved && state.value === 'drag') setState('idle')
     setTimeout(() => { dragMoved = false }, 50)
   }
   document.addEventListener('mousemove', moveHandler)
@@ -468,7 +431,8 @@ function onDocMouseMove(e) {
                e.clientY >= b.top && e.clientY <= b.bottom
     }
   }
-  const need = inside || inputOpen.value
+  // 拖动过程中强制保持可交互，避免光标短暂移出宠物/气泡范围时切回穿透导致丢失 mouseup
+  const need = inside || inputOpen.value || dragging
   if (need !== hoverInside) {
     hoverInside = need
     window.petAPI.setInteractive(need)
@@ -478,7 +442,6 @@ function onDocMouseMove(e) {
 // ---------- 生命周期 ----------
 onMounted(async () => {
   setState('idle')
-  scheduleNext()
   document.addEventListener('mousemove', onDocMouseMove)
 
   // 预加载分级：仅在 spritesheet 渲染器下预载位图（SVG 模式无需）；
@@ -526,13 +489,13 @@ onMounted(async () => {
     setTimeout(() => {
       typewriteStop()
       // 1.4s 缓冲期内主窗口可能已被激活：此时放弃气泡展示
-      if (mainActive.value) { streamBuf = ''; streamTarget = ''; setState('idle'); scheduleNext(); return }
+      if (mainActive.value) { streamBuf = ''; streamTarget = ''; setState('idle'); return }
       if (streamTarget) {
         // 阅读时长随文本长度自适应（90ms/字，9s ~ 25s），超长截断由 showBubble 内部处理
         const ms = Math.min(25000, Math.max(9000, streamTarget.length * 90))
         showBubble(streamTarget, ms, 'chat')
       }
-      setState('idle'); scheduleNext()
+      setState('idle')
     }, 1400)
   })
   // ---------- 每日首次加载打招呼（服务端触发，属于主动问候，主窗口前台时也照常展示） ----------
@@ -549,7 +512,7 @@ onMounted(async () => {
         const ms = Math.min(25000, Math.max(9000, streamTarget.length * 140))
         showBubble(streamTarget, ms, 'reminder')
       }
-      setState('idle'); scheduleNext()
+      setState('idle')
     }, 1400)
   })
   on('chat.error', (p) => {
@@ -564,7 +527,7 @@ onMounted(async () => {
     else if (p.action === 'remind') { setState('remind', p.durationMs || 8000); if (p.text) showBubble(p.text, p.durationMs || 8000, 'reminder') }
     else if (p.action === 'wave') setState('react', 1200)
     else if (p.action === 'sleep') setState('sleep')
-    else if (p.action === 'idle' && !dragging) { setState('idle'); scheduleNext() }
+    else if (p.action === 'idle' && !dragging) setState('idle')
   })
   // 提醒类消息：无论主窗口是否前台，均照常提示
   on('proactive.message', (p) => { setState('remind', 8000); showBubble(p.text, 8000, 'reminder') })
@@ -576,6 +539,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  if (dragging) { dragging = false; window.petAPI && window.petAPI.dragEnd() }
   Object.values(timers).forEach((t) => { clearInterval(t); clearTimeout(t) })
   clearTimeout(bubbleTimer)
   typewriteStop()
