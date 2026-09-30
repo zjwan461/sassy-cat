@@ -138,6 +138,19 @@ async def _save_user_message_safe(
         logger.warning(f"用户消息保存失败 (不影响聊天): {e}")
 
 
+def _merge_agent_segments(base: list | None, extra: list | None) -> list:
+    """把新分段并入已有分段，相邻同来源合并（与前端 segments 的合并语义一致）。"""
+    merged = [dict(seg) for seg in (base or [])]
+    for seg in extra or []:
+        agent = seg.get("agent")
+        text = seg.get("text") or ""
+        if merged and merged[-1].get("agent") == agent:
+            merged[-1]["text"] = (merged[-1].get("text") or "") + text
+        else:
+            merged.append({"agent": agent, "text": text})
+    return merged
+
+
 async def _save_or_update_assistant_message_sage(
     session_id: str,
     msg_id: str,
@@ -149,6 +162,8 @@ async def _save_or_update_assistant_message_sage(
     tool_call_result: list | None = None,
     usage_metadata: dict | None = None,
     error: str | None = None,
+    subagent_name: str | None = None,
+    segments: list | None = None,
 ):
     """安全地保存或更新 AI 消息到数据库，失败不影响聊天"""
     try:
@@ -170,6 +185,11 @@ async def _save_or_update_assistant_message_sage(
             usage_metadata = (message.get("usageMetadata") or {}) | (
                 usage_metadata or {}
             )
+            # 分段来源跨轮次累积（与 content 的拼接语义一致）；None 表示不改动
+            if segments is not None:
+                segments = _merge_agent_segments(message.get("segments"), segments)
+            if subagent_name is not None:
+                subagent_name = message.get("subagentName") or subagent_name
             await update_message(
                 id=msg_id,
                 content=content,
@@ -180,6 +200,8 @@ async def _save_or_update_assistant_message_sage(
                 tool_call_result=tool_call_result,
                 usage_metadata=usage_metadata,
                 error=error,
+                subagent_name=subagent_name,
+                segments=segments,
             )
             logger.debug(f"AI 消息已更新: id={msg_id}")
         else:
@@ -196,6 +218,8 @@ async def _save_or_update_assistant_message_sage(
                 tool_call_result=tool_call_result,
                 usage_metadata=usage_metadata,
                 error=error,
+                subagent_name=subagent_name,
+                segments=segments,
             )
             logger.debug(f"AI 消息已保存: id={msg_id}")
     except Exception as e:
@@ -231,18 +255,24 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     """消费 runner 事件生成器，节流后 fan-out 到房间"""
 
     async def emit(evt_type: str, payload: dict):
-        await hub.publish(session_id, envelope(evt_type, payload), exclude=None)
+        # 轮次事件广播给所有聊天客户端（而非仅当前会话房间）：切换会话时服务端会把
+        # 连接整房迁移，房间投递会让后台进行的轮次丢失事件；同时给每帧补上 sessionId，
+        # 供多窗口前端按会话归位（主窗口按 msgId 落到对应会话现场，桌宠按激活会话过滤）
+        await hub.publish_all(envelope(evt_type, {"sessionId": session_id, **payload}))
 
     global _running_turns
     _running_turns += 1
 
     buffer = []
+    buffer_agent = None  # 当前 buffer 的来源：None=主 agent 自己，'dsh'=子 agent 产出
     args_buffer = []
     last_flush = time.monotonic()
 
     # 用于持久化的累积数据
     content_parts = []
     reasoning_parts = []
+    subagent_name = None  # 本消息的子 agent 来源（含 dsh 产出即记 'dsh'，否则 None）
+    subagent_segments = []  # 分段来源 [{agent, text}]，与实时 chat.delta 同源同序
     tool_call = []  # 工具调用列表
     tool_call_args_list = []  # 工具调用参数列表，与 tool_call 一一对应
     current_tool_index = None  # 当前正在收集参数的工具索引
@@ -250,14 +280,27 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
 
     tool_call_result = []  # 工具调用的结果
     usage_metadata = None  # token 用量（流式过程中累积，done 时随消息落库）
+    finalized = False  # 本轮是否已由 done/error 正常收尾（取消提前结束则为 False）
 
     async def flush():
-        nonlocal buffer, args_buffer, last_flush
+        nonlocal buffer, buffer_agent, args_buffer, last_flush, subagent_name
         if buffer:
             text = "".join(buffer)
             content_parts.append(text)
-            await emit("chat.delta", {"msgId": msg_id, "text": text})
+            # 记录分段来源（来源切换时 flush 已保证边界），供刷新后还原子 agent 渲染
+            if subagent_segments and subagent_segments[-1]["agent"] == buffer_agent:
+                subagent_segments[-1]["text"] += text
+            else:
+                subagent_segments.append({"agent": buffer_agent, "text": text})
+            if buffer_agent:
+                subagent_name = subagent_name or buffer_agent
+            payload = {"msgId": msg_id, "text": text}
+            # 本轮带来源标记（如 dsh 子 agent 的产出）时一并下发，前端据此区分展示
+            if buffer_agent:
+                payload["agent"] = buffer_agent
+            await emit("chat.delta", payload)
             buffer = []
+            buffer_agent = None
         if args_buffer:
             args_text = "".join(args_buffer)
             # 将工具参数追加到当前工具的参数中
@@ -271,6 +314,12 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
         async for event in gen:
             kind = event["kind"]
             if kind == "delta":
+                agent = event.get("agent")
+                # 来源切换（主 agent <-> 子 agent）时先把上一段冲刷掉：否则两种来源
+                # 的文本会被拼进同一帧，前端无法判断哪一段来自子 agent
+                if buffer and agent != buffer_agent:
+                    await flush()
+                buffer_agent = agent
                 buffer.append(event["text"])
                 if (
                     time.monotonic() - last_flush >= FLUSH_INTERVAL
@@ -355,6 +404,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                     },
                 )
             elif kind == "done":
+                finalized = True
                 await flush()
                 final_text = event.get("text", "")
                 await emit("chat.completed", {"msgId": msg_id, "text": final_text})
@@ -377,9 +427,14 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                         ),
                         usage_metadata=usage_metadata,
                         error="",
+                        subagent_name=subagent_name,
+                        segments=(
+                            subagent_segments if subagent_name else None
+                        ),
                     )
                 )
             elif kind == "error":
+                finalized = True
                 await flush()
                 err_msg = event.get("message") or "生成失败，请重试"
                 await emit(
@@ -407,8 +462,41 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                         ),
                         usage_metadata=usage_metadata,
                         error=err_msg,
+                        subagent_name=subagent_name,
+                        segments=(
+                            subagent_segments if subagent_name else None
+                        ),
                     )
                 )
+        if not finalized and cancel.is_set():
+            # 生成器因取消而提前结束（未产出 done/error）：收尾本轮——
+            # flush 已缓冲内容、广播完成并落库已生成的部分内容，
+            # 让前端与多窗口即时同步结束、刷新后仍能看到停止时的内容
+            await flush()
+            await emit(
+                "chat.completed", {"msgId": msg_id, "text": "".join(content_parts)}
+            )
+            asyncio.create_task(
+                _save_or_update_assistant_message_sage(
+                    session_id=session_id,
+                    msg_id=msg_id,
+                    content="".join(content_parts),
+                    reasoning="".join(reasoning_parts) if reasoning_parts else None,
+                    tool_calls=tool_call if tool_call else None,
+                    tool_call_args=(
+                        tool_call_args_list if tool_call_args_list else None
+                    ),
+                    tool_call_result=(
+                        tool_call_result if tool_call_result else None
+                    ),
+                    usage_metadata=usage_metadata,
+                    error="",
+                    subagent_name=subagent_name,
+                    segments=(
+                        subagent_segments if subagent_name else None
+                    ),
+                )
+            )
     except Exception as e:
         logger.exception("stream turn 异常")
         code, msg = runner.classify_error(e)
@@ -442,7 +530,7 @@ async def _pending_interrupt_decisions(session_id: str, content: str):
     """
     try:
         _, agent = holder.get()
-        state = agent.get_state({"configurable": {"thread_id": session_id}})
+        state = await agent.aget_state({"configurable": {"thread_id": session_id}})
         if not (state and state.next):
             return None
         # decisions 数量必须与挂起的 action_requests 总数一致（middleware 校验）
@@ -511,7 +599,7 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
     # 新会话首条消息：截断生成标题并刷新列表（auto_title 仅在真实改名时返回）
     if await conversations.auto_title(session_id, content) is not None:
         await hub.publish_all(
-            envelope("conv.list.result", {"items": await conversations.list_sorted()})
+            envelope("conv.list.result", await _conv_list_payload(1, CONV_PAGE_SIZE))
         )
     await conversations.touch(session_id)
     cancel = threading.Event()
@@ -521,12 +609,11 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
         old.set()
     _session_cancel[session_id] = cancel
 
-    # 用户消息回显给房间内所有连接（携带 source 标记，供多窗口同步显示）
+    # 用户消息回显给所有聊天客户端（携带 source/sessionId，供多窗口同步与按会话归位）
     # 注意：chat.user 使用独立的 user_msg_id，避免与助手回复的 msg_id 冲突
     # （否则接收端 find(msgId) 会把 delta 追加到用户气泡上）
     user_msg_id = "u-" + msg_id
-    await hub.publish(
-        session_id,
+    await hub.publish_all(
         envelope(
             "chat.user",
             {
@@ -537,10 +624,10 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
             },
         ),
     )
-    await hub.publish(
-        session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
+    await hub.publish_all(
+        envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
     )
-    await hub.publish(session_id, envelope("pet.command", {"action": "think"}))
+    await hub.publish_all(envelope("pet.command", {"action": "think"}))
 
     # 异步保存用户消息和附件到数据库（不阻塞聊天）
     asyncio.create_task(
@@ -564,7 +651,7 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
     else:
         gen = runner.run_turn(user_content, session_id, cancel)
     await _stream_turn(ws, session_id, gen, msg_id, cancel)
-    await hub.publish(session_id, envelope("pet.command", {"action": "idle"}))
+    await hub.publish_all(envelope("pet.command", {"action": "idle"}))
 
 
 async def _last_user_content(session_id: str) -> str | None:
@@ -610,17 +697,17 @@ async def _handle_chat_retry(ws, payload: dict):
     except Exception as e:
         logger.warning(f"重试前重置消息内容失败 (不影响重试): {e}")
 
-    await hub.publish(
-        session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
+    await hub.publish_all(
+        envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
     )
-    await hub.publish(session_id, envelope("pet.command", {"action": "think"}))
+    await hub.publish_all(envelope("pet.command", {"action": "think"}))
 
     # 线程仍有待执行节点 -> 从 checkpoint 续跑（不产生重复 user 消息）；
     # 否则回退为重发最后一条用户消息（罕见降级，会新增一条 user 消息）
     pending = False
     try:
         _, agent = holder.get()
-        state = agent.get_state({"configurable": {"thread_id": session_id}})
+        state = await agent.aget_state({"configurable": {"thread_id": session_id}})
         pending = bool(state and state.next)
     except Exception as e:
         logger.warning(f"重试前校验待执行状态失败: {e}")
@@ -630,8 +717,7 @@ async def _handle_chat_retry(ws, payload: dict):
     else:
         content = await _last_user_content(session_id)
         if not content:
-            await hub.publish(
-                session_id,
+            await hub.publish_all(
                 envelope(
                     "chat.error",
                     {
@@ -647,7 +733,7 @@ async def _handle_chat_retry(ws, payload: dict):
         gen = runner.run_turn(content, session_id, cancel)
 
     await _stream_turn(ws, session_id, gen, msg_id, cancel)
-    await hub.publish(session_id, envelope("pet.command", {"action": "idle"}))
+    await hub.publish_all(envelope("pet.command", {"action": "idle"}))
 
 
 async def _handle_tool_confirm(ws, payload: dict):
@@ -669,14 +755,14 @@ async def _handle_tool_confirm(ws, payload: dict):
     # 广播 expired 让前端置灰失效。
     try:
         _, agent = holder.get()
-        state = agent.get_state({"configurable": {"thread_id": session_id}})
+        state = await agent.aget_state({"configurable": {"thread_id": session_id}})
         pending = bool(state and state.next)
     except Exception as e:
         logger.warning(f"resume 前校验挂起状态失败: {e}")
         pending = True  # 校验异常时保守放行，维持旧行为
     if not pending:
-        await hub.publish(
-            session_id, envelope("agent.interrupt.expired", {"sessionId": session_id})
+        await hub.publish_all(
+            envelope("agent.interrupt.expired", {"sessionId": session_id})
         )
         return
 
@@ -686,8 +772,8 @@ async def _handle_tool_confirm(ws, payload: dict):
     if old:
         old.set()
     _session_cancel[session_id] = cancel
-    await hub.publish(
-        session_id, envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
+    await hub.publish_all(
+        envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
     )
 
     if decisions and isinstance(decisions, list):
@@ -727,12 +813,38 @@ async def _handle_llm_test(ws, payload: dict):
         await _send(ws, envelope("llm.test.result", {"ok": False, "error": str(e)}))
 
 
+# 会话列表分页：默认每页条数（前端无限滚动加载更多）
+CONV_PAGE_SIZE = 20
+
+
+async def _conv_list_payload(page=1, page_size=CONV_PAGE_SIZE) -> dict:
+    """构造会话列表分页响应（按 updatedAt 倒序），供 conv.list 与刷新广播复用。"""
+    page = max(1, int(page or 1))
+    page_size = max(1, int(page_size or CONV_PAGE_SIZE))
+    items, total = await conversations.list_page(page, page_size)
+    return {
+        "items": items,
+        "page": page,
+        "pageSize": page_size,
+        "total": total,
+        "hasMore": page * page_size < total,
+    }
+
+
 async def _handle_conv(ws, mtype: str, payload: dict, room_ref: dict):
     """conv.* 会话管理消息路由。room_ref 持有本连接的房间 id（可变，支持切换后迁移）。"""
     if mtype == "conv.list":
         await _send(
             ws,
-            envelope("conv.list.result", {"items": await conversations.list_sorted()}),
+            envelope(
+                "conv.list.result",
+                await _conv_list_payload(
+                    payload.get("page") or 1,
+                    payload.get("pageSize")
+                    or payload.get("page_size")
+                    or CONV_PAGE_SIZE,
+                ),
+            ),
         )
     elif mtype == "conv.create":
         conv = await conversations.create()
@@ -745,6 +857,21 @@ async def _handle_conv(ws, mtype: str, payload: dict, room_ref: dict):
             )
             return
         await _activate_room(conv, room_ref)
+    elif mtype == "conv.pin":
+        # 置顶 / 取消置顶（pinned 缺省视为置顶，便于前端只发 id 的简写）
+        raw = payload.get("pinned")
+        conv = await conversations.set_pinned(
+            payload.get("id") or "", True if raw is None else bool(raw)
+        )
+        if conv is None:
+            await _send(
+                ws, envelope("error", {"message": f"会话不存在: {payload.get('id')}"})
+            )
+            return
+        # 与 rename/delete 一致：广播列表刷新，桌宠/多窗口同步置顶分组
+        await hub.publish_all(
+            envelope("conv.list.result", await _conv_list_payload(1, CONV_PAGE_SIZE))
+        )
     elif mtype == "conv.rename":
         conv = await conversations.rename(
             payload.get("id") or "", payload.get("title") or ""
@@ -755,7 +882,7 @@ async def _handle_conv(ws, mtype: str, payload: dict, room_ref: dict):
             )
             return
         await hub.publish_all(
-            envelope("conv.list.result", {"items": await conversations.list_sorted()})
+            envelope("conv.list.result", await _conv_list_payload(1, CONV_PAGE_SIZE))
         )
     elif mtype == "conv.delete":
         cid = payload.get("id") or ""
@@ -765,7 +892,7 @@ async def _handle_conv(ws, mtype: str, payload: dict, room_ref: dict):
             return
         # 删除的是激活会话：active_id() 已自动回退，广播让所有窗口跟随切换
         await hub.publish_all(
-            envelope("conv.list.result", {"items": await conversations.list_sorted()})
+            envelope("conv.list.result", await _conv_list_payload(1, CONV_PAGE_SIZE))
         )
         active = await conversations.get(await conversations.active_id())
         if active:
@@ -828,7 +955,7 @@ async def ws_agent_endpoint(ws: WebSocket):
                     ev = _session_cancel.get(sid)
                     if ev:
                         ev.set()
-                    await hub.publish(sid, envelope("pet.command", {"action": "idle"}))
+                    await hub.publish_all(envelope("pet.command", {"action": "idle"}))
                 elif mtype == "tool.confirm":
                     asyncio.create_task(_handle_tool_confirm(ws, payload))
                 elif mtype.startswith("conv."):
@@ -845,6 +972,16 @@ async def ws_agent_endpoint(ws: WebSocket):
                 elif mtype == "config.invalidate":
                     config_loader.reload_config()
                     holder.invalidate()
+                    # dsh 子代理的 harness 是进程级单例，不会随主 agent 重建而刷新；
+                    # 这里显式置脏，让下一次委托用上最新配置（无需手动重启服务进程）
+                    try:
+                        from agent.tools import subagent_tool
+
+                        subagent_tool.invalidate_harness()
+                    except Exception:
+                        logger.warning(
+                            "dsh harness 失效失败（未安装 dsh 时属预期）", exc_info=True
+                        )
                     await _send(
                         ws,
                         envelope(

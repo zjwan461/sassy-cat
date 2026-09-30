@@ -1,0 +1,25 @@
+# 候选插件验证用 overlay（配合 tests/tmp_dsh_plugin_probe.py，用完可删）
+#
+# 只做三件事：验证名字拼写正确、能解析、且不与 sdk-minimal 已有行冲突。
+# 用 `dsh --profile sdk-minimal --patch <本文件> --dump-config` 可以先静态校验。
+- insert:
+    # 待办清单：产出 todo/write 事件（渲染 checklist 的数据源）
+    # allowParallelInProgress 是必填项：不给会以
+    # "invalid config: $.allowParallelInProgress missing required value" 整个插件树装载失败
+    - id: tool-todo
+      name: '@deepseek-ai/dsh-tool-todo'
+      config:
+        allowParallelInProgress: true
+    # glob / grep：现在 dsh 只能靠 pwsh 搜文件
+    # sampleOverCapGlobResults 同样是必填项
+    - id: tool-fs-search
+      name: '@deepseek-ai/dsh-tool-fs-search'
+      config:
+        sampleOverCapGlobResults: false
+    # 上下文压缩：多步长任务必需，sdk-minimal 默认没有
+    # 它依赖 tokenMeter 服务；sdk-minimal 也没挂 token-meter，
+    # 不补这一行会以 "pending (waiting for service: tokenMeter)" 卡在装载阶段
+    - id: token-meter
+      name: '@deepseek-ai/dsh-token-meter'
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'

@@ -58,6 +58,12 @@ function maskSecrets(data) {
     clone.rag.embeddingModel.apiKey = `***${ragKey.slice(-3)}`;
     clone.rag.embeddingModel.apiKeyMasked = true;
   }
+  // dsh 子代理独立 LLM 的 apiKey（useMainLlm=false 时生效），掩码策略同 llm profile
+  const dshKey = clone?.dsh?.llm?.apiKey;
+  if (typeof dshKey === 'string' && dshKey.length > 0) {
+    clone.dsh.llm.apiKey = `***${dshKey.slice(-3)}`;
+    clone.dsh.llm.apiKeyMasked = true;
+  }
   return clone;
 }
 
@@ -100,6 +106,11 @@ class ConfigStore extends EventEmitter {
   /** 读取合并后的完整配置（敏感字段掩码后返回给渲染层展示） */
   getMasked() {
     return maskSecrets(this.merged);
+  }
+
+  /** 模板层默认值（深拷贝，只读）：渲染层「恢复默认」类按钮取内置默认文本用 */
+  getTemplate() {
+    return JSON.parse(JSON.stringify(this.template));
   }
 
   /**

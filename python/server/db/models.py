@@ -34,6 +34,8 @@ class Message(Base):
     tool_call_result = Column(Text)                    # 工具调用结果
     usage_metadata = Column(Text)                      # token 用量 JSON，如 {"input_tokens":..,"output_tokens":..,"total_tokens":..} (仅 assistant)
     error = Column(Text)                               # 生成失败提示文案（为空表示正常完成，仅 assistant）
+    subagent_name = Column(String)                     # 子 agent 来源标识（如 'dsh'；主 agent 自身产出为 NULL）(仅 assistant)
+    segments = Column(Text)                            # 分段来源 JSON，如 [{"agent":"dsh","text":"..."}]，仅含子 agent 产出时写入
     # 关系
     attachments = relationship(
         "Attachment",
@@ -71,6 +73,8 @@ class Conversation(Base):
     - 消息本体仍由 message_repository / LangGraph checkpointer 按 session_id 持久化，
       本表只存会话级关键信息：id（即 thread_id）、标题、创建/更新时间
     - 激活会话 id 存于 system_meta 表（key = ACTIVE_KEY），不单独建表
+    - 置顶：pinned=1 表示置顶（聊天页左侧「置顶」分组展示），pinned_at 记录置顶时刻，
+      置顶项之间按置顶时间倒序；取消置顶时 pinned / pinned_at 一并复位
     """
     __tablename__ = "conversations"
 
@@ -78,6 +82,8 @@ class Conversation(Base):
     title = Column(String, nullable=False)             # 会话标题
     created_at = Column(BigInteger, nullable=False)    # 创建时间戳 (毫秒)
     updated_at = Column(BigInteger, nullable=False, index=True)  # 更新时间戳 (毫秒)，驱动列表排序
+    pinned = Column(Integer, nullable=False, default=0, server_default="0")  # 是否置顶 (1=置顶)
+    pinned_at = Column(BigInteger)                     # 置顶时间戳 (毫秒)，未置顶为 NULL
 
 
 class KnowledgeBase(Base):
