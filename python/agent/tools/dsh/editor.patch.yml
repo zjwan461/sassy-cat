@@ -1,0 +1,148 @@
+# Profile patch: add a real file-editing tool to the API service's agent.
+#
+# Why this exists
+# ---------------
+# The shipped `sdk-minimal` profile exposes exactly ONE tool: a persistent
+# shell (`bash`). To write a file the model must emit the whole file inside a
+# single `cat > file << 'EOF' ... EOF` command, JSON-escaped, in one model
+# response. For anything long that fails in two independent ways:
+#
+#   1. it exceeds the per-response output cap, so the tool-call JSON is cut off
+#      mid-string and the turn dies with `Unterminated string` / INVALID_ARGS;
+#   2. even within the cap, deep heredoc/JSON escaping of Markdown + code
+#      blocks is fragile.
+#
+# Observed: a request for a detailed FastAPI document stopped at 16,087 output
+# tokens while still on its 22-chapter outline, losing all of it. A short
+# question answered fine from the same deployment, which is what ruled out the
+# bridge and the gateway.
+#
+# What this adds
+# --------------
+# `str_replace_editor` (create / str_replace / insert / view) plus the local
+# filesystem provider it depends on. The model can then create a file and append
+# to it section by section, so no single response has to carry the whole
+# document, and a partial run still leaves the finished sections on disk.
+# Later additions: the todo tool, filesystem search, and basic compaction.
+#
+# Two ways a row here can fail to load
+# ------------------------------------
+# Both are HARD failures: the loader rejects the whole tree instead of skipping
+# the row, so dsh never finishes booting and the SDK's `initialize` just times
+# out with a stderr tail to go on. Neither is visible in `--dump-config`, which
+# only composes the tree (good for typos and duplicate ids, and for checking
+# what sdk-minimal already provides — e.g. do NOT re-add its own
+# `dsh-tool-pwsh-persistent`).
+#
+#   1. a required config key that has no default =>
+#      `invalid config: $.<key> missing required value`
+#      (tool-todo needs allowParallelInProgress, tool-fs-search needs
+#      sampleOverCapGlobResults — both verified missing in this runtime);
+#   2. a service no mounted row provides =>
+#      `<pkg>: pending (waiting for service: <name>)`
+#      (compaction-basic needs tokenMeter, hence the extra token-meter row).
+#
+# So verify each new row by booting once and reading the model's tool list back
+# from the `request/header` session event:
+#   .venv\Scripts\python.exe tests\tmp_dsh_plugin_probe.py
+#
+# Security note: this does NOT widen access. The shell tool in this same profile
+# can already read and write anything the process can reach, and `sdk-minimal`
+# pins danger-full-access. This patch changes HOW the agent writes, not WHAT it
+# may touch. Container isolation remains the boundary.
+#
+# Applied via DeepSeekHarness(patches=(...)) -> `dsh --profile <p> --patch <file>`.
+# Patches are applied last, so these rows win over the bundle's defaults.
+
+- insert:
+    - id: fs-local
+      name: '@deepseek-ai/dsh-fs-local'
+      config:
+        cwd: !!js process.cwd()
+    - id: tool-str-replace-editor
+      name: '@deepseek-ai/dsh-tool-str-replace-editor'
+    # `present` is what produces the "files delivered this turn" declaration.
+    # It is NOT in the sdk-minimal bundle and there is no automatic diffing of
+    # the workspace: the agent has to declare its deliverables explicitly, and
+    # the tool description requires that call whenever it produces an output the
+    # user asked to receive. Without this row the agent has no way to tell the
+    # bridge which files matter, so the API has nothing to link to.
+    #
+    # Verified: with this row the model is offered ['present', 'bash',
+    # 'str_replace_editor'], and a present call emits a `deliverables/presented`
+    # session event carrying {turn, callId, files:[{path, description}]} — which
+    # arrives on the same notification stream the bridge already consumes.
+    #
+    # It needs an `fs` provider (the fs-local row above) and the turnBoundary
+    # session projection, which sdk-minimal already includes.
+    - id: tool-present
+      name: '@deepseek-ai/dsh-tool-present'
+      config:
+        maxFiles: 8
+
+    # Last batch: todo / search / compaction. Verified by booting the real
+    # harness: the model's tools go from
+    #   ['present', 'pwsh', 'str_replace_editor']
+    # to
+    #   ['glob', 'grep', 'present', 'pwsh', 'str_replace_editor', 'todo_write']
+    # and a plan-writing prompt makes `todo/write` reach the notification stream.
+
+    # Todo list. Emits the `todo/write` session event as a FULL SNAPSHOT of the
+    # list, not a delta — observed 4 times in one turn, each repeating the whole
+    # list, so a renderer must diff and only emit on change. Event shape:
+    # {todos: [{content, status}]} with status pending / in_progress seen so far.
+    # The model-facing tool name is `todo_write`, not `todo`.
+    # allowParallelInProgress is required and has no default.
+    - id: tool-todo
+      name: '@deepseek-ai/dsh-tool-todo'
+      config:
+        allowParallelInProgress: true
+
+    # Glob / grep. Before this row the only way to search was hand-rolled pwsh
+    # (a plain `ls -la` fails on PowerShell, and the model burned several steps
+    # discovering that). sampleOverCapGlobResults is required, no default.
+    - id: tool-fs-search
+      name: '@deepseek-ai/dsh-tool-fs-search'
+      config:
+        sampleOverCapGlobResults: false
+
+    # Provides nothing model-facing; it exists only to supply the `tokenMeter`
+    # service that compaction-basic injects. Kept above its consumer on purpose.
+    - id: token-meter
+      name: '@deepseek-ai/dsh-token-meter'
+
+    # Basic compaction. sdk-minimal ships without it, so a long multi-step task
+    # eventually runs into the context ceiling with no way to summarize away the
+    # old turns. Emits compaction/start|summary|end.
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+
+    # ── skill family: registry + local discovery + model-facing loader ────────
+    #
+    # 技能是「按需加载」的复用指令文档：会话先拿到一份 名称+描述 目录，模型只在
+    # 任务匹配时才通过 `skill` 工具拉取完整正文。sdk-minimal 默认不挂任何 skill
+    # 行、本地 provider 也不合成内置技能，因此原生运行时是「零技能、无 skill 工具」。
+    # 实测（tests/tmp_dsh_plugin_probe.py）：加上这三行后工具清单出现 `skill`，
+    # 且被挂载的技能会以 <available_skills> 目录注入到真实模型请求里。
+    #
+    # 行序不能乱：registry 提供 ctx.skills -> provider 在其上注册 -> loader 工具消费。
+    - id: skill-registry
+      name: '@deepseek-ai/dsh-skill'
+
+    - id: skill-filesystem
+      name: '@deepseek-ai/dsh-skill-filesystem'
+      config:
+        # 保留默认根是有意为之：部署时无须改本文件即可三处投放技能——
+        #   * 下面的 customSkillDirs ......... rank 300（共享技能库）
+        #   * <dshHome>/skills/<name>/ ...... rank 400（每用户：DSH_HOME 即会话 home）
+        #   * <cwd>/.dsh/skills/<name>/ ..... rank 100（每会话，临时）
+        includeDefaultRoots: true
+        # 主 Agent 的技能库（runtime/skills）由此挂进来，让 dsh 与主 Agent 共享同一套
+        # skills。dsh skill root 的约定与它一致：每个子目录 <name>/ 内含 SKILL.md。
+        # DSH_SKILLS_DIR 由 dsh_invoker.build_harness 注入（逗号分隔，可多个根）。
+        # 这里做 split/trim/filter：部署配置里一个多余的逗号会注册出空路径——
+        # 而空路径会解析成 cwd，等于凭空多出一个谁也没要的技能根。
+        customSkillDirs: !!js (process.env.DSH_SKILLS_DIR ?? '').split(',').map((dir) => dir.trim()).filter((dir) => dir.length > 0)
+
+    - id: tool-skill
+      name: '@deepseek-ai/dsh-tool-skill'

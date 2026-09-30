@@ -21,6 +21,7 @@ from proactive import reminder_runner, scheduler
 from server.ws_agent import ws_agent_endpoint
 from server.kb_api import router as kb_router
 from server.stats_api import router as stats_router
+from server.skills_api import router as skills_router
 from server.db import init_db as init_message_db, close_db as close_message_db
 from server.db import get_messages_by_session, DEFAULT_KB_ID
 from server.db import kb_repository as kb_repo
@@ -36,8 +37,9 @@ _rag_download_busy = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 打开 agent 共享 SQLite 连接（checkpointer/store 复用，shutdown 时统一关闭）
-    await asyncio.to_thread(agent_engine.init_db)
+    # 打开 agent 共享 SQLite 异步连接（checkpointer/store 复用，shutdown 时统一关闭）
+    # 须在当前事件循环内 await（异步持久层依赖 get_running_loop 绑定自身循环与锁）
+    await agent_engine.init_db()
     # 初始化消息数据库（SQLAlchemy 异步引擎）
     await init_message_db()
     stop_event = asyncio.Event()
@@ -49,7 +51,7 @@ async def lifespan(app: FastAPI):
     proactive_task.cancel()
     reminder_task.cancel()
     await asyncio.gather(proactive_task, reminder_task, return_exceptions=True)
-    await asyncio.to_thread(agent_engine.close_db)
+    await agent_engine.close_db()
     await close_message_db()
     logger.info("后台任务已停止")
 
@@ -193,6 +195,7 @@ def create_app() -> FastAPI:
 
     app.include_router(kb_router)
     app.include_router(stats_router)
+    app.include_router(skills_router)
 
     @app.websocket("/ws/agent")
     async def ws_agent(websocket: WebSocket):

@@ -15,37 +15,51 @@
       <!-- 会话侧栏：历史对话列表 + 新建 -->
       <aside class="conv-panel">
         <button class="btn conv-new" @click="onNewConv">＋ 新建对话</button>
-        <div class="conv-list">
-          <div
-            v-for="c in conv.list"
-            :key="c.id"
-            class="conv-item"
-            :class="{ active: c.id === chat.convId }"
-            @click="onSwitchConv(c)"
-          >
-            <template v-if="editingId === c.id">
-              <input
-                ref="renameInputRef"
-                v-model="editingTitle"
-                class="conv-rename-input"
-                @keydown.enter.prevent="commitRename(c)"
-                @keydown.esc="cancelRename"
-                @blur="commitRename(c)"
-                @click.stop
-              />
-            </template>
-            <template v-else>
-              <div class="conv-item-main">
-                <div class="conv-title">{{ c.title || '新对话' }}</div>
-                <div class="conv-time">{{ relTime(c.updatedAt) }}</div>
-              </div>
-              <div class="conv-actions">
-                <button class="conv-action-btn" title="重命名" @click.stop="startRename(c)">✎</button>
-                <button class="conv-action-btn del" title="删除" @click.stop="onDeleteConv(c)">🗑</button>
-              </div>
-            </template>
+        <!-- 置顶分组：与历史列表分区展示。置顶项数量有限，独立于滚动容器，
+             自身超出高度时可单独滚动，不挤占历史列表 -->
+        <div v-if="pinnedConvs.length" class="conv-pinned-group">
+          <div class="conv-group-title">📌 置顶</div>
+          <div class="conv-pinned-list">
+            <ConversationItem
+              v-for="c in pinnedConvs"
+              :key="c.id"
+              :item="c"
+              :active="c.id === chat.convId"
+              :editing="editingId === c.id"
+              v-model:editingTitle="editingTitle"
+              @select="onSwitchConv(c)"
+              @rename-start="startRename(c)"
+              @rename-commit="commitRename(c)"
+              @rename-cancel="cancelRename"
+              @delete="onDeleteConv(c)"
+              @pin-toggle="onTogglePin(c)"
+            />
           </div>
-          <div v-if="!conv.list.length" class="conv-empty">还没有对话</div>
+        </div>
+        <div v-if="pinnedConvs.length" class="conv-group-title">历史对话</div>
+        <div class="conv-list" ref="convListRef" @scroll="onConvListScroll">
+          <ConversationItem
+            v-for="c in historyConvs"
+            :key="c.id"
+            :item="c"
+            :active="c.id === chat.convId"
+            :editing="editingId === c.id"
+            v-model:editingTitle="editingTitle"
+            @select="onSwitchConv(c)"
+            @rename-start="startRename(c)"
+            @rename-commit="commitRename(c)"
+            @rename-cancel="cancelRename"
+            @delete="onDeleteConv(c)"
+            @pin-toggle="onTogglePin(c)"
+          />
+          <!-- 无限滚动加载更多：滚动到底部自动加载，加载中显示转圈 -->
+          <div v-if="conv.loadingMore" class="conv-more-hint">
+            <span class="conv-spinner"></span> 加载中…
+          </div>
+          <div v-else-if="conv.hasMore && historyConvs.length" class="conv-more-hint clickable" @click="onLoadMoreConvs">
+            加载更多
+          </div>
+          <div v-if="!conv.list.length && !conv.loading" class="conv-empty">还没有对话</div>
         </div>
       </aside>
 
@@ -68,7 +82,12 @@
             <!-- 深度思考区域：可折叠，仅在有助手消息且存在 reasoning 内容时显示 -->
             <details v-if="m.reasoning" class="reasoning-block" :open="m.reasoningOpen">
               <summary class="reasoning-summary">💭 深度思考<span v-if="m.thinking" class="thinking-dot">…</span></summary>
-              <div class="reasoning-content">{{ m.reasoning }}</div>
+              <!-- 深度思考内容限高并支持滚轮滚动；流式期间自动跟随到底部（用户手动上翻后暂停） -->
+              <div
+                class="reasoning-content"
+                :ref="(el) => setReasoningEl(m.id, el)"
+                @scroll="onReasoningScroll(m, $event)"
+              >{{ m.reasoning }}</div>
             </details>
             <div v-if="m.content || m.images?.length || docAttachments(m).length" class="msg-content" :class="{ 'md-mode': isAssistant(m) }">
               <!-- 用户消息的图片附件 -->
@@ -84,7 +103,30 @@
                 />
               </div>
               <template v-if="isAssistant(m)">
-                <MarkdownRenderer :content="m.content" :done="!m.streaming" />
+                <!-- 按来源分段渲染：带 agent 的段落来自子 agent（如 DeepSeek Harness），
+                     单独成块并标注来源，与主 agent 的正文区分开 -->
+                <template v-if="m.segments && m.segments.length">
+                  <div
+                    v-for="(seg, i) in m.segments"
+                    :key="i"
+                    class="msg-segment"
+                    :class="{ 'sub-agent': seg.agent }"
+                  >
+                    <!-- 子 agent 段落：独立嵌套面板 + 头部来源标签，与主 agent 正文明显区分 -->
+                    <template v-if="seg.agent">
+                      <div class="sub-agent-head">
+                        <span class="sub-agent-avatar">🤖</span>
+                        <span class="sub-agent-badge">子 Agent</span>
+                        <span class="sub-agent-name">{{ agentLabel(seg.agent) }}</span>
+                      </div>
+                      <div class="sub-agent-body">
+                        <MarkdownRenderer :content="seg.text" :done="!m.streaming" />
+                      </div>
+                    </template>
+                    <MarkdownRenderer v-else :content="seg.text" :done="!m.streaming" />
+                  </div>
+                </template>
+                <MarkdownRenderer v-else :content="m.content" :done="!m.streaming" />
               </template>
               <template v-else>{{ m.content }}</template>
             </div>
@@ -260,19 +302,23 @@ import { useTTS } from '../composables/useTTS'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 import FilePreview from '../components/FilePreview.vue'
 import DocumentAttachment from '../components/DocumentAttachment.vue'
+import ConversationItem from '../components/ConversationItem.vue'
 
 // 会话状态与 WS 事件订阅已提升到模块级单例（useChatStore）：
 // 切换 tab 导致本组件卸载时，流式数据仍在后台接收与累积；
 // 重新挂载直接恢复现场继续渲染，不再出现"切走就停止渲染"的问题。
-const { chat, conv, socketState, submitMessage, stopGeneration, retryLastTurn, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation, loadMoreMessages } = useChatStore()
+const { chat, conv, pinnedConvs, historyConvs, socketState, submitMessage, stopGeneration, retryLastTurn, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation, setConversationPinned, loadMoreConversations, loadMoreMessages } = useChatStore()
 const { hasAttachments, isProcessing, handleFiles, buildAttachments, clearAllAttachments } = useFileUpload()
 // 语音朗读（TTS）：播放状态（模块级，跨 tab 存活）+ 播放/停止/切换
 const { speaking, playMessage, loadConfig: loadTtsConfig } = useTTS()
 
-const messages = chat.messages
+// 当前激活会话的消息列表（chat 为多会话视图代理，切换会话时底层数组引用会变化，
+// 故用 computed 让模板/监听始终读取最新引用）
+const messages = computed(() => chat.messages)
 const draft = ref('')
 const generating = computed(() => chat.generating)
 const listRef = ref(null)
+const convListRef = ref(null)
 const fileInputRef = ref(null)
 const isDragOver = ref(false)
 const previewImageUrl = ref(null)
@@ -289,6 +335,7 @@ function isNearBottom() {
 // 强制滚动到底部并恢复自动跟随（用户主动操作：发消息/切会话/确认/点击浮动按钮）
 function forceScrollBottom() {
   stickToBottom.value = true
+  reasoningUnpinned.clear()
   nextTick(() => {
     if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight
   })
@@ -303,22 +350,10 @@ function closeImagePreview() {
 }
 
 // ---------- 会话侧栏 ----------
+// 重命名态：同一时刻只允许一条会话处于编辑态，故标题草稿由父组件统一持有，
+// 通过 v-model:editingTitle 透传给对应的 ConversationItem
 const editingId = ref(null)
 const editingTitle = ref('')
-const renameInputRef = ref(null)
-
-function relTime(ts) {
-  if (!ts) return ''
-  const diff = Date.now() - ts
-  const m = Math.floor(diff / 60000)
-  if (m < 1) return '刚刚'
-  if (m < 60) return `${m} 分钟前`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h} 小时前`
-  const d = Math.floor(h / 24)
-  if (d < 7) return `${d} 天前`
-  return new Date(ts).toLocaleDateString('zh-CN')
-}
 
 function onNewConv() {
   newConversation()
@@ -333,10 +368,6 @@ function onSwitchConv(c) {
 function startRename(c) {
   editingId.value = c.id
   editingTitle.value = c.title || ''
-  nextTick(() => {
-    const el = Array.isArray(renameInputRef.value) ? renameInputRef.value[0] : renameInputRef.value
-    el && el.focus()
-  })
 }
 
 function cancelRename() {
@@ -356,6 +387,38 @@ function onDeleteConv(c) {
   deleteConversation(c.id)
 }
 
+// 置顶 / 取消置顶：服务端持久化并广播列表刷新（置顶分组随后自动重排）
+function onTogglePin(c) {
+  setConversationPinned(c.id, !c.pinned)
+}
+
+// ---------- 会话列表无限滚动 ----------
+// 滚动到底部附近时自动加载下一页（阈值 40px）
+function onConvListScroll() {
+  const el = convListRef.value
+  if (!el) return
+  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+  if (nearBottom) loadMoreConversations()
+}
+
+// 底部"加载更多"点击兜底：容器内容不足无法滚动时仍能手动触发
+function onLoadMoreConvs() {
+  loadMoreConversations()
+}
+
+// 历史列表长度变化后，若容器内容不足以产生滚动条（无法触发 scroll 事件），主动补拉下一页
+// （监听 historyConvs 而非 conv.list：滚动容器只渲染历史分组，置顶项不计入其内容高度）
+watch(
+  () => historyConvs.value.length,
+  () => {
+    nextTick(() => {
+      const el = convListRef.value
+      if (!el || !conv.hasMore || conv.loadingMore) return
+      if (el.scrollHeight <= el.clientHeight) loadMoreConversations()
+    })
+  }
+)
+
 const connText = computed(() => ({ open: '● 已连接', connecting: '○ 连接中…', reconnecting: '○ 重连中…', closed: '○ 未连接' }[socketState.status] || '○ 未连接'))
 const connClass = computed(() => socketState.status === 'open' ? 'online' : 'offline')
 
@@ -366,6 +429,36 @@ function scrollBottom() {
   })
 }
 
+// ---------- 深度思考区域：内部滚轮滚动状态 ----------
+// 每条消息的深度思考内容 DOM（限高后可滚动），用于流式期间自动跟随到底部
+const reasoningEls = new Map()
+// 用户手动上翻过的消息 id：暂停自动跟随，回到底部后恢复
+const reasoningUnpinned = new Set()
+
+function setReasoningEl(id, el) {
+  if (el) reasoningEls.set(id, el)
+  else reasoningEls.delete(id)
+}
+
+function isReasoningNearBottom(el) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 40
+}
+
+function onReasoningScroll(m, e) {
+  if (isReasoningNearBottom(e.target)) reasoningUnpinned.delete(m.id)
+  else reasoningUnpinned.add(m.id)
+}
+
+// 流式思考中：让限高的深度思考区域自动滚到最新内容
+function followReasoning() {
+  for (const m of messages.value) {
+    if (!m.thinking) continue
+    const el = reasoningEls.get(m.id)
+    if (!el || reasoningUnpinned.has(m.id)) continue
+    el.scrollTop = el.scrollHeight
+  }
+}
+
 // 浮动按钮点击：回到底部并恢复自动滚动
 function onBackToBottom() {
   forceScrollBottom()
@@ -373,12 +466,23 @@ function onBackToBottom() {
 
 // 流式内容变化时自动滚动到底部（仅在本组件挂载期间生效）
 watch(
-  () => messages.reduce((n, m) => n + (m.content?.length || 0) + (m.reasoning?.length || 0), 0),
-  scrollBottom
+  () => messages.value.reduce((n, m) => n + (m.content?.length || 0) + (m.reasoning?.length || 0), 0),
+  () => {
+    scrollBottom()
+    nextTick(followReasoning)
+  }
 )
 
 function isAssistant(m) {
   return m.role === 'assistant'
+}
+
+// 子 agent 来源标识：来自后端 chat.delta 帧的 agent 字段（dsh 工具经 runner 的
+// custom 分支带出），仅用于展示文案，未知来源回退为原样显示 id
+const SUB_AGENT_LABELS = { dsh: 'DeepSeek Harness' }
+
+function agentLabel(id) {
+  return SUB_AGENT_LABELS[id] || id
 }
 
 // ---------- 语音朗读（TTS） ----------
@@ -634,27 +738,26 @@ onMounted(() => {
 .conv-panel { width: 176px; min-width: 176px; display: flex; flex-direction: column; border-right: 1px solid #334155; background: #172033; padding: 8px; gap: 6px; }
 .conv-new { width: 100%; height: 32px; align-self: auto; flex-shrink: 0; font-size: 13px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; font-weight: 600; }
 .conv-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-.conv-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s; }
-.conv-item:hover { background: #273449; }
-.conv-item.active { background: #4f46e533; outline: 1px solid #6366f1; }
-.conv-item-main { flex: 1; min-width: 0; }
-.conv-title { font-size: 12.5px; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.conv-time { font-size: 10px; color: #64748b; margin-top: 1px; }
-.conv-actions { display: none; flex-shrink: 0; gap: 2px; }
-.conv-item:hover .conv-actions { display: flex; }
-.conv-action-btn { border: none; background: transparent; color: #94a3b8; cursor: pointer; font-size: 12px; padding: 4px; border-radius: 4px; }
-.conv-action-btn:hover { background: #334155; color: #e2e8f0; }
-.conv-action-btn.del:hover { color: #f87171; }
-.conv-rename-input { flex: 1; min-width: 0; background: #0f172a; border: 1px solid #6366f1; border-radius: 6px; color: #e2e8f0; padding: 4px 8px; font-size: 13px; font-family: inherit; }
-.conv-rename-input:focus { outline: none; }
+/* 置顶分组：常驻侧栏顶部，不参与历史列表滚动；置顶过多时自身可滚动并夹在 45% 高度内 */
+.conv-pinned-group { flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; max-height: 45%; padding-bottom: 4px; border-bottom: 1px dashed #334155; }
+.conv-pinned-list { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+/* 分组标题（📌 置顶 / 历史对话） */
+.conv-group-title { flex-shrink: 0; padding: 2px 6px; color: #64748b; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; user-select: none; }
 .conv-empty { text-align: center; color: #64748b; font-size: 13px; margin-top: 20px; }
+/* 会话行（.conv-item 及内部元素）样式在 ConversationItem.vue 内，两处分组共用同一行渲染 */
+/* 会话列表底部"加载更多"提示（无限滚动） */
+.conv-more-hint { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 0; color: #64748b; font-size: 12px; }
+.conv-more-hint.clickable { cursor: pointer; transition: color 0.15s; }
+.conv-more-hint.clickable:hover { color: #94a3b8; }
+.conv-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #64748b; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
 /* 窄屏折叠侧栏 */
 @media (max-width: 900px) {
   .conv-panel { width: 48px; min-width: 48px; padding: 8px 4px; }
   .conv-panel .conv-new { font-size: 0; padding: 0; }
   .conv-panel .conv-new::before { content: '＋'; font-size: 18px; }
-  .conv-item-main, .conv-actions { display: none; }
-  .conv-item::before { content: '💬'; font-size: 14px; }
+  /* 只显示图标：分组标题/分隔线省略，置顶项由行内 📌 图标区分 */
+  .conv-group-title { display: none; }
+  .conv-pinned-group { max-height: 50%; padding-bottom: 0; border-bottom: none; }
 }
 
 .msg-list { flex: 1; overflow-y: auto; padding: 16px 20px; padding-bottom: 100px; }
@@ -678,6 +781,38 @@ onMounted(() => {
 .msg-content { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 10px 14px; color: #e2e8f0; white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 .msg-content.md-mode { white-space: normal; }
 .msg.user .msg-content { background: #4338ca; border-color: #4f46e5; }
+/* 子 agent（dsh / DeepSeek Harness）产出的段落：整体做成嵌套「引用面板」，
+   渐变强调底 + 紫色左侧竖线 + 头部来源标签，与主 agent 正文形成明显视觉区分 */
+.msg-segment.sub-agent {
+  position: relative;
+  margin: 10px 0;
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  border-left: 3px solid #8b5cf6;
+  border-radius: 10px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 0 0, rgba(139, 92, 246, 0.16), transparent 62%),
+    linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(139, 92, 246, 0.05));
+}
+/* 头部：图标 + 「子 Agent」胶囊徽章 + 来源名称，底部分隔虚线 */
+.sub-agent-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  background: linear-gradient(90deg, rgba(99, 102, 241, 0.28), rgba(99, 102, 241, 0.03));
+  border-bottom: 1px dashed rgba(129, 140, 248, 0.35);
+  font-size: 12px; color: #c7d2fe;
+}
+.sub-agent-avatar { font-size: 13px; line-height: 1; }
+.sub-agent-badge {
+  display: inline-flex; align-items: center;
+  padding: 1px 7px; border-radius: 999px;
+  background: rgba(139, 92, 246, 0.32);
+  color: #e9d5ff; font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+}
+.sub-agent-name { color: #a5b4fc; font-weight: 600; }
+.sub-agent-body { padding: 8px 12px; }
+.sub-agent-body > .markdown-body > :first-child { margin-top: 0; }
+.sub-agent-body > .markdown-body > :last-child { margin-bottom: 0; }
 .cursor { animation: blink 0.8s infinite; }
 .cursor-at-end { display: inline-block; margin-left: 4px; vertical-align: middle; }
 @keyframes blink { 50% { opacity: 0; } }
@@ -692,7 +827,7 @@ onMounted(() => {
 .reasoning-summary::before { content: '▶'; font-size: 10px; transition: transform 0.2s; }
 details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .thinking-dot { color: #6366f1; animation: blink 1s infinite; margin-left: 2px; }
-.reasoning-content { padding: 0 14px 10px 14px; color: #64748b; font-size: 13px; font-style: italic; white-space: pre-wrap; word-break: break-word; line-height: 1.5; border-top: 1px dashed #334155; padding-top: 8px; }
+.reasoning-content { padding: 0 14px 10px 14px; color: #64748b; font-size: 13px; font-style: italic; white-space: pre-wrap; word-break: break-word; line-height: 1.5; border-top: 1px dashed #334155; padding-top: 8px; max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
 
 /* 消息操作条（豆包风格：无边框图标按钮，hover 浅底） */
 .msg-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin-top: 6px; }

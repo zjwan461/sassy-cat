@@ -15,9 +15,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 配置系统
   getConfig: () => ipcRenderer.invoke('config:get'),
+  // 模板层默认值（只读）：设置页「恢复默认」按钮取内置默认文本用
+  getConfigTemplate: () => ipcRenderer.invoke('config:get-template'),
   setConfig: (path, value) => ipcRenderer.invoke('config:set', { path, value }),
   setConfigMany: (patches) => ipcRenderer.invoke('config:set-many', patches),
   getRawProfileKey: (profileName) => ipcRenderer.invoke('config:get-raw-profile-key', profileName),
+  // dsh 子代理独立 LLM 的 apiKey（未掩码）
+  getRawDshKey: () => ipcRenderer.invoke('config:get-raw-dsh-key'),
 
   // Agent 服务信息
   getAgentInfo: () => ipcRenderer.invoke('get-agent-info'),

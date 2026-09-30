@@ -110,7 +110,31 @@ async def main():
     assert await c.active_id() in [x["id"] for x in await c.list_sorted()], await c.active_id()
     assert await _active_meta() == await c.active_id()  # 悬空值已被修复持久化
 
-    # 11. 旧 conversations.json 导入 seed：表为空时导入并归档
+    # 11. 置顶：列表置顶优先（置顶组内按置顶时间倒序）、取消置顶复位、不动 updatedAt
+    pa = await c.create("置顶甲")
+    pb = await c.create("置顶乙")
+    assert (await c.get(pa["id"]))["pinned"] is False
+    assert (await c.get(pa["id"]))["pinnedAt"] is None
+    before_updated = (await c.get(pa["id"]))["updatedAt"]
+    await c.set_pinned(pa["id"], True)
+    assert (await c.get(pa["id"]))["updatedAt"] == before_updated  # 置顶不顶乱历史排序
+    time.sleep(0.01)  # 保证置顶时间戳可区分（毫秒级）
+    await c.set_pinned(pb["id"], True)  # 后置顶的排在更前面
+    items, total = await c.list_page(1, 5)
+    assert [x["id"] for x in items[:2]] == [pb["id"], pa["id"]], [x["id"] for x in items[:2]]
+    assert items[0]["pinned"] is True and items[0]["pinnedAt"] > items[1]["pinnedAt"]
+    assert total == len(await c.list_sorted()) and (await c.list_sorted())[0]["id"] == pb["id"]
+    # 取消置顶：pinned/pinnedAt 复位，回到普通排序（置顶位由 pa 占据）
+    await c.set_pinned(pb["id"], False)
+    got = await c.get(pb["id"])
+    assert got["pinned"] is False and got["pinnedAt"] is None
+    assert (await c.list_page(1, 5))[0][0]["id"] == pa["id"]
+    # 不存在的会话
+    assert await c.set_pinned("conv-nonexist", True) is None
+    for x in (pa, pb):
+        await c.delete(x["id"])
+
+    # 12. 旧 conversations.json 导入 seed：表为空时导入并归档
     await close_db()
     legacy = {
         "version": 1,
@@ -137,7 +161,7 @@ async def main():
     assert os.path.isfile(paths.data_path("conversations.json.imported.bak"))
 
     await close_db()
-    print("ALL PASS (11/11)")
+    print("ALL PASS (12/12)")
 
 
 if __name__ == "__main__":
