@@ -1,0 +1,19 @@
+{
+  "version": "2.0",
+  "frameWidth": 120,
+  "frameHeight": 110,
+  "animations": {
+    "idle": { "frames": 8, "fps": 4, "loop": true },
+    "idle_happy": { "frames": 8, "fps": 6, "loop": true },
+    "idle_annoyed": { "frames": 6, "fps": 8, "loop": false },
+    "idle_dizzy": { "frames": 8, "fps": 10, "loop": true },
+    "idle_purring": { "frames": 8, "fps": 6, "loop": true },
+    "walk": { "frames": 12, "fps": 12, "loop": true },
+    "walk_happy": { "frames": 12, "fps": 12, "loop": true },
+    "react": { "frames": 6, "fps": 10, "loop": false },
+    "sleep": { "frames": 4, "fps": 2, "loop": true },
+    "talk": { "frames": 8, "fps": 8, "loop": true },
+    "think": { "frames": 6, "fps": 3, "loop": true },
+    "remind": { "frames": 8, "fps": 8, "loop": true }
+  }
+}

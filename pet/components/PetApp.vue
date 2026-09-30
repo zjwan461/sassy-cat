@@ -28,70 +28,23 @@
       </div>
     </div>
 
-    <!-- 桌宠本体：程序生成 SVG + CSS 关键帧（一期占位，接口兼容后续 spritesheet 替换） -->
+    <!-- 桌宠本体：统一渲染入口（SVG / spritesheet 由 PetSprite 按 currentRenderer 切换） -->
     <div
       ref="spriteRef"
       class="pet-sprite"
-      :class="[state, { flip: facingLeft, happy: mood === 'happy', annoyed: mood === 'annoyed', dizzy: mood === 'dizzy' }]"
+      :class="{ flip: facingLeft, spritesheet: isSpritesheet }"
       @mousedown="onMouseDown"
       @click="onClick"
       @contextmenu.prevent="onContextMenu"
       @wheel.prevent="onWheel"
     >
-      <svg viewBox="0 0 120 110" width="120" height="110">
-        <path :d="tailPath" fill="none" stroke="#334155" stroke-width="8" stroke-linecap="round"/>
-        <ellipse cx="60" cy="76" rx="34" ry="26" fill="#64748b"/>
-        <path d="M36 38 L44 16 L56 34 Z" fill="#64748b"/>
-        <path d="M84 38 L76 16 L64 34 Z" fill="#64748b"/>
-        <path d="M40 33 L45 21 L51 31 Z" fill="#f9a8d4"/>
-        <path d="M80 33 L75 21 L69 31 Z" fill="#f9a8d4"/>
-        <circle cx="60" cy="46" r="26" fill="#64748b"/>
-        <!-- 表情：开心（眯眼笑） -->
-        <template v-if="mood === 'happy'">
-          <path d="M46 42 q6 -4 12 0" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
-          <path d="M62 42 q6 -4 12 0" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
-          <path d="M52 54 q8 6 16 0" stroke="#1e293b" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-        </template>
-        <!-- 表情：不满（斜眼） -->
-        <template v-else-if="mood === 'annoyed'">
-          <path d="M46 40 l12 4" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
-          <path d="M74 40 l-12 4" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
-          <circle cx="51" cy="45" r="3" fill="#1e293b"/>
-          <circle cx="69" cy="45" r="3" fill="#1e293b"/>
-          <path d="M54 56 q6 -2 12 0" stroke="#1e293b" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-        </template>
-        <!-- 表情：头晕（螺旋眼） -->
-        <template v-else-if="mood === 'dizzy'">
-          <path d="M48 42 q3 -3 6 0 q3 3 6 0" stroke="#1e293b" stroke-width="2" fill="none" stroke-linecap="round" class="spin-eye"/>
-          <path d="M64 42 q3 -3 6 0 q3 3 6 0" stroke="#1e293b" stroke-width="2" fill="none" stroke-linecap="round" class="spin-eye"/>
-          <path d="M55 55 q5 3 10 0" stroke="#1e293b" stroke-width="2" fill="none" stroke-linecap="round"/>
-        </template>
-        <!-- 表情：撸猫中（享受） -->
-        <template v-else-if="mood === 'purring'">
-          <path d="M46 44 q6 5 12 0" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
-          <path d="M62 44 q6 5 12 0" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
-          <path d="M53 54 q7 5 14 0" stroke="#1e293b" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-          <text x="88" y="30" font-size="10" fill="#f472b6" class="float-heart">♥</text>
-        </template>
-        <!-- 默认表情 -->
-        <template v-else-if="eyesClosed">
-          <path d="M46 44 q6 5 12 0" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
-          <path d="M62 44 q6 5 12 0" stroke="#1e293b" stroke-width="3" fill="none" stroke-linecap="round"/>
-        </template>
-        <template v-else>
-          <circle cx="51" cy="43" r="4" fill="#1e293b"/>
-          <circle cx="69" cy="43" r="4" fill="#1e293b"/>
-          <circle cx="52.5" cy="41.5" r="1.4" fill="#fff"/>
-          <circle cx="70.5" cy="41.5" r="1.4" fill="#fff"/>
-        </template>
-        <path v-if="state === 'talk' && mood !== 'happy' && mood !== 'annoyed' && mood !== 'dizzy' && mood !== 'purring'" d="M55 54 q5 6 10 0 q-5 8 -10 0" fill="#be185d"/>
-        <path v-else-if="mood !== 'happy' && mood !== 'annoyed' && mood !== 'dizzy' && mood !== 'purring'" d="M55 54 q5 4 10 0" stroke="#1e293b" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-        <path d="M30 48 h12 M31 55 l11 -3 M90 48 h-12 M89 55 l-11 -3" stroke="#1e293b" stroke-width="1.6" stroke-linecap="round"/>
-        <text v-if="state === 'think'" x="90" y="16" font-size="16" fill="#a5b4fc" class="float-q">?</text>
-        <text v-if="state === 'sleep'" x="86" y="18" font-size="13" fill="#94a3b8" class="float-q">z z z</text>
-        <!-- 长按撸猫提示 -->
-        <text v-if="longPressing && mood !== 'purring'" x="50" y="12" font-size="10" fill="#fbbf24" class="float-q">喵~</text>
-      </svg>
+      <PetSprite
+        :state="state"
+        :mood="mood"
+        :facing-left="facingLeft"
+        @complete="onAnimComplete"
+      />
+      <SpriteOverlay :state="state" :mood="mood" :long-pressing="longPressing" />
     </div>
   </div>
 </template>
@@ -99,6 +52,11 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useAgentSocket, setClient } from '../../src/composables/useAgentSocket'
+import PetSprite from './sprite/PetSprite.vue'
+import SpriteOverlay from './sprite/SpriteOverlay.vue'
+import { currentRenderer, RENDERER_SPRITESHEET } from './sprite/config'
+import { fallbackToSvg } from './sprite/loadState'
+import { useSpritePreload } from './sprite/useSpritePreload'
 
 const { state: sock, connect, send, on, setPort } = useAgentSocket()
 setClient('pet')
@@ -124,7 +82,6 @@ const bubbleHovered = ref(false)
 const inputOpen = ref(false)
 const quickDraft = ref('')
 const facingLeft = ref(false)
-const frameIdx = ref(0)
 const spriteRef = ref(null)
 const quickInputRef = ref(null)
 const bubbleWrapRef = ref(null)
@@ -149,16 +106,13 @@ let longPressTimer = null
 let moodTimer = null
 let clickTimer = null
 
-// ---------- 帧驱动 ----------
-const eyesClosed = computed(() => {
-  if (state.value === 'sleep') return true
-  return frameIdx.value % 8 === 6 // 周期眨眼
-})
-const tailPath = computed(() => {
-  // 尾巴轻微摆动
-  const w = Math.sin(frameIdx.value * 0.9) * 12
-  return `M92 84 q20 ${-8 + w} ${16 + w * 0.4} -26`
-})
+// ---------- 渲染器选择 ----------
+// spritesheet 模式下关闭派生动效类（帧内已含动作，避免帧动画 + CSS 动画双重叠加）
+const isSpritesheet = computed(() => currentRenderer.value === RENDERER_SPRITESHEET)
+
+// 非循环动画（react 等）播放完成的契约回调：
+// 状态回退兜底已由 setState(holdMs) 的定时器负责，此处仅保留事件接线位
+function onAnimComplete() {}
 
 // ---------- 状态机 ----------
 function setState(s, holdMs = 0) {
@@ -522,11 +476,20 @@ function onDocMouseMove(e) {
 }
 
 // ---------- 生命周期 ----------
-onMounted(() => {
-  timers.tick = setInterval(() => { frameIdx.value++ }, 220)
+onMounted(async () => {
   setState('idle')
   scheduleNext()
   document.addEventListener('mousemove', onDocMouseMove)
+
+  // 预加载分级：仅在 spritesheet 渲染器下预载位图（SVG 模式无需）；
+  // 任一资源加载失败 -> 自动降级回 SVG（响应式，组件自动重渲染）
+  if (currentRenderer.value === RENDERER_SPRITESHEET) {
+    try { await useSpritePreload().preload() }
+    catch (err) { fallbackToSvg('spritesheet preload failed: ' + (err && err.message)) }
+  }
+  // 空闲时加载 P1 低频资源（失败忽略，不影响主流程）
+  const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 1200))
+  idle(() => { useSpritePreload().preloadLazy().catch(() => {}) })
 
   if (window.petAPI) {
     window.petAPI.onActivityPing((data) => {
@@ -627,30 +590,14 @@ onBeforeUnmount(() => {
   cursor: grab; filter: drop-shadow(0 4px 8px rgba(0,0,0,.35));
 }
 .pet-sprite.drag { cursor: grabbing; }
-.pet-sprite.walk svg { animation: bob .44s infinite; }
-.pet-sprite.idle svg { animation: breathe 2.6s ease-in-out infinite; }
-.pet-sprite.react svg { animation: bounce .3s 2; }
-.pet-sprite.remind svg { animation: wiggle .35s 4; }
-.pet-sprite.talk svg { animation: bob .3s infinite; }
-.pet-sprite.think svg { animation: breathe 1.6s ease-in-out infinite; }
-.pet-sprite.sleep svg { animation: breathe 4s ease-in-out infinite; }
 .pet-sprite.flip { transform: translateX(-50%) scaleX(-1); }
-.pet-sprite.happy svg { animation: purr .5s ease-in-out infinite; }
-.pet-sprite.annoyed svg { animation: shake .3s 2; }
-.pet-sprite.dizzy svg { animation: sway .6s ease-in-out infinite; }
-@keyframes bob { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-4px) } }
-@keyframes breathe { 0%,100% { transform: scale(1,1) } 50% { transform: scale(1.02,.98) } }
-@keyframes bounce { 0%,100% { transform: translateY(0) } 40% { transform: translateY(-10px) } }
-@keyframes wiggle { 0%,100% { transform: rotate(0) } 25% { transform: rotate(-6deg) } 75% { transform: rotate(6deg) } }
-@keyframes purr { 0%,100% { transform: scale(1,1) } 50% { transform: scale(1.04,.96) } }
-@keyframes shake { 0%,100% { transform: translateX(0) } 25% { transform: translateX(-3px) } 75% { transform: translateX(3px) } }
-@keyframes sway { 0%,100% { transform: rotate(0) } 25% { transform: rotate(-8deg) } 75% { transform: rotate(8deg) } }
-.float-q { animation: floatq 1.2s ease-in-out infinite; }
-@keyframes floatq { 0%,100% { opacity: .5 } 50% { opacity: 1 } }
-.float-heart { animation: floatHeart 1.4s ease-in-out infinite; }
-@keyframes floatHeart { 0%,100% { opacity: .4; transform: translateY(0) } 50% { opacity: 1; transform: translateY(-4px) } }
-.spin-eye { animation: spinEye 0.6s linear infinite; transform-origin: center; }
-@keyframes spinEye { 0% { transform: rotate(0deg) } 100% { transform: rotate(360deg) } }
+/* 说明：状态/心情的 CSS 关键帧动画与 overlay 动效已内聚到对应渲染器组件
+   （见 sprite/SvgSpriteRenderer.vue、sprite/SpriteOverlay.vue），
+   避免 scoped 样式跨组件穿透问题，并使动画作用于 svg 元素而非持有
+   translateX(-50%) 的容器（防止水平居中 transform 被动画覆盖）。 */
+/* spritesheet 模式下禁用派生 CSS 动画（帧内已含动作）——防御性兜底 */
+.pet-sprite.spritesheet svg,
+.pet-sprite.spritesheet .css-sprite { animation: none !important; }
 
 .bubble-wrap { position: absolute; bottom: 118px; left: 50%; transform: translateX(-50%); width: 280px; z-index: 10; }
 .bubble {
