@@ -160,7 +160,11 @@
               </button>
             </div>
             <!-- 工具步骤条：放在气泡下方，避免新消息把正文顶走（默认折叠） -->
-            <details v-if="m.tools && m.tools.length" class="tool-steps-wrapper">
+            <details
+              v-if="m.tools && m.tools.length"
+              class="tool-steps-wrapper"
+              @toggle="onToolStepsToggle(m, $event)"
+            >
               <summary class="tool-steps-summary">
                 🛠️ 工具调用（{{ m.tools.length }}）
                 <span class="tool-steps-arrow">▶</span>
@@ -169,7 +173,13 @@
                 <div v-for="(t, i) in m.tools" :key="i" class="tool-step">
                   🐟 本喵正在叼小鱼干：<b>{{ t.name }}</b>
                   <span v-if="t.done" class="tool-done" :class="{ failed: t.status === 'error' }">{{ t.status === 'error' ? '✕' : '✓' }}</span>
-                  <pre v-if="t.args" class="tool-args">{{ t.args }}</pre>
+                  <!-- 参数流式写入期间：限高区域内自动跟随到最新一行（用户手动上翻后暂停，折叠时不滚动） -->
+                  <pre
+                    v-if="t.args"
+                    class="tool-args"
+                    :ref="(el) => setToolArgsEl(toolArgKey(m, i), el)"
+                    @scroll="onToolArgsScroll(toolArgKey(m, i), $event)"
+                  >{{ t.args }}</pre>
                   <!-- 历史回填的工具结果（实时流无 result 字段，自然不显示） -->
                   <details v-if="t.result" class="tool-result">
                     <summary class="tool-result-summary">执行结果</summary>
@@ -482,17 +492,84 @@ function followReasoning() {
   }
 }
 
+// ---------- 工具参数区域：内部滚轮滚动状态 ----------
+// 各工具步骤的参数块 DOM（限高后可滚动），key = `${msgId}:${步骤下标}`
+const toolArgsEls = new Map()
+// 用户手动上翻过的参数块：暂停自动跟随，回到底部后恢复
+const toolArgsUnpinned = new Set()
+
+function toolArgKey(m, i) {
+  return `${m.id}:${i}`
+}
+
+function setToolArgsEl(key, el) {
+  if (el) toolArgsEls.set(key, el)
+  else toolArgsEls.delete(key)
+}
+
+function onToolArgsScroll(key, e) {
+  const el = e.target
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) toolArgsUnpinned.delete(key)
+  else toolArgsUnpinned.add(key)
+}
+
+// 让某个工具参数块滚到最新一行：用户手动上翻过的默认不强制（force 时强制），
+// 折叠状态（未渲染，clientHeight 为 0）时不滚动
+function scrollToolArgsToBottom(key, force = false) {
+  if (!force && toolArgsUnpinned.has(key)) return
+  const el = toolArgsEls.get(key)
+  if (!el || el.clientHeight === 0) return
+  el.scrollTop = el.scrollHeight
+}
+
+// 参数仍在流式写入：把该步骤的参数块自动滚到最新，能实时看到正在写入的内容
+// （只跟随最后一个未完成步骤，已完成步骤保留用户自己的阅读位置）
+function followToolArgs() {
+  for (const m of messages.value) {
+    if (!m.tools || !m.tools.length) continue
+    for (let i = m.tools.length - 1; i >= 0; i--) {
+      if (m.tools[i].done) continue
+      scrollToolArgsToBottom(toolArgKey(m, i))
+      break
+    }
+  }
+}
+
+// 展开工具步骤条时，直接把参数块定位到最新写入位置
+function onToolStepsToggle(m, e) {
+  if (!e.target.open || !m.tools) return
+  nextTick(() => {
+    m.tools.forEach((t, i) => {
+      const key = toolArgKey(m, i)
+      toolArgsUnpinned.delete(key)
+      scrollToolArgsToBottom(key, true)
+    })
+  })
+}
+
 // 浮动按钮点击：回到底部并恢复自动滚动
 function onBackToBottom() {
   forceScrollBottom()
 }
 
-// 流式内容变化时自动滚动到底部（仅在本组件挂载期间生效）
+// 本消息工具参数已写入的字符数：参数流式增量不改变 content/reasoning，
+// 需单独计入才能触发下方的跟随滚动
+function toolArgsLength(m) {
+  return (m.tools || []).reduce((n, t) => n + (t.args?.length || 0), 0)
+}
+
+// 流式内容（正文/思考/工具参数）变化时自动滚动到底部（仅在本组件挂载期间生效）
 watch(
-  () => messages.value.reduce((n, m) => n + (m.content?.length || 0) + (m.reasoning?.length || 0), 0),
+  () => messages.value.reduce(
+    (n, m) => n + (m.content?.length || 0) + (m.reasoning?.length || 0) + toolArgsLength(m),
+    0
+  ),
   () => {
     scrollBottom()
-    nextTick(followReasoning)
+    nextTick(() => {
+      followReasoning()
+      followToolArgs()
+    })
   }
 )
 
