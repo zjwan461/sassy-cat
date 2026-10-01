@@ -238,15 +238,14 @@ function ensureStarted() {
   on('agent.reasoning', (p) => {
     const m = findMessage(p.msgId)
     if (!m || m.stopped) return
-    m.reasoning = (m.reasoning || '') + (p.text || '')
-    // 思考阶段进行中（chat.started 已点亮 thinking，如中断续跑场景）时保持展开；
-    // 否则沿用正文守卫：一旦消息已开始输出正文，reasoning 只静默追加，
-    // 不再点亮"思考中"或展开思考区
-    if (!m.content || m.thinking) {
+    const text = p.text || ''
+    m.reasoning = (m.reasoning || '') + text
+    // 只要有新的思考内容产出，就点亮"思考中"并自动展开深度思考区：
+    // 工具续跑、中断续跑等"已有正文后再次思考"的场景同样要展开，
+    // 否则用户看不到新产出的思考内容
+    if (text) {
       m.thinking = true
-    } else {
-      m.thinking = false
-      m.reasoningOpen = false
+      m.reasoningOpen = true
     }
   })
   on('chat.completed', (p) => {

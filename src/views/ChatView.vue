@@ -80,7 +80,13 @@
           <div class="msg-avatar">{{ m.role === 'user' ? '🧑' : '🐱' }}</div>
           <div class="msg-body">
             <!-- 深度思考区域：可折叠，仅在有助手消息且存在 reasoning 内容时显示 -->
-            <details v-if="m.reasoning" class="reasoning-block" :open="m.reasoningOpen">
+            <!-- 有新的思考输出时由状态自动展开（open 单向绑定，需靠 toggle 回收用户的折叠动作） -->
+            <details
+              v-if="m.reasoning"
+              class="reasoning-block"
+              :open="m.reasoningOpen"
+              @toggle="onReasoningToggle(m, $event)"
+            >
               <summary class="reasoning-summary">💭 深度思考<span v-if="m.thinking" class="thinking-dot">…</span></summary>
               <!-- 深度思考内容限高并支持滚轮滚动；流式期间自动跟随到底部（用户手动上翻后暂停） -->
               <div
@@ -449,13 +455,30 @@ function onReasoningScroll(m, e) {
   else reasoningUnpinned.add(m.id)
 }
 
+// 让某条消息的深度思考内容滚到最新处（用户手动上翻过的消息默认不强制，除非 force）
+function scrollReasoningToBottom(id, force = false) {
+  if (!force && reasoningUnpinned.has(id)) return
+  const el = reasoningEls.get(id)
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+// <details> 的 open 只是单向绑定：用户手动折叠的 DOM 状态必须写回 m.reasoningOpen，
+// 否则状态恒为 true 时再次置 true 不产生变更，"有新思考就自动展开"会失效
+function onReasoningToggle(m, e) {
+  const open = e.target.open
+  if (m.reasoningOpen !== open) m.reasoningOpen = open
+  // 展开瞬间直接定位到最新内容（此时元素刚变为可见，需等 DOM 更新完成）
+  if (open) {
+    reasoningUnpinned.delete(m.id)
+    nextTick(() => scrollReasoningToBottom(m.id, true))
+  }
+}
+
 // 流式思考中：让限高的深度思考区域自动滚到最新内容
 function followReasoning() {
   for (const m of messages.value) {
     if (!m.thinking) continue
-    const el = reasoningEls.get(m.id)
-    if (!el || reasoningUnpinned.has(m.id)) continue
-    el.scrollTop = el.scrollHeight
+    scrollReasoningToBottom(m.id)
   }
 }
 
