@@ -68,6 +68,10 @@
       {
         "from": "assets",
         "to": "assets"
+      },
+      {
+        "from": "runtime/skills",
+        "to": "runtime/skills"
       }
     ],
     "win": {
