@@ -130,7 +130,7 @@ class AgentHolder:
         interrupt_on = cfg.get("agent.interruptOn") or {}
         # 共享持久层单例：未显式 init_db 时惰性初始化（如 CLI 调试入口）
         agent = create_deep_agent(
-            name="SassyCat",
+            # name="SassyCat", # 加上这个本地ninfer会报错
             model=llm,
             skills=["/skills"],
             tools=[

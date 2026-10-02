@@ -125,6 +125,33 @@ class RecordingSMTP:
         return False
 
 
+class FakeIMAPMark(FakeIMAP):
+    """支持 SEARCH / FETCH(FLAGS+HEADER) / STORE 的替身，用于 mark 子命令。"""
+    seen_map: dict = {}        # uid -> 是否已读
+    search_result: bytes = b""
+
+    def uid(self, *args):
+        self.calls.append(("uid",) + args)
+        cmd = args[0]
+        if cmd == "SEARCH":
+            return "OK", [self.search_result]
+        if cmd == "FETCH":
+            uid = args[1].decode() if isinstance(args[1], bytes) else str(args[1])
+            flag = "\\Seen" if self.seen_map.get(uid) else ""
+            head = (f'Subject: t{uid}\r\nFrom: f{uid}@example.com\r\n'
+                    f'To: me@example.com\r\nDate: Mon, 01 Sep 2026 10:00:00 +0800\r\n'
+                    f'Message-ID: <m{uid}@x>\r\n\r\n').encode()
+            return "OK", [(f'1 (UID {uid} FLAGS ({flag}) RFC822.HEADER {{{len(head)}}})'.encode(), head), b")"]
+        if cmd == "STORE":
+            # IMAP 允许 "1,3" 这种逗号集合，替身要按集合展开
+            uidset = (args[1].decode() if isinstance(args[1], bytes) else str(args[1]))
+            value = True if "+FLAGS" in args else False
+            for uid in uidset.split(","):
+                self.seen_map[uid] = value
+            return "OK", [b"1 (UID %s FLAGS (\\Seen))" % uidset.encode()]
+        return "OK", [b""]
+
+
 class NetworkTripwire:
     """测试期间的网络断路开关：任何真实 socket 连接都直接抛错。
 
@@ -552,7 +579,7 @@ class TestHelpers(BaseCase):
 # ---------------------------------------------------------------- CLI 接线
 class TestCLI(BaseCase):
     ALL_CMDS = ["config", "test", "folders", "list", "search", "read", "send",
-                "reply", "forward", "drafts"]
+                "reply", "forward", "drafts", "mark"]
 
     def test_config_roundtrip_and_permissions(self):
         with tempfile.TemporaryDirectory() as d:
@@ -624,6 +651,122 @@ class TestCLI(BaseCase):
         self.assertEqual(mod.decode_mime(raw), "测试主旨")
         self.assertEqual(mod.decode_mime("Plain ASCII"), "Plain ASCII")
         self.assertEqual(mod.decode_mime(""), "")
+
+
+# ---------------------------------------------------------------- 标记已读/未读
+class TestMark(BaseCase):
+    def setUp(self):
+        super().setUp()
+        # 每个用例一套干净的邮箱状态
+        self.seen = {"1": False, "2": True, "3": False}
+        FakeIMAPMark.seen_map = dict(self.seen)
+        FakeIMAPMark.search_result = b"1 2 3"
+        self._imap_cls = mod.imaplib.IMAP4_SSL
+        mod.imaplib.IMAP4_SSL = FakeIMAPMark
+
+    def tearDown(self):
+        mod.imaplib.IMAP4_SSL = self._imap_cls
+        super().tearDown()
+
+    def stores(self):
+        return [c for c in FakeIMAPMark.instances for c in c.calls if c[0] == "uid" and c[1] == "STORE"]
+
+    def test_mark_without_confirm_is_blocked(self):
+        """核心红线：不带 --confirm 绝不改动邮箱状态。"""
+        code, out = self.run_cli(self.base("mark", "--uids", "1"))
+        self.assertEqual(code, 1)
+        self.assertIn("未提供用户确认令牌", out["error"])
+        self.assertEqual(self.stores(), [], "没有用户确认竟然改了 flags！")
+
+    def test_dry_run_previews_and_never_stores(self):
+        code, out = self.run_cli(self.base("mark", "--uids", "1", "3", "--dry-run"))
+        self.assertEqual(code, 0)
+        self.assertTrue(out["dry_run"])
+        self.assertEqual(out["action"], "标记为已读")
+        self.assertEqual([m["uid"] for m in out["preview"]], ["1", "3"])
+        self.assertFalse(out["preview"][0]["seen"])
+        self.assertEqual(self.stores(), [], "dry-run 竟然改了 flags")
+
+    def test_confirm_changes_flags_to_seen(self):
+        _, prev = self.run_cli(self.base("mark", "--uids", "1", "3", "--dry-run"))
+        code, out = self.run_cli(self.base("mark", "--uids", "1", "3",
+                                           "--confirm", prev["confirm_token"]))
+        self.assertEqual(code, 0)
+        self.assertEqual(out["changed"], 2)
+        self.assertTrue(FakeIMAPMark.seen_map["1"])
+        self.assertTrue(FakeIMAPMark.seen_map["3"])
+
+    def test_token_invalidated_when_scope_changes(self):
+        """预览的是 UID 1，确认后偷偷改成 UID 2 —— 必须拒绝。"""
+        _, prev = self.run_cli(self.base("mark", "--uids", "1", "--dry-run"))
+        code, out = self.run_cli(self.base("mark", "--uids", "2",
+                                           "--confirm", prev["confirm_token"]))
+        self.assertEqual(code, 1)
+        self.assertIn("不一致", out["error"])
+        self.assertEqual(self.stores(), [])
+
+    def test_unseen_direction_removes_flag(self):
+        _, prev = self.run_cli(self.base("mark", "--uids", "2", "--unseen", "--dry-run"))
+        self.assertEqual(prev["action"], "标记为未读")
+        code, out = self.run_cli(self.base("mark", "--uids", "2", "--unseen",
+                                           "--confirm", prev["confirm_token"]))
+        self.assertEqual(code, 0)
+        self.assertFalse(FakeIMAPMark.seen_map["2"])
+
+    def test_only_changed_skips_already_correct(self):
+        """--only-changed：状态已经正确的邮件不写入。"""
+        _, prev = self.run_cli(self.base("mark", "--uids", "1", "2", "--only-changed", "--dry-run"))
+        code, out = self.run_cli(self.base("mark", "--uids", "1", "2", "--only-changed",
+                                           "--confirm", prev["confirm_token"]))
+        self.assertEqual(code, 0)
+        self.assertEqual(out["changed"], 1, "UID 2 本来就是已读，不该再写一次")
+        self.assertEqual(len(self.stores()), 1)
+
+    def test_default_scope_uses_unseen_on_server(self):
+        self.run_cli(self.base("mark", "--dry-run"))
+        last = FakeIMAPMark.instances[0]
+        searches = [c for c in last.calls if c[0] == "uid" and c[1] == "SEARCH"]
+        self.assertTrue(searches, "默认应走服务端 UNSEEN 搜索")
+        self.assertIn("UNSEEN", searches[0])
+
+    def test_all_flag_switches_search_to_all(self):
+        self.run_cli(self.base("mark", "--all", "--dry-run"))
+        last = FakeIMAPMark.instances[0]
+        searches = [c for c in last.calls if c[0] == "uid" and c[1] == "SEARCH"]
+        self.assertIn("ALL", searches[0])
+
+    def test_filters_build_imap_criteria(self):
+        self.run_cli(self.base("mark", "--since", "2026-09-01", "--before", "2026-09-30",
+                               "--subject", "发票", "--from-addr", "boss@x.com", "--dry-run"))
+        last = FakeIMAPMark.instances[0]
+        crit = " ".join(str(x) for c in last.calls if c[0] == "uid" and c[1] == "SEARCH"
+                        for x in c[3:])
+        self.assertIn("SINCE 01-Sep-2026", crit)
+        self.assertIn("BEFORE 30-Sep-2026", crit)
+        self.assertIn('SUBJECT "发票"', crit)
+        self.assertIn('FROM "boss@x.com"', crit)
+
+    def test_empty_result_noop(self):
+        FakeIMAPMark.search_result = b""
+        code, out = self.run_cli(self.base("mark", "--dry-run"))
+        self.assertEqual(code, 0)
+        self.assertEqual(out["count"], 0)
+
+    def test_store_uses_backslash_seen_flag(self):
+        _, prev = self.run_cli(self.base("mark", "--uids", "1", "--dry-run"))
+        self.run_cli(self.base("mark", "--uids", "1", "--confirm", prev["confirm_token"]))
+        stores = self.stores()
+        self.assertTrue(stores)
+        flat = " ".join(stores[0])
+        self.assertIn("+FLAGS", flat)
+        self.assertIn(r"\Seen", flat)
+
+    def test_mark_wired_with_confirm_flags(self):
+        p = mod.build_parser()
+        ns = p.parse_args(["mark", "--dry-run"])
+        self.assertTrue(ns.dry_run)
+        ns = p.parse_args(["mark", "--confirm", "tok"])
+        self.assertEqual(ns.confirm, "tok")
 
 
 def main():
