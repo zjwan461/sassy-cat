@@ -35,7 +35,7 @@ from agent.tools.reminder_tools import (
 from agent.tools.rag_tools import search_from_kb
 from agent.tools.subagent_tool import call_dsh
 from agent.constant import DB_URL, WORK_DIR
-from agent.middlewares import trim_messages, inject_base_info, inject_kb_info
+from agent.middlewares import trim_messages, inject_metadata, load_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -151,9 +151,11 @@ class AgentHolder:
             checkpointer=get_checkpointer(),
             system_prompt=system_prompt,
             store=get_store(),
-            # 注意顺序：inject_kb_info 必须在 inject_base_info 之后，
-            # 否则 base info 的标记剥离逻辑会丢掉知识库段落
-            middleware=[trim_messages, inject_base_info, inject_kb_info],
+            # load_metadata 带 before_agent，在每次 agent 运行起始时一次性采集并渲染
+            # 运行时元信息（画像/系统/软件/知识库/技能）写入 state；
+            # inject_metadata（wrap_model_call）在每次模型调用前把该块注入 system message，
+            # 不再逐次查库/扫盘。
+            middleware=[trim_messages, inject_metadata, load_metadata],
         )
         return agent
 
