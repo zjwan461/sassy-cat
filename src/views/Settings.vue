@@ -69,6 +69,16 @@
           <span class="hint">模型单次可处理的最大 token 数（含输入+输出），用于上下文压缩的阈值判断；范围 8192~1048576，默认 262144</span>
         </div>
         <div class="field">
+          <label>最大输出 token（maxTokens）</label>
+          <div class="stepper">
+            <button type="button" class="step-btn" @click="step('maxTokens', -1024, MAX_TOKENS_MIN, MAX_TOKENS_MAX)" :disabled="form.maxTokens <= MAX_TOKENS_MIN">−</button>
+            <input type="number" v-model.number="form.maxTokens" :min="MAX_TOKENS_MIN" :max="MAX_TOKENS_MAX" class="step-input"
+              @blur="clamp('maxTokens', MAX_TOKENS_MIN, MAX_TOKENS_MAX, DEFAULT_MAX_TOKENS)" />
+            <button type="button" class="step-btn" @click="step('maxTokens', 1024, MAX_TOKENS_MIN, MAX_TOKENS_MAX)" :disabled="form.maxTokens >= MAX_TOKENS_MAX">+</button>
+          </div>
+          <span class="hint">模型单次回复允许生成的最大 token 数；范围 256~1048576，默认 8192</span>
+        </div>
+        <div class="field">
           <label>额外参数（JSON）</label>
           <textarea v-model="form.extraParamsText" rows="3" class="mono" @input="validateExtra"></textarea>
           <span class="hint" :class="{ bad: extraError }">{{ extraError || '个性化模型参数，例如 {"enable_thinking": true}、{"reasoning_effort": "high"}' }}</span>
@@ -502,6 +512,10 @@ const reminderDurationOptions = [3, 5, 8, 10, 15, 20, 30]
 const DEFAULT_CONTEXT_WINDOW = 262144
 const CONTEXT_WINDOW_MIN = 8192
 const CONTEXT_WINDOW_MAX = 1048576
+// 单次回复最大输出 token（maxTokens）：范围与默认值与 config_loader.DEFAULTS 保持一致
+const DEFAULT_MAX_TOKENS = 8192
+const MAX_TOKENS_MIN = 256
+const MAX_TOKENS_MAX = 1048576
 // dsh 子代理：输出上限（DashScope qwen 系只接受 [1,131072]）与推理强度可选值
 const DSH_MAX_TOKENS_LIMIT = 131072
 const dshReasoningEffortOptions = [
@@ -521,7 +535,7 @@ const interruptTools = [
 ]
 const defaultInterruptOn = () => Object.fromEntries(interruptTools.map((t) => [t.name, true]))
 const form = reactive({
-  provider: 'openai', baseUrl: '', apiKey: '', model: '', temperature: 0.7, contextWindow: DEFAULT_CONTEXT_WINDOW, extraParamsText: '{}',
+  provider: 'openai', baseUrl: '', apiKey: '', model: '', temperature: 0.7, contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS, extraParamsText: '{}',
   persona: '', memoryWindow: 50, recursionLimit: 100, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
   petEnabled: true,
   quickAskShortcut: 'Alt+Shift+Q',
@@ -791,6 +805,8 @@ function fillFormFromProfile() {
   form.temperature = Number.isFinite(Number(p.temperature)) ? Number(p.temperature) : 0.7
   // 上下文窗口：缺省或非法值回退默认值，与 config_loader.DEFAULTS 保持一致
   form.contextWindow = Number.isFinite(Number(p.contextWindow)) ? Number(p.contextWindow) : DEFAULT_CONTEXT_WINDOW
+  // 最大输出 token：缺省或非法值回退默认值，与 config_loader.DEFAULTS 保持一致
+  form.maxTokens = Number.isFinite(Number(p.maxTokens)) ? Number(p.maxTokens) : DEFAULT_MAX_TOKENS
   form.extraParamsText = JSON.stringify(p.extraParams || {}, null, 2)
   keyRevealed.value = false
   validateExtra()
@@ -912,6 +928,7 @@ async function saveAll() {
     { path: `${llmPrefix}.model`, value: form.model.trim() },
     { path: `${llmPrefix}.temperature`, value: Number.isFinite(Number(form.temperature)) ? Number(form.temperature) : 0.7 },
     { path: `${llmPrefix}.contextWindow`, value: Number.isFinite(Number(form.contextWindow)) ? Number(form.contextWindow) : DEFAULT_CONTEXT_WINDOW },
+    { path: `${llmPrefix}.maxTokens`, value: Number.isFinite(Number(form.maxTokens)) ? Number(form.maxTokens) : DEFAULT_MAX_TOKENS },
     { path: `${llmPrefix}.extraParams`, value: JSON.parse(form.extraParamsText || '{}') },
     { path: 'agent.activeProfile', value: activeAgentProfile.value },
     { path: `${agentPrefix}.persona`, value: form.persona },
