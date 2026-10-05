@@ -25,6 +25,7 @@ import imaplib
 import json
 import mimetypes
 import os
+import re
 import smtplib
 import ssl
 import sys
@@ -95,11 +96,11 @@ def load_creds(args) -> dict:
     }
 
 
-def connect_imap(creds: dict, mailbox: str = "INBOX"):
+def connect_imap(creds: dict, mailbox: str = "INBOX", readonly: bool = True):
     imap = imaplib.IMAP4_SSL(creds["imap_host"], IMAP_PORT, ssl_context=ssl.create_default_context())
     imap.login(creds["user"], creds["auth_code"])
     imap._simple_command("ID", '("' + '" "'.join(CLIENT_ID) + '")')  # 网易风控必需
-    imap.select(mailbox, readonly=True)
+    imap.select(mailbox, readonly=readonly)
     return imap
 
 
@@ -643,6 +644,197 @@ def cmd_read(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- 已读/未读标记
+IMAP_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+FLAG_RE = re.compile(rb"FLAGS\s*\(([^)]*)\)")
+STORE_CHUNK = 50  # 单条 UID STORE 命令最多带多少个 UID，避免命令过长被服务端截断
+
+
+def imap_date(date_str: str) -> str:
+    """'YYYY-MM-DD' -> IMAP SINCE/BEFORE 格式 'DD-Mon-YYYY'（月份必须英文缩写）"""
+    y, m, d = (int(x) for x in date_str.split("-"))
+    return f"{d:02d}-{IMAP_MONTHS[m - 1]}-{y}"
+
+
+def _quote_term(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def build_uid_criteria(args) -> str:
+    """把筛选条件拼成 IMAP SEARCH 表达式。
+
+    默认只命中未读（UNSEEN）——标记已读这件事，重复处理已读邮件毫无意义。
+    要覆盖全部邮件请显式传 --all。
+    """
+    parts: list[str] = []
+    if args.since:
+        parts.append("SINCE " + imap_date(args.since))
+    if args.before:
+        parts.append("BEFORE " + imap_date(args.before))
+    if args.subject:
+        parts.append("SUBJECT " + _quote_term(args.subject))
+    if args.from_addr:
+        parts.append("FROM " + _quote_term(args.from_addr))
+    if getattr(args, "mailbox_terms", None):
+        parts.append("MAILBOX " + _quote_term(args.mailbox_terms))
+    parts.append("ALL" if args.all else "UNSEEN")
+    return " ".join(parts)
+
+
+def _seen_of(imap, uid: str) -> bool | None:
+    """读一封邮件的 \Seen 标志；取不到返回 None。
+
+    注意：imaplib 的 FLAGS 出现在响应元组的第一个元素里（不是邮件正文），
+    所以 bytes 与 tuple 两种分片都要扫。
+    """
+    typ, data = imap.uid("FETCH", uid, "(FLAGS)")
+    if typ != "OK" or not data:
+        return None
+    blobs: list[bytes] = []
+    for part in data:
+        if isinstance(part, bytes):
+            blobs.append(part)
+        elif isinstance(part, tuple) and part and isinstance(part[0], bytes):
+            blobs.append(part[0])
+    for blob in blobs:
+        m = FLAG_RE.search(blob)
+        if m:
+            flags = {f.lstrip("\\").lower() for f in m.group(1).decode("ascii", "ignore").split()}
+            return "seen" in flags
+    return None
+
+
+def cmd_mark(args) -> int:
+    """标记已读 / 未读。
+
+    与发信一样是两段式硬闸门：先 --dry-run 预览命中的邮件，用户确认后再带
+    --confirm <token> 才真正写入 flags —— 改邮箱状态同样是不可逆操作。
+    """
+    creds = load_creds(args)
+    if not creds["user"] or not creds["auth_code"]:
+        return fail("缺少账号或授权码：请设置环境变量 NETEASE_EMAIL / NETEASE_AUTH_CODE，或先跑 config 子命令")
+
+    if args.dry_run and args.confirm:
+        return fail("--dry-run 与 --confirm 不能同时使用",
+                    hint="预览时不带 --confirm；确认执行时去掉 --dry-run")
+    if not args.dry_run and not args.confirm:
+        return fail("标记被拦截：未提供用户确认令牌，邮箱状态没有改动",
+                    hint=("改邮件已读状态必须两段式：先加 --dry-run 预览命中邮件并展示给用户，"
+                          "用户确认后再用相同参数加 --confirm <token> 执行"))
+    if args.uids and (args.subject or args.from_addr or args.since or args.before or args.all):
+        return fail("--uids 与筛选条件不能混用",
+                    hint="要精准指定就只传 --uids；要按条件筛就去掉 --uids")
+
+    want_seen = not args.unseen  # 默认标为已读；--unseen 则反向标为未读
+    action = "标记为未读" if args.unseen else "标记为已读"
+
+    # 1) 确定候选 UID（只读连接，先看再改）
+    imap = connect_imap(creds, args.mailbox, readonly=True)
+    try:
+        if args.uids:
+            uids = [str(u) for u in args.uids]
+            scope = "指定 UID"
+        else:
+            crit = build_uid_criteria(args)
+            typ, data = imap.uid("SEARCH", None, crit)
+            if typ != "OK":
+                return fail(f"SEARCH 失败：{data}")
+            uids = [u.decode() for u in (data[0].split() if data and data[0] else [])]
+            scope = f"条件 {crit}"
+        if args.limit:
+            uids = uids[-args.limit:]
+
+        # 2) --only-changed：跳过状态已经正确的邮件，省掉无谓写入
+        if args.only_changed:
+            changed = []
+            for uid in uids:
+                seen = _seen_of(imap, uid)
+                if seen is None or seen != want_seen:
+                    changed.append(uid)
+            uids = changed
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+
+    if not uids:
+        emit({"ok": True, "mailbox": args.mailbox, "scope": scope, "action": action,
+              "count": 0, "note": "没有需要改的邮件，喵"})
+        return 0
+
+    manifest = {"action": "mark", "mailbox": args.mailbox, "read": want_seen, "uids": uids}
+    token = draft_token(manifest)
+
+    # 3) 预览分支：绝不写入
+    if args.dry_run:
+        imap = connect_imap(creds, args.mailbox, readonly=True)
+        try:
+            preview = []
+            for uid in uids[:30]:
+                row = {"uid": uid, "seen": _seen_of(imap, uid)}
+                typ, data = imap.uid("FETCH", uid, "(RFC822.HEADER)")
+                if typ == "OK" and data and data[0] is not None:
+                    raw = b"".join(p[1] for p in data if isinstance(p, tuple))
+                    m = email.message_from_bytes(raw)
+                    row["subject"] = decode_mime(m.get("Subject")) or "(无主题)"
+                    row["from"] = decode_mime(m.get("From"))
+                    row["date"] = decode_mime(m.get("Date"))
+                preview.append(row)
+        finally:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+        p = save_draft(token, manifest)
+        emit({
+            "ok": True,
+            "dry_run": True,
+            "requires_confirmation": True,
+            "confirm_token": token,
+            "draft_file": str(p),
+            "mailbox": args.mailbox,
+            "scope": scope,
+            "action": action,
+            "count": len(uids),
+            "preview": preview,
+            "hint": (f"共 {len(uids)} 封将被{action}（以上为前 30 封）。请把清单展示给用户确认；"
+                     f"用户同意后，用完全相同的参数再加 --confirm {token} 才会真正执行"),
+        })
+        return 0
+
+    # 4) 确认令牌校验：命中集合被改动过（例如期间来了新邮件）就要求重新预览
+    stored = load_draft(token)
+    if args.confirm != token or stored is None or stored.get("manifest") != manifest:
+        return fail("确认令牌与本次命中集合不一致，已拒绝执行",
+                    hint="邮箱内容可能已变化。重新用相同参数加 --dry-run 预览，再让用户确认新令牌")
+
+    imap2 = connect_imap(creds, args.mailbox, readonly=False)
+    # \Seen 加上是已读、去掉是未读；用 +FLAGS / -FLAGS 区分方向
+    flag = r"\Seen"
+    op = "+FLAGS" if want_seen else "-FLAGS"
+    marked, errors = 0, []
+    try:
+        for i in range(0, len(uids), STORE_CHUNK):
+            batch = uids[i:i + STORE_CHUNK]
+            typ, data = imap2.uid("STORE", ",".join(batch), op, f"({flag})")
+            if typ != "OK":
+                errors.append({"batch": batch, "server_response": str(data)})
+            else:
+                marked += len(batch)
+    finally:
+        try:
+            imap2.logout()
+        except Exception:
+            pass
+
+    consume_draft(token)
+    emit({"ok": not errors, "mailbox": args.mailbox, "scope": scope, "action": action,
+          "count": len(uids), "changed": marked, "errors": errors})
+    return 0 if not errors else 1
+
+
 def cmd_send(args) -> int:
     creds = load_creds(args)
     if not creds["user"] or not creds["auth_code"]:
@@ -856,6 +1048,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--mailbox", default="INBOX")
     sp.add_argument("--include-html", action="store_true")
     sp.add_argument("--max-chars", type=int, default=4000)
+
+    sp = add("mark", "标记邮件已读/未读（改邮箱状态，必须先 --dry-run 预览并经用户确认）")
+    sp.add_argument("--mailbox", default="INBOX")
+    sp.add_argument("--uids", nargs="+", help="要标记的邮件 UID 列表（从 list/search 结果拿）")
+    sp.add_argument("--subject", help="主题包含关键词")
+    sp.add_argument("--from-addr", dest="from_addr", help="发件人包含（如 boss@corp.com）")
+    sp.add_argument("--mailbox-terms", dest="mailbox_terms", help="IMAP 收件人/别名包含（服务端过滤）")
+    sp.add_argument("--since", help="起始日期 YYYY-MM-DD（含当天）")
+    sp.add_argument("--before", help="截止日期 YYYY-MM-DD（不含当天）")
+    sp.add_argument("--all", action="store_true", help="覆盖默认的「仅未读」，连同已读一起处理")
+    sp.add_argument("--unseen", action="store_true", help="反向操作：标记为未读（默认标为已读）")
+    sp.add_argument("--only-changed", dest="only_changed", action="store_true",
+                    help="跳过状态已经正确的邮件，减少无谓写入")
+    sp.add_argument("--limit", type=int, default=None, help="最多处理多少封（取命中的最后 N 封）")
+    _add_confirm_flags(sp)
 
     sp = add("send", "发送新邮件（必须先 --dry-run 预览并经用户确认）")
     sp.add_argument("--to", nargs="+", required=True)

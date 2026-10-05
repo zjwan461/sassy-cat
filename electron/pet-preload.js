@@ -4,8 +4,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('petAPI', {
   // 指针进入/离开宠物区域时切换鼠标穿透
   setInteractive: (interactive) => ipcRenderer.invoke('pet:set-interactive', interactive),
-  // 相对移动窗口（拖动/走动，主进程节流合并）
-  moveDelta: (dx, dy) => ipcRenderer.send('pet:move-delta', { dx, dy }),
+  // 用户拖动：由主进程按系统级光标位置驱动窗口移动，避免渲染层 screenX 与窗口移动互相耦合
+  dragStart: () => ipcRenderer.send('pet:drag-start'),
+  dragEnd: () => ipcRenderer.send('pet:drag-end'),
   getPosition: () => ipcRenderer.invoke('pet:get-position'),
   // 动态调整窗口高度（快捷输入展开/收起）
   resize: (height) => ipcRenderer.invoke('pet:resize', height),

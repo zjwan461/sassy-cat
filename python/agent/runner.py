@@ -215,14 +215,29 @@ async def _drive_stream(agent, input_payload, config, cancel_event: threading.Ev
         # 不再需要生产者输出：取消其任务，停止后台 astream 消费
         if not task.done():
             task.cancel()
-
-
+            
+# from typing import Dict,List,Any
+# from langchain_core.callbacks import BaseCallbackHandler
+# from langchain_core.messages import BaseMessage, HumanMessage
+# class PrintLLMRequestCallback(BaseCallbackHandler):
+#     def on_chat_model_start(
+#         self,
+#         serialized: Dict[str, Any],
+#         messages: List[List[BaseMessage]],
+#         **kwargs
+#     ) -> None:
+#         print("\n===== 【LLM请求触发 on_chat_model_start】 =====")
+#         print(f"model: {serialized.get('kwargs',{}).get('model_name')}")
+#         print(f"messages: {messages}")
+#         print(f"invoke kwargs (tools/temp等): {kwargs}")
+#         print("==============================================\n")
 async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event):
     """发起新一轮对话，异步产出事件"""
     version, agent = holder.get()
     config = {
         "configurable": {"thread_id": thread_id},
         "recursion_limit": _recursion_limit(),
+        # "callbacks": [PrintLLMRequestCallback()]
     }
     payload = {"messages": [{"role": "user", "content": user_text}]}
     async for event in _drive_stream(agent, payload, config, cancel_event):

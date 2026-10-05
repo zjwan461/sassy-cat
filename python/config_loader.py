@@ -25,6 +25,9 @@ DEFAULTS = {
                 "baseUrl": "",
                 "apiKey": "",
                 "model": "",
+                "temperature": 0.7,
+                "contextWindow": 262144,
+                "maxTokens": 8192,
                 "extraParams": {},
             }
         },

@@ -1080,10 +1080,12 @@ function createPetWindow() {
     clearTimeout(posTimer);
     posTimer = setTimeout(() => savePetPosition(), 600);
   });
+  // 窗口失焦/隐藏/关闭时兜底结束拖动，避免拖动计时器悬挂导致桌宠黏住光标
+  petWindow.on('blur', () => stopPetDrag());
   // 窗口显隐状态变化时同步刷新托盘菜单（如桌宠右键“隐藏”经 pet:hide 隐藏窗口）
-  petWindow.on('hide', () => updateTrayMenu());
+  petWindow.on('hide', () => { stopPetDrag(); updateTrayMenu(); });
   petWindow.on('show', () => updateTrayMenu());
-  petWindow.on('closed', () => { petWindow = null; updateTrayMenu(); });
+  petWindow.on('closed', () => { stopPetDrag(); petWindow = null; updateTrayMenu(); });
 }
 
 function savePetPosition() {
@@ -1104,9 +1106,9 @@ ipcMain.handle('pet:set-interactive', (event, interactive) => {
   return { success: true };
 });
 
-// 相对移动窗口（拖动/走动）：移动后按窗口所在显示器工作区钳制，
-// 保证桌宠（含展开的气泡/输入框）完整留在屏幕内，不会跑到桌面外
-ipcMain.on('pet:move-delta', (event, { dx, dy }) => {
+// 移动桌宠窗口（由拖动流程调用）：按窗口所在显示器工作区钳制，保证桌宠
+// （含展开的气泡/输入框）完整留在屏幕内，不会跑到桌面外
+function movePetBy(dx, dy) {
   if (!petWindow || petWindow.isDestroyed()) return;
   const { screen } = require('electron');
   const [x, y] = petWindow.getPosition();
@@ -1121,6 +1123,39 @@ ipcMain.on('pet:move-delta', (event, { dx, dy }) => {
   const clampedX = Math.min(wa.x + wa.width - w, Math.max(wa.x, nx));
   const clampedY = Math.min(wa.y + wa.height - h, Math.max(wa.y, ny));
   petWindow.setPosition(clampedX, clampedY);
+}
+
+// 拖动：渲染层只负责「开始/结束」与状态切换，实际位移由主进程轮询系统光标完成。
+// 不能用渲染层 MouseEvent.screenX 的增量来移动窗口：窗口跟随光标移动后，渲染层坐标
+// 与窗口位置互相耦合，同一物理位置会算出被反向抵消的增量，表现为拖动抖动、甚至反向；
+// 主窗口流式输出时气泡频繁 resize（setBounds 重新居中/锚底）会进一步放大该现象。
+let petDragTimer = null;
+let petDragLast = null;
+function stopPetDrag() {
+  if (petDragTimer) { clearInterval(petDragTimer); petDragTimer = null; }
+  petDragLast = null;
+}
+ipcMain.on('pet:drag-start', () => {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  const { screen } = require('electron');
+  stopPetDrag();
+  petDragLast = screen.getCursorScreenPoint();
+  petDragTimer = setInterval(() => {
+    if (!petWindow || petWindow.isDestroyed() || !petWindow.isVisible() || !petDragLast) {
+      stopPetDrag();
+      return;
+    }
+    const pt = screen.getCursorScreenPoint();
+    const dx = pt.x - petDragLast.x;
+    const dy = pt.y - petDragLast.y;
+    if (dx === 0 && dy === 0) return;
+    petDragLast = pt;
+    movePetBy(dx, dy);
+  }, 16);
+});
+ipcMain.on('pet:drag-end', () => {
+  if (petDragTimer) savePetPosition();
+  stopPetDrag();
 });
 
 ipcMain.handle('pet:get-position', () => {
