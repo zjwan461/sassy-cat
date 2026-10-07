@@ -36,8 +36,89 @@ from agent.tools.rag_tools import search_from_kb
 from agent.tools.subagent_tool import call_dsh
 from agent.constant import DB_URL, WORK_DIR
 from agent.middlewares import trim_messages, inject_metadata, load_metadata
+from langchain.agents.middleware import SummarizationMiddleware
 
 logger = logging.getLogger(__name__)
+
+
+def _as_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _resolve_context_compression(cfg: "config_loader.AppConfig"):
+    """按当前 LLM 配置档解析「上下文自动压缩」中间件（完成 engine 顶部 todo）。
+
+    读取 llm.profiles.<activeProfile>.contextCompression：
+      - enabled:    是否启用自动压缩（默认 True；关闭则退化为仅按条数裁剪）
+      - model:      生成摘要所用的 LLM 配置档名（留空则复用当前激活档）
+      - threshold:  触发压缩的上下文占用百分比（占 contextWindow，默认 80）
+      - keepRecent: 压缩后保留的最近原始消息条数（默认 10）
+
+    返回构建好的 SummarizationMiddleware；未启用时返回 None。
+    摘要提示词使用 langchain SummarizationMiddleware 的内置默认值。
+    """
+    profile = cfg.active_llm_profile() or {}
+    cc = profile.get("contextCompression") or {}
+    # 仅在显式关闭时停用（缺省视为启用，与 config_loader.DEFAULTS 一致）
+    if cc.get("enabled", True) is False:
+        return None
+
+    # 触发阈值：把「占 contextWindow 的百分比」换算为绝对 token 数
+    # （使用绝对 token 而非 ("fraction", x)，因为自建/兼容网关的模型可能没有 profile，
+    #  无法提供 max_input_tokens）
+    window = _as_int(profile.get("contextWindow"), 262144)
+    threshold_pct = min(100.0, max(1.0, _as_float(cc.get("threshold"), 80.0)))
+    trigger_tokens = max(1, int(window * threshold_pct / 100.0))
+
+    keep_recent = max(1, _as_int(cc.get("keepRecent"), 10))
+
+    # 摘要 LLM：可指定独立配置档，留空/无效则复用当前激活档
+    summary_name = (cc.get("model") or "").strip()
+    summary_profile = profile
+    if summary_name:
+        candidate = cfg.get(f"llm.profiles.{summary_name}")
+        if isinstance(candidate, dict) and candidate:
+            summary_profile = candidate
+        else:
+            logger.warning(
+                "上下文压缩指定的配置档 %r 不存在，回退当前激活档", summary_name
+            )
+    summary_llm = build_chat_llm(summary_profile)
+
+    logger.info(
+        "上下文自动压缩已启用：触发阈值≈%d tokens（contextWindow=%d 的 %.0f%%），"
+        "压缩后保留最近 %d 条，摘要模型档=%s",
+        trigger_tokens,
+        window,
+        threshold_pct,
+        keep_recent,
+        summary_name or "(当前激活档)",
+    )
+    return SummarizationMiddleware(
+        model=summary_llm,
+        trigger=("tokens", trigger_tokens),  # 上下文估算 token 达阈值即触发压缩
+        keep=("messages", keep_recent),      # 压缩后保留最近 N 条原始消息
+    )
+
+
+def _build_middleware(cfg: "config_loader.AppConfig") -> list:
+    """装配中间件列表：先跑廉价的条数裁剪，再跑按 token 的摘要压缩。"""
+    middleware = [trim_messages, inject_metadata, load_metadata]
+    summarization_mw = _resolve_context_compression(cfg)
+    if summarization_mw is not None:
+        middleware.insert(1, summarization_mw)
+    return middleware
+
 
 # ====================== SQLite 生命周期（异步连接 + 单例持久层） ======================
 # 服务 lifespan 启动时 await init_db() 打开、shutdown 时 await close_db() 关闭。
@@ -155,7 +236,9 @@ class AgentHolder:
             # 运行时元信息（画像/系统/软件/知识库/技能）写入 state；
             # inject_metadata（wrap_model_call）在每次模型调用前把该块注入 system message，
             # 不再逐次查库/扫盘。
-            middleware=[trim_messages, inject_metadata, load_metadata],
+            # 上下文自动压缩按 llm.profiles.<active>.contextCompression 决定是否接入
+            # （见 _build_middleware），默认启用。
+            middleware=_build_middleware(cfg),
         )
         return agent
 
