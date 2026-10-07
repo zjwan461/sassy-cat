@@ -69,6 +69,35 @@
           <span class="hint">模型单次可处理的最大 token 数（含输入+输出），用于上下文压缩的阈值判断；范围 8192~1048576，默认 262144</span>
         </div>
         <div class="field">
+          <label class="check"><input type="checkbox" v-model="form.contextCompressionEnabled" /> 启用上下文自动压缩</label>
+          <span class="hint">对话上下文接近模型窗口上限时，自动把久远历史总结成一条摘要并保留近期原文，避免请求溢出（默认开启；关闭则仅按条数裁剪）</span>
+        </div>
+        <template v-if="form.contextCompressionEnabled">
+          <div class="field">
+            <label>压缩使用的模型</label>
+            <select v-model="form.contextCompressionModel">
+              <option value="">跟随当前配置档（{{ profiles[activeProfile]?.label || activeProfile }}）</option>
+              <option v-for="(p, name) in profiles" :key="name" :value="name">{{ p.label || name }}</option>
+            </select>
+            <span class="hint">生成摘要所用的 LLM；可选择独立配置档，留空则复用当前激活的模型</span>
+          </div>
+          <div class="field">
+            <label>触发压缩的上下文占用 <span class="inline-val">{{ form.contextCompressionThreshold }}%</span></label>
+            <input type="range" :min="CC_THRESHOLD_MIN" :max="CC_THRESHOLD_MAX" step="5" v-model.number="form.contextCompressionThreshold" />
+            <span class="hint">当前上下文估算 token 达到 contextWindow 的该比例时触发压缩，范围 10~95%（默认 80%）</span>
+          </div>
+          <div class="field">
+            <label>压缩后保留的最近消息（条）</label>
+            <div class="stepper">
+              <button type="button" class="step-btn" @click="step('contextCompressionKeep', -1, CC_KEEP_MIN, CC_KEEP_MAX)" :disabled="form.contextCompressionKeep <= CC_KEEP_MIN">−</button>
+              <input type="number" v-model.number="form.contextCompressionKeep" :min="CC_KEEP_MIN" :max="CC_KEEP_MAX" class="step-input"
+                @blur="clamp('contextCompressionKeep', CC_KEEP_MIN, CC_KEEP_MAX, DEFAULT_CC_KEEP)" />
+              <button type="button" class="step-btn" @click="step('contextCompressionKeep', 1, CC_KEEP_MIN, CC_KEEP_MAX)" :disabled="form.contextCompressionKeep >= CC_KEEP_MAX">+</button>
+            </div>
+            <span class="hint">压缩完成后保留的最近原始消息条数，范围 1~200（默认 10）</span>
+          </div>
+        </template>
+        <div class="field">
           <label>最大输出 token（maxTokens）</label>
           <div class="stepper">
             <button type="button" class="step-btn" @click="step('maxTokens', -1024, MAX_TOKENS_MIN, MAX_TOKENS_MAX)" :disabled="form.maxTokens <= MAX_TOKENS_MIN">−</button>
@@ -516,6 +545,14 @@ const CONTEXT_WINDOW_MAX = 1048576
 const DEFAULT_MAX_TOKENS = 8192
 const MAX_TOKENS_MIN = 256
 const MAX_TOKENS_MAX = 1048576
+// 上下文自动压缩（llm.profiles.<name>.contextCompression）：触发百分比与保留条数的范围/默认值，
+// 与 config_loader.DEFAULTS 及 agent/engine.py 的解析逻辑保持一致
+const DEFAULT_CC_THRESHOLD = 80
+const CC_THRESHOLD_MIN = 10
+const CC_THRESHOLD_MAX = 95
+const DEFAULT_CC_KEEP = 10
+const CC_KEEP_MIN = 1
+const CC_KEEP_MAX = 200
 // dsh 子代理：输出上限（DashScope qwen 系只接受 [1,131072]）与推理强度可选值
 const DSH_MAX_TOKENS_LIMIT = 131072
 const dshReasoningEffortOptions = [
@@ -536,6 +573,8 @@ const interruptTools = [
 const defaultInterruptOn = () => Object.fromEntries(interruptTools.map((t) => [t.name, true]))
 const form = reactive({
   provider: 'openai', baseUrl: '', apiKey: '', model: '', temperature: 0.7, contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS, extraParamsText: '{}',
+  // 上下文自动压缩（随当前 LLM 配置档保存）
+  contextCompressionEnabled: true, contextCompressionModel: '', contextCompressionThreshold: DEFAULT_CC_THRESHOLD, contextCompressionKeep: DEFAULT_CC_KEEP,
   persona: '', memoryWindow: 50, recursionLimit: 100, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
   petEnabled: true,
   quickAskShortcut: 'Alt+Shift+Q',
@@ -807,6 +846,12 @@ function fillFormFromProfile() {
   form.contextWindow = Number.isFinite(Number(p.contextWindow)) ? Number(p.contextWindow) : DEFAULT_CONTEXT_WINDOW
   // 最大输出 token：缺省或非法值回退默认值，与 config_loader.DEFAULTS 保持一致
   form.maxTokens = Number.isFinite(Number(p.maxTokens)) ? Number(p.maxTokens) : DEFAULT_MAX_TOKENS
+  // 上下文自动压缩：缺省视为启用，阈值/保留条数非法值回退默认，与 config_loader.DEFAULTS 保持一致
+  const cc = p.contextCompression || {}
+  form.contextCompressionEnabled = cc.enabled !== false
+  form.contextCompressionModel = cc.model || ''
+  form.contextCompressionThreshold = Number.isFinite(Number(cc.threshold)) ? Number(cc.threshold) : DEFAULT_CC_THRESHOLD
+  form.contextCompressionKeep = Number.isFinite(Number(cc.keepRecent)) ? Number(cc.keepRecent) : DEFAULT_CC_KEEP
   form.extraParamsText = JSON.stringify(p.extraParams || {}, null, 2)
   keyRevealed.value = false
   validateExtra()
@@ -929,6 +974,11 @@ async function saveAll() {
     { path: `${llmPrefix}.temperature`, value: Number.isFinite(Number(form.temperature)) ? Number(form.temperature) : 0.7 },
     { path: `${llmPrefix}.contextWindow`, value: Number.isFinite(Number(form.contextWindow)) ? Number(form.contextWindow) : DEFAULT_CONTEXT_WINDOW },
     { path: `${llmPrefix}.maxTokens`, value: Number.isFinite(Number(form.maxTokens)) ? Number(form.maxTokens) : DEFAULT_MAX_TOKENS },
+    // 上下文自动压缩（与当前 LLM 配置档绑定）
+    { path: `${llmPrefix}.contextCompression.enabled`, value: !!form.contextCompressionEnabled },
+    { path: `${llmPrefix}.contextCompression.model`, value: form.contextCompressionModel || '' },
+    { path: `${llmPrefix}.contextCompression.threshold`, value: Number.isFinite(Number(form.contextCompressionThreshold)) ? Number(form.contextCompressionThreshold) : DEFAULT_CC_THRESHOLD },
+    { path: `${llmPrefix}.contextCompression.keepRecent`, value: Number(form.contextCompressionKeep) || DEFAULT_CC_KEEP },
     { path: `${llmPrefix}.extraParams`, value: JSON.parse(form.extraParamsText || '{}') },
     { path: 'agent.activeProfile', value: activeAgentProfile.value },
     { path: `${agentPrefix}.persona`, value: form.persona },

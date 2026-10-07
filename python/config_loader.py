@@ -28,6 +28,17 @@ DEFAULTS = {
                 "temperature": 0.7,
                 "contextWindow": 262144,
                 "maxTokens": 8192,
+                # 上下文自动压缩（见 agent/engine.py 构建 SummarizationMiddleware）：
+                #   enabled    是否启用自动压缩（默认开启；关闭则退化为仅按条数裁剪）
+                #   model      生成摘要所用的 LLM 配置档名，""=复用当前激活档
+                #   threshold  触发压缩的上下文占用百分比（占 contextWindow，默认 80）
+                #   keepRecent 压缩后保留的最近原始消息条数（默认 10）
+                "contextCompression": {
+                    "enabled": True,
+                    "model": "",
+                    "threshold": 80,
+                    "keepRecent": 10,
+                },
                 "extraParams": {},
             }
         },
