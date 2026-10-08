@@ -169,7 +169,12 @@
                 🛠️ 工具调用（{{ m.tools.length }}）
                 <span class="tool-steps-arrow">▶</span>
               </summary>
-              <div class="tool-steps">
+              <!-- 工具步骤容器限高滚动：尾部有新工具追加时自动跟随到底部（用户手动上翻后暂停） -->
+              <div
+                class="tool-steps"
+                :ref="(el) => setToolStepsEl(m.id, el)"
+                @scroll="onToolStepsScroll(m, $event)"
+              >
                 <div v-for="(t, i) in m.tools" :key="i" class="tool-step">
                   🐟 本喵正在叼小鱼干：<b>{{ t.name }}</b>
                   <span v-if="t.done" class="tool-done" :class="{ failed: t.status === 'error' }">{{ t.status === 'error' ? '✕' : '✓' }}</span>
@@ -219,30 +224,33 @@
                 </div>
               </div>
             </details>
-            <!-- interrupt 确认（存在待确认项时自动展开；全部处理完则折叠并切换为已完成文案） -->
+            <!-- interrupt 确认（存在待确认项时自动展开；全部处理完则折叠并切换为已完成文案）
+                 展示层只渲染待确认项：已决策过的项直接隐藏，不再重复出现；
+                 但 interruptDecisions 仍是与 actions 等长的全量数组，
+                 发送 tool.confirm 时依旧带上所有结果（含历史轮次），避免服务端错位 -->
             <details v-if="m.interruptActions?.length" class="interrupt-bar-wrapper" :open="hasPendingDecisions(m)">
               <summary class="interrupt-bar-summary">
-                {{ hasPendingDecisions(m) ? '⚠️ 需要高危操作确认，请核对参数：' : `📋 高危操作确认（已处理 ${m.interruptActions.length}/${m.interruptActions.length}）` }}
+                {{ hasPendingDecisions(m) ? '⚠️ 需要高危操作确认，请核对参数：' : `📋 高危操作确认（共 ${m.interruptActions.length} 项已全部处理）` }}
                 <span class="interrupt-bar-arrow">▶</span>
               </summary>
               <div class="interrupt-bar">
                 <div class="interrupt-global-btns" v-if="hasPendingDecisions(m)">
                   <button class="btn approve-all" @click="onApproveAll(m.id)">✅ 全部允许</button>
                 </div>
-                <div v-for="(a, i) in m.interruptActions" :key="i" class="interrupt-action" :class="getActionDecisionClass(m, i)">
+                <!-- pendingActions 只返回未决策项，并携带原始索引 i：决策写回的位置必须与 actions 对齐 -->
+                <div v-for="{ a, i } in pendingActions(m)" :key="i" class="interrupt-action">
                   <div class="interrupt-action-header">
                     <span class="interrupt-action-index">#{{ i + 1 }}</span>
                     <span class="interrupt-action-name">{{ a.name }}</span>
-                    <span v-if="decisionType(m, i)" class="interrupt-action-status">
-                      {{ decisionType(m, i) === 'approve' ? '✅ 已允许' : '❌ 已拒绝' }}
-                    </span>
                   </div>
                   <pre class="interrupt-action-args">{{ a.argsText }}</pre>
-                  <div v-if="!decisionType(m, i)" class="interrupt-action-btns">
+                  <div class="interrupt-action-btns">
                     <button class="btn-sm approve" @click="onDecision(m.id, i, 'approve')">允许</button>
                     <button class="btn-sm reject" @click="onDecision(m.id, i, 'reject')">拒绝</button>
                   </div>
                 </div>
+                <div v-if="!hasPendingDecisions(m)" class="interrupt-hint">✅ 共 {{ m.interruptActions.length }} 项高危操作已全部处理。</div>
+                <div v-else-if="decidedCount(m)" class="interrupt-hint">已处理的 {{ decidedCount(m) }} 项已隐藏，仅展示待确认项。</div>
                 <div v-if="!m.interruptActions?.length" class="interrupt-fallback">{{ summarizeInterrupt(m.interrupt) }}</div>
               </div>
             </details>
@@ -551,10 +559,48 @@ function followToolArgs() {
   }
 }
 
-// 展开工具步骤条时，直接把参数块定位到最新写入位置
+// ---------- 工具步骤条容器：整体限高后的内部滚动状态 ----------
+// 各消息的工具步骤条滚动容器 DOM（限高后步骤多时可整条滚动），key = 消息 id
+const toolStepsEls = new Map()
+// 用户手动上翻过的步骤条：暂停自动跟随，回到底部后恢复
+const toolStepsUnpinned = new Set()
+
+function setToolStepsEl(id, el) {
+  if (el) toolStepsEls.set(id, el)
+  else toolStepsEls.delete(id)
+}
+
+function onToolStepsScroll(m, e) {
+  const el = e.target
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) toolStepsUnpinned.delete(m.id)
+  else toolStepsUnpinned.add(m.id)
+}
+
+// 让步骤条滚到最新追加的步骤处：用户手动上翻过的默认不强制（force 时强制），
+// 折叠状态（未渲染，clientHeight 为 0）时不滚动
+function scrollToolStepsToBottom(id, force = false) {
+  if (!force && toolStepsUnpinned.has(id)) return
+  const el = toolStepsEls.get(id)
+  if (!el || el.clientHeight === 0) return
+  el.scrollTop = el.scrollHeight
+}
+
+// 新工具调用持续追加：把步骤条自动滚到最新一条，避免被限高区域挡在视野之外
+// （只跟随最后一个未完成步骤所在的消息，已完成消息保留用户的阅读位置）
+function followToolSteps() {
+  for (const m of messages.value) {
+    if (!m.tools || !m.tools.length) continue
+    if (m.tools[m.tools.length - 1].done) continue
+    scrollToolStepsToBottom(m.id)
+  }
+}
+
+// 展开工具步骤条时，直接把参数块与步骤条定位到最新写入位置
 function onToolStepsToggle(m, e) {
   if (!e.target.open || !m.tools) return
   nextTick(() => {
+    toolStepsUnpinned.delete(m.id)
+    scrollToolStepsToBottom(m.id, true)
     m.tools.forEach((t, i) => {
       const key = toolArgKey(m, i)
       toolArgsUnpinned.delete(key)
@@ -574,10 +620,10 @@ function toolArgsLength(m) {
   return (m.tools || []).reduce((n, t) => n + (t.args?.length || 0), 0)
 }
 
-// 流式内容（正文/思考/工具参数）变化时自动滚动到底部（仅在本组件挂载期间生效）
+// 流式内容（正文/思考/工具参数/工具步骤条数量）变化时自动滚动到底部（仅在本组件挂载期间生效）
 watch(
   () => messages.value.reduce(
-    (n, m) => n + (m.content?.length || 0) + (m.reasoning?.length || 0) + toolArgsLength(m),
+    (n, m) => n + (m.content?.length || 0) + (m.reasoning?.length || 0) + toolArgsLength(m) + (m.tools?.length || 0),
     0
   ),
   () => {
@@ -585,6 +631,7 @@ watch(
     nextTick(() => {
       followReasoning()
       followToolArgs()
+      followToolSteps()
     })
   }
 )
@@ -700,12 +747,20 @@ function hasPendingDecisions(m) {
   return m.interruptActions.some((_, i) => !decisionType(m, i))
 }
 
-// 获取操作的样式类（已允许/已拒绝/待确认）
-function getActionDecisionClass(m, i) {
-  const t = decisionType(m, i)
-  if (t === 'approve') return 'action-approved'
-  if (t === 'reject') return 'action-rejected'
-  return 'action-pending'
+// 待确认（尚未决策）的操作列表：模板只渲染这些项，已决策项隐藏不再展示。
+// 注意保留原始索引 i —— onDecision 按 actions 的下标写回 interruptDecisions，
+// 而 interruptDecisions 全量保留（发送 tool.confirm 时带全部结果），两者必须对齐。
+function pendingActions(m) {
+  if (!m.interruptActions?.length) return []
+  return m.interruptActions
+    .map((a, i) => ({ a, i }))
+    .filter(({ i }) => !decisionType(m, i))
+}
+
+// 已决策项数量：用于提示"已隐藏 N 项"，让用户知道列表为何变短
+function decidedCount(m) {
+  if (!m.interruptActions?.length) return 0
+  return m.interruptActions.filter((_, i) => decisionType(m, i)).length
 }
 
 // 单个操作的确认/拒绝
@@ -971,7 +1026,10 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .tool-steps-summary:hover { background: #1e293b; }
 .tool-steps-arrow { font-size: 10px; transition: transform 0.2s; }
 .tool-steps-wrapper[open] > .tool-steps-summary .tool-steps-arrow { transform: rotate(90deg); }
-.tool-steps { padding: 0 8px 8px 8px; }
+/* 工具步骤容器：整体限高（小屏按视口比例收缩）并可独立滚动，
+   避免工具调用过多时把消息气泡无限拉长；
+   overscroll-behavior: contain 阻止滚动链传导到消息流，滚到底不再带动外层 */
+.tool-steps { padding: 0 8px 8px 8px; max-height: min(42vh, 320px); overflow-y: auto; overscroll-behavior: contain; }
 .tool-step { font-size: 12px; color: #94a3b8; background: #0f172a80; border-radius: 6px; padding: 4px 10px; margin-bottom: 4px; }
 .tool-done { color: #34d399; margin-left: 6px; }
 .tool-done.failed { color: #f87171; }
@@ -1010,13 +1068,12 @@ details[open] > .reasoning-summary::before { transform: rotate(90deg); }
 .interrupt-bar { background: #451a03; border: none; border-radius: 0; padding: 10px 12px; color: #fbbf24; font-size: 13px; }
 .interrupt-global-btns { margin-bottom: 10px; display: flex; gap: 8px; }
 .btn.approve-all { background: #065f46; color: #6ee7b7; padding: 6px 16px; font-weight: 600; }
-.interrupt-action { margin-top: 6px; background: #0f172a; border: 1px solid #78350f; border-radius: 6px; padding: 6px 10px; transition: border-color 0.2s, opacity 0.2s; }
-.interrupt-action.action-approved { border-color: #059669; opacity: 0.85; }
-.interrupt-action.action-rejected { border-color: #dc2626; opacity: 0.7; }
+/* 已决策的高危操作项不再渲染，只保留待确认项样式（含下方若干提示行） */
+.interrupt-action { margin-top: 6px; background: #0f172a; border: 1px solid #78350f; border-radius: 6px; padding: 6px 10px; }
 .interrupt-action-header { display: flex; align-items: center; gap: 6px; }
 .interrupt-action-index { color: #94a3b8; font-size: 11px; font-weight: 600; }
 .interrupt-action-name { color: #fcd34d; font-weight: 600; font-size: 12px; }
-.interrupt-action-status { margin-left: auto; font-size: 12px; }
+.interrupt-hint { margin-top: 6px; color: #94a3b8; font-size: 12px; }
 .interrupt-action-args { margin: 4px 0 0; color: #7dd3fc; font-size: 12px; font-family: Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
 .interrupt-action-btns { margin-top: 6px; display: flex; gap: 6px; }
 .interrupt-fallback { margin-top: 4px; }
