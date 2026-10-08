@@ -3,9 +3,12 @@ from datetime import datetime
 
 from typing import Literal
 from tavily import TavilyClient
+import hashlib
 import os
 import re
 import sys
+import threading
+import uuid
 import subprocess
 import shlex
 import shutil
@@ -514,6 +517,607 @@ def save_user_info(user_info: OwnerProfile, runtime: ToolRuntime) -> str:
     # 注意：SqliteStore 序列化要求 JSON 兼容类型，需先 model_dump()
     store.put(("users",), user_id, user_info.model_dump())
     return "用户画像已保存。请在回复中自然地确认已记住（如'本喵记住了'），不要向用户展示工具细节。"
+
+
+# ---------------------------------------------------------------------------
+# 任务清单（todo）：把复杂任务拆解成有序子任务并跟踪执行进度
+#
+# 定位：这是智能体**自己**的「任务拆解 + 进度跟踪」工具，不是帮主人记备忘；
+# 复杂任务先拆解成子任务清单，再逐步执行、逐步勾选，避免漏步骤与中途跑偏。
+# 一个复杂任务一份文件：{work_dir}/todo/<thread_id>-<task_key>.md
+# （thread_id 作文件名前缀，会话之间天然隔离；task_key 由任务名派生）。
+# 文件结构（正文里的非条目行会原样保留，兼容手工编辑）：
+#
+#   ---
+#   session: session_xxx
+#   task: 整理下载目录并生成索引
+#   task_key: zheng-li-xia-zai-mu-lu
+#   created_at: 2026-09-01 10:00:00
+#   updated_at: 2026-09-01 10:05:00
+#   total: 3
+#   done: 1
+#   pending: 2
+#   ---
+#
+#   # 任务拆解：整理下载目录并生成索引
+#
+#   - [x] t-1a2b3c 统计下载目录里的文件类型与数量
+#   - [ ] t-4d5e6f 按类型建子目录并归类
+#   - [ ] t-7a8b9c 生成索引 markdown 并核对结果
+# ---------------------------------------------------------------------------
+
+# 清单根目录：runtime/todo（即虚拟环境中的 /todo）
+TODO_ROOT = os.path.join(work_dir, "todo")
+
+# 会话 id -> 文件名安全字符（thread_id 可能含 / : 空格等非法字符）
+_TODO_SESSION_SAFE_RE = re.compile(r"[^0-9A-Za-z._-]")
+# Windows 保留设备名不能直接当文件名
+_TODO_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+# 条目行格式：- [ ] t-1a2b3c 子任务内容（顺序即执行顺序，不设优先级）
+_TODO_ITEM_RE = re.compile(
+    r"^\s*[-*]\s+\[(?P<mark>[ xX])\]\s+(?P<id>t-[0-9a-z]{4,12})\s+(?P<content>\S.*)$"
+)
+# 任务名长度上限
+MAX_TODO_TASK_LEN = 100
+# 单条子任务内容长度上限（清单会被整段读回上下文，过长会挤占预算）
+MAX_TODO_CONTENT = 500
+# 单次调用最多创建/操作的条数
+MAX_TODO_BATCH = 50
+# 同一进程内串行化清单写操作，避免并发工具调用互相覆盖
+_TODO_LOCK = threading.RLock()
+
+
+def _todo_now() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _todo_session_key(runtime: "ToolRuntime | None") -> str:
+    """从 ToolRuntime 取当前会话标识（langchain thread_id），清洗为文件名安全字符。
+
+    拿不到 thread_id 时退化为 default-session，保证工具本身不会异常失败。
+    """
+    config = getattr(runtime, "config", None) or {}
+    configurable = config.get("configurable") or {}
+    raw = str(configurable.get("thread_id") or "").strip()
+    safe = _TODO_SESSION_SAFE_RE.sub("-", raw).strip("-.")
+    if not safe:
+        safe = "default-session"
+    if safe.upper() in _TODO_RESERVED_NAMES:
+        safe = f"session-{safe}"
+    return safe[:80]
+
+
+def _todo_task_key(title: str) -> str:
+    """任务名 -> 文件名安全 key；中文等非 ASCII 任务名回退到稳定短哈希。
+
+    同一任务名（同一会话内）始终映射到同一个 key，因此可以反复定位同一份清单。
+    """
+    text = (title or "").strip()
+    slug = re.sub(r"[\s_]+", "-", text.lower())
+    slug = re.sub(r"[^0-9a-z-]", "", slug)
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    if slug:
+        return slug[:60]
+    return "task-" + hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
+
+
+def _todo_file_path(session_key: str, task_key: str) -> str | None:
+    """(会话, 任务) -> 清单文件绝对路径；越界（理论上不会发生）返回 None。"""
+    root = os.path.realpath(TODO_ROOT)
+    path = os.path.realpath(os.path.join(root, f"{session_key}-{task_key}.md"))
+    if not path.startswith(root + os.sep):
+        return None
+    return path
+
+
+def _new_todo_id(used: set) -> str:
+    """生成不与清单内已有条目冲突的条目 id（形如 t-1a2b3c）。"""
+    while True:
+        tid = "t-" + uuid.uuid4().hex[:6]
+        if tid not in used:
+            return tid
+
+
+def _list_session_todo_files(session_key: str) -> list[str]:
+    """列出本会话的全部任务清单文件（按 updated_at 倒序）。"""
+    if not os.path.isdir(TODO_ROOT):
+        return []
+    prefix = f"{session_key}-"
+    files = []
+    for name in os.listdir(TODO_ROOT):
+        full = os.path.join(TODO_ROOT, name)
+        if name.startswith(prefix) and name.endswith(".md") and os.path.isfile(full):
+            files.append(full)
+    def _sort_key(p: str) -> tuple:
+        try:
+            mtime = os.path.getmtime(p)
+        except OSError:
+            mtime = 0.0
+        # updated_at 只精确到秒，同一秒内多次写入用 mtime 兜底排序
+        return (_read_todo(p)[0].get("updated_at") or "", mtime)
+
+    files.sort(key=_sort_key, reverse=True)
+    return files
+
+
+def _find_todo_file(session_key: str, task: str) -> str | None:
+    """定位某任务的清单文件：先按 task_key 命中；再按 frontmatter 里的 task 名匹配
+    （兼容直接传中文任务名或文件里的 title）。"""
+    task = (task or "").strip()
+    if not task:
+        return None
+    path = _todo_file_path(session_key, _todo_task_key(task))
+    if path and os.path.isfile(path):
+        return path
+    for candidate in _list_session_todo_files(session_key):
+        meta, _entries, _raw = _read_todo(candidate)
+        title = (meta.get("task") or "").strip()
+        if title and (title == task or title.lower() == task.lower()):
+            return candidate
+    return None
+
+
+def _todo_task_choices(session_key: str, limit: int = 8) -> str:
+    """本会话已有任务清单的概览，用于任务名/id 找不到时的纠错提示。"""
+    files = _list_session_todo_files(session_key)
+    if not files:
+        return "当前会话还没有任何任务清单。"
+    parts = []
+    for path in files[:limit]:
+        meta, entries, _raw = _read_todo(path)
+        items = _todo_items(entries)
+        done = sum(1 for e in items if e["done"])
+        parts.append(f"「{meta.get('task') or os.path.basename(path)}」（{done}/{len(items)}）")
+    return "当前会话的清单：" + "；".join(parts)
+
+
+def _split_todo_front_matter(text: str) -> tuple[dict, list[str]]:
+    """拆出 YAML frontmatter（仅解析简单 k: v）与正文行；无 frontmatter 时 meta 为空。"""
+    lines = (text or "").splitlines()
+    if lines and lines[0].strip() == "---":
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                meta: dict[str, str] = {}
+                for line in lines[1:i]:
+                    key, _, value = line.partition(":")
+                    if key.strip():
+                        meta[key.strip()] = value.strip()
+                return meta, lines[i + 1:]
+    return {}, lines
+
+
+def _parse_todo_body(body_lines: list[str]) -> list[dict]:
+    """正文行 -> 条目序列；无法识别的行原样保留（raw），兼容主人手工编辑。"""
+    entries: list[dict] = []
+    for line in body_lines:
+        m = _TODO_ITEM_RE.match(line)
+        if not m:
+            entries.append({"type": "raw", "text": line})
+            continue
+        entries.append({
+            "type": "item",
+            "id": m.group("id"),
+            "done": m.group("mark").lower() == "x",
+            "content": m.group("content").strip(),
+        })
+    # 首尾空行由渲染逻辑统一生成，这里丢掉，避免每次写回都多堆一行
+    while entries and entries[0]["type"] == "raw" and not entries[0]["text"].strip():
+        entries.pop(0)
+    while entries and entries[-1]["type"] == "raw" and not entries[-1]["text"].strip():
+        entries.pop()
+    return entries
+
+
+def _render_todo_entry(entry: dict) -> str:
+    if entry["type"] == "raw":
+        return entry["text"]
+    mark = "x" if entry["done"] else " "
+    return f"- [{mark}] {entry['id']} {entry['content']}"
+
+
+def _render_todo_markdown(entries: list[dict], meta: dict) -> str:
+    """条目序列 -> 完整清单文件内容（frontmatter + 正文）。"""
+    items = _todo_items(entries)
+    done = sum(1 for e in items if e["done"])
+    lines = [
+        "---",
+        f"session: {meta.get('session', '')}",
+        f"task: {meta.get('task', '')}",
+        f"task_key: {meta.get('task_key', '')}",
+        f"created_at: {meta.get('created_at') or _todo_now()}",
+        f"updated_at: {_todo_now()}",
+        f"total: {len(items)}",
+        f"done: {done}",
+        f"pending: {len(items) - done}",
+        "---",
+        "",
+    ]
+    has_heading = any(
+        e["type"] == "raw" and e["text"].lstrip().startswith("#") for e in entries
+    )
+    if not has_heading:
+        lines += [f"# 任务拆解：{meta.get('task', '')}", ""]
+    lines += [_render_todo_entry(e) for e in entries]
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def _read_todo(path: str) -> tuple[dict, list[dict], str]:
+    """读取清单，返回 (frontmatter, 条目序列, 原始文本)；文件不存在时返回空清单。"""
+    if not os.path.isfile(path):
+        return {"created_at": _todo_now()}, [], ""
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        raw = f.read()
+    meta, body = _split_todo_front_matter(raw)
+    if not meta.get("created_at"):
+        meta["created_at"] = _todo_now()
+    return meta, _parse_todo_body(body), raw
+
+
+def _save_todo_file(path: str, entries: list[dict], meta: dict) -> str | None:
+    """原子写回清单（先写临时文件再替换，避免中断留下半截文件）；失败返回错误文案。"""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        text = _render_todo_markdown(entries, meta)
+        tmp = f"{path}.tmp-{uuid.uuid4().hex[:8]}"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except OSError as e:
+        return f"错误：写入任务清单失败：{e}"
+    return None
+
+
+def _todo_items(entries: list[dict]) -> list[dict]:
+    return [e for e in entries if e["type"] == "item"]
+
+
+def _todo_summary(entries: list[dict]) -> str:
+    items = _todo_items(entries)
+    done = sum(1 for e in items if e["done"])
+    return f"进度 {done}/{len(items)}，未完成 {len(items) - done} 项"
+
+
+def _todo_id_hint(items: list[dict]) -> str:
+    """id 找不到时给出清单里的现有条目，便于模型自我修正。"""
+    if not items:
+        return "当前清单没有任何条目。"
+    preview = "、".join(f"{e['id']}（{e['content'][:12]}）" for e in items[:6])
+    more = "…" if len(items) > 6 else ""
+    return f"当前条目：{preview}{more}（可调用 get_todo 查看全部）。"
+
+
+@tool
+def create_todo(
+    runtime: ToolRuntime,
+    task: str,
+    items: list[str],
+    overwrite: bool = False,
+) -> str:
+    """复杂任务的第一步动作：立刻把任务拆解成有序子任务清单（todo），再逐步执行。
+
+    这是助手**自己的任务规划工具，不是可选项**。命中以下任一条就必须先调用本工具
+    （先建清单，再动其它工具）：
+    - 预计要 3 次以上工具调用（读/写多个文件、跑命令、检索、生成产物后再验证……）
+    - 会碰到 2 个以上文件，或需要"先看现状再改造"
+    - 产出要经过"生成→运行/检查验证"才能交付（写代码/脚本、做表格/文档/页面/图片）
+    - 主人一句话里含多件事，或需跨多轮才能做完
+    只有"一两次工具调用就能直接给出答案"的简单事不要拆解，直接做。
+
+    使用纪律：
+    - 不要问主人"要不要我列个清单"：清单是内部工作台，直接建好接着干
+      （本工具写的是 /todo 下的内部清单文件，属低危操作，无需用户确认）。
+    - 拆完立刻执行第 1 条子任务；每完成一条**立刻** edit_todo(action="done")，
+      不要攒到最后一起勾。
+
+    参数说明：
+    - task: 任务名，简短可读（如 "整理下载目录并生成索引"）。同一会话里，同一任务名
+      对应同一份清单文件；不同任务互相独立。
+    - items: 子任务列表，**按执行顺序**排列，建议 3~8 条，粒度要求：
+      - 一条只做一件可独立验证的事，写完能照着直接动手（如 "按扩展名把文件移动到 music/images/docs 三个子目录"）；
+      - 不要把多个文件/多个动作塞进一条（"分析 a.py、b.py、c.py" 应按文件或模块拆开）；
+      - 不要写"深入了解 / 分析一下 / 处理剩余问题"这类没有动作与产出定义的条目，每条要能回答"做完的标准是什么"；
+      - 尽量带上关键输入/产出（文件名、目录、要生成的产物），别写"按上面说的做"。
+      拆得太粗（只列 1~2 条空泛条目）等于没拆，会被判为不合格。
+    - overwrite: 同名任务清单已存在时是否重建（默认 False，会直接拒绝，避免误删已有进度）；
+      确需推翻重排时才传 True（旧清单被覆盖）。
+
+    返回清单概况与每条子任务的 id（形如 t-1a2b3c）；之后用 edit_todo 按 id 勾选完成。
+    本工具只做任务拆解与进度记录，不负责定时提醒（"到点提醒我"要用 create_reminder）。
+    """
+    task = " ".join((task or "").split())
+    if not task:
+        return "错误：task 不能为空，请给出简短的任务名。"
+    if len(task) > MAX_TODO_TASK_LEN:
+        task = task[:MAX_TODO_TASK_LEN]
+
+    raw_items = items if isinstance(items, list) else ([items] if items else [])
+    cleaned: list[str] = []
+    for item in raw_items:
+        if isinstance(item, dict):
+            item = item.get("content") or item.get("task") or ""
+        text = " ".join(str(item or "").split())
+        if not text:
+            continue
+        if len(text) > MAX_TODO_CONTENT:
+            return (
+                f"错误：单条子任务过长（{len(text)} 字符，上限 {MAX_TODO_CONTENT}），"
+                f"请拆成两条：{text[:40]}…"
+            )
+        cleaned.append(text)
+    if not cleaned:
+        return "错误：items 不能为空，请给出至少 1 条可执行的子任务。"
+    if len(cleaned) > MAX_TODO_BATCH:
+        return f"错误：单次最多创建 {MAX_TODO_BATCH} 条子任务，收到 {len(cleaned)} 条。"
+
+    session_key = _todo_session_key(runtime)
+    task_key = _todo_task_key(task)
+    path = _todo_file_path(session_key, task_key)
+    if path is None:
+        return "错误：会话 id 非法，无法定位任务清单文件。"
+
+    with _TODO_LOCK:
+        old_meta = _read_todo(path)[0] if os.path.isfile(path) else {}
+        if old_meta and not overwrite:
+            return (
+                f"任务「{old_meta.get('task') or task}」已有拆解清单"
+                f"（{_todo_summary(_read_todo(path)[1])}），未做改动。"
+                '若只是新增步骤，用 edit_todo 的 action="add"；'
+                "若确实要重新拆解，请传 overwrite=true。"
+            )
+        meta = {
+            "session": session_key,
+            "task": task,
+            "task_key": task_key,
+            "created_at": old_meta.get("created_at") or _todo_now(),
+        }
+        entries: list[dict] = []
+        used: set = set()
+        created = []
+        for text in cleaned:
+            tid = _new_todo_id(used)
+            used.add(tid)
+            entries.append({"type": "item", "id": tid, "done": False, "content": text})
+            created.append(f"- {tid} {text}")
+        err = _save_todo_file(path, entries, meta)
+        if err:
+            return err
+
+    return (
+        f"任务「{task}」已拆解为 {len(cleaned)} 步（清单文件 {os.path.basename(path)}）：\n"
+        + "\n".join(created)
+        + f"\n现在立刻开始执行第 1 步：{cleaned[0]}"
+        + '\n该步做完马上调用 edit_todo（action="done", item_id=对应 id）勾选，再继续第 2 步；'
+        + '中途不确定还剩什么，用 get_todo(status="pending") 对账。'
+    )
+
+
+@tool
+def get_todo(runtime: ToolRuntime, task: str = "", status: str = "all") -> str:
+    """查看复杂任务的拆解清单与执行进度（todo）。
+
+    参数说明：
+    - task: 任务名。**留空则列出本会话所有任务清单及其进度**（用于确认有哪些任务、
+      任务名该怎么写）；指定任务名时返回该任务的详细清单（每条的 id、完成状态与内容）。
+    - status: 指定 task 时的过滤：
+      - "all": 全部条目（默认）
+      - "pending": 只看未完成（推进任务时最常用：先看还剩哪几步）
+      - "done": 只看已完成
+
+    触发场景（都与上面的执行循环配套）：
+    - 推进途中对账："还剩哪几步没做"（status="pending"，看完再决定下一步动作）
+    - 每轮开工、或上下文被压缩过之后，先对一次账，避免漏步骤或重复做
+    - 勾选 / 改内容 / 删除之前，先取到子任务的条目 id
+    - **回复主人之前做收尾对账**：status="pending" 要么为空，要么你已在回复里说明"还剩哪几条、卡在哪"，不能把清单丢在半路
+    - 主人问"做到哪了 / 进度怎么样"时，据此汇总汇报
+
+    返回清单内容或任务清单列表；没有清单时返回提示。
+    """
+    status = (status or "all").strip().lower()
+    status = {
+        "active": "pending", "todo": "pending", "未完成": "pending",
+        "已完成": "done", "全部": "all", "complete": "done",
+    }.get(status, status)
+    if status not in ("all", "pending", "done"):
+        return f"错误：status 仅支持 all/pending/done，收到：{status}"
+
+    session_key = _todo_session_key(runtime)
+
+    # 不传 task：列出本会话全部任务清单与进度
+    if not (task or "").strip():
+        files = _list_session_todo_files(session_key)
+        if not files:
+            return "当前会话还没有任何任务清单（复杂任务可用 create_todo 拆解）。"
+        lines = ["本会话的任务清单："]
+        for path in files:
+            meta, entries, _raw = _read_todo(path)
+            lines.append(
+                f"- {meta.get('task') or os.path.basename(path)}"
+                f"（{_todo_summary(entries)}，task_key={meta.get('task_key') or ''}）"
+            )
+        lines.append("要看某一份的详细清单，请再带 task 参数调用一次。")
+        return "\n".join(lines)
+
+    path = _find_todo_file(session_key, task)
+    if path is None:
+        return f"错误：本会话找不到任务「{task}」的清单。{_todo_task_choices(session_key)}"
+
+    with _TODO_LOCK:
+        meta, entries, raw = _read_todo(path)
+        items = _todo_items(entries)
+        title_task = meta.get("task") or task
+        if status == "all":
+            if not items:
+                return f"任务「{title_task}」的清单还没有子任务（{_todo_summary(entries)}）。"
+            return raw.strip()
+
+        want_done = status == "done"
+        picked = [e for e in items if e["done"] == want_done]
+        label = "未完成" if status == "pending" else "已完成"
+        title = f"# 任务「{title_task}」（{label}）"
+        if not picked:
+            return f"{title}\n\n（没有{label}的子任务；{_todo_summary(entries)}）"
+        body = "\n".join(_render_todo_entry(e) for e in picked)
+        return f"{title}\n\n{body}\n\n（{_todo_summary(entries)}）"
+
+
+@tool
+def edit_todo(
+    runtime: ToolRuntime,
+    task: str,
+    action: str,
+    item_id: str = "",
+    content: str | None = None,
+) -> str:
+    """更新某个复杂任务的子任务状态（todo）：勾选完成 / 追加 / 改内容 / 删除。
+
+    参数说明：
+    - task: 任务名（与 create_todo 时一致；也可传清单里的 task_key）。
+    - action: 动作，取值：
+      - "done": 勾选完成（写为 - [x]）——**每完成一步就立刻调用一次**，别等全部做完再补记
+      - "undone": 取消完成，回到未完成
+      - "add": 追加子任务（content 必填，可多行，每行一条），加在清单末尾
+      - "update": 改写某条子任务的内容（item_id + content）
+      - "delete": 删除某条子任务（计划变更、某步不再需要时用）
+    - item_id: 子任务 id（形如 t-1a2b3c，取自 create_todo / get_todo 的结果）；
+      done/undone/delete 支持一次传多个 id，用逗号或空格分隔。
+    - content: action="add" 时要追加的子任务内容（多行则逐行新增）；
+      action="update" 时的新内容。
+
+    触发场景：某一条子任务做完就**立刻** done（这一步不能省，不勾选等于没跟踪，主人也看不到进度）；
+    执行中发现计划要调整用 add/update；某步不用做了用 delete。
+
+    返回操作结果与最新进度；任务名/id 不存在时返回错误并列出可用项，便于修正后重试。
+    """
+    action = (action or "").strip().lower()
+    action = {
+        "complete": "done", "finish": "done", "完成": "done",
+        "undone": "undone", "undo": "undone", "取消完成": "undone", "未完成": "undone",
+        "add": "add", "append": "add", "追加": "add", "新增": "add",
+        "update": "update", "edit": "update", "改": "update", "编辑": "update", "修改": "update",
+        "delete": "delete", "remove": "delete", "删除": "delete",
+    }.get(action, action)
+    if action not in ("done", "undone", "add", "update", "delete"):
+        return f"错误：action 仅支持 done/undone/add/update/delete，收到：{action}"
+
+    session_key = _todo_session_key(runtime)
+    path = _find_todo_file(session_key, task)
+    if path is None:
+        return f"错误：本会话找不到任务「{task}」的清单。{_todo_task_choices(session_key)}"
+
+    with _TODO_LOCK:
+        meta, entries, _raw = _read_todo(path)
+        items = _todo_items(entries)
+        title_task = meta.get("task") or task
+
+        # ---------- 追加子任务 ----------
+        if action == "add":
+            texts = [" ".join(line.split()) for line in str(content or "").splitlines()]
+            texts = [t for t in texts if t]
+            if not texts:
+                return '错误：action="add" 需要 content（要追加的子任务，多行则逐行新增）。'
+            if len(items) + len(texts) > MAX_TODO_BATCH:
+                return (
+                    f"错误：单个清单最多 {MAX_TODO_BATCH} 条，当前已有 {len(items)} 条，"
+                    f"无法再追加 {len(texts)} 条。"
+                )
+            for text in texts:
+                if len(text) > MAX_TODO_CONTENT:
+                    return f"错误：子任务过长（{len(text)} 字符，上限 {MAX_TODO_CONTENT}）：{text[:40]}…"
+            used = {e["id"] for e in items}
+            added = []
+            for text in texts:
+                tid = _new_todo_id(used)
+                used.add(tid)
+                entries.append({"type": "item", "id": tid, "done": False, "content": text})
+                added.append(f"- {tid} {text}")
+            err = _save_todo_file(path, entries, meta)
+            if err:
+                return err
+            return (
+                f"已为任务「{title_task}」追加 {len(added)} 步：\n"
+                + "\n".join(added)
+                + f"\n（{_todo_summary(entries)}）"
+            )
+
+        if not items:
+            return (
+                f'任务「{title_task}」的清单还没有子任务'
+                '（可用 action="add" 追加，或 create_todo 重新拆解）。'
+            )
+
+        # ---------- 改子任务内容 ----------
+        if action == "update":
+            new_content = " ".join(str(content or "").split())
+            if not new_content:
+                return '错误：action="update" 需要 content（新的子任务内容）。'
+            if len(new_content) > MAX_TODO_CONTENT:
+                return (
+                    f"错误：内容过长（{len(new_content)} 字符，上限 {MAX_TODO_CONTENT}）："
+                    f"{new_content[:40]}…"
+                )
+            ids = [x for x in re.split(r"[,\s，、;；]+", item_id or "") if x]
+            if len(ids) != 1:
+                return "错误：action=update 一次只能指定一个 item_id。"
+            target = next((e for e in items if e["id"] == ids[0]), None)
+            if target is None:
+                return f"错误：未找到 id 为 {ids[0]} 的子任务。{_todo_id_hint(items)}"
+            if new_content == target["content"]:
+                return f"子任务 {target['id']} 的内容未变化。"
+            old = target["content"]
+            target["content"] = new_content
+            err = _save_todo_file(path, entries, meta)
+            if err:
+                return err
+            return f"已更新子任务 {target['id']}：{old} → {new_content}\n（{_todo_summary(entries)}）"
+
+        # ---------- 完成 / 取消完成 / 删除（支持批量） ----------
+        ids = [x for x in re.split(r"[,\s，、;；]+", item_id or "") if x]
+        if not ids:
+            return f"错误：缺少 item_id。{_todo_id_hint(items)}"
+        if len(ids) > MAX_TODO_BATCH:
+            return f"错误：单次最多处理 {MAX_TODO_BATCH} 条，收到 {len(ids)} 条。"
+
+        found: list[dict] = []
+        missing: list[str] = []
+        for tid in ids:
+            target = next((e for e in items if e["id"] == tid), None)
+            if target is None:
+                missing.append(tid)
+            else:
+                found.append(target)
+        if not found:
+            return f"错误：未找到这些子任务：{', '.join(missing)}。{_todo_id_hint(items)}"
+
+        if action == "delete":
+            drop = {e["id"] for e in found}
+            entries = [
+                e for e in entries if not (e["type"] == "item" and e["id"] in drop)
+            ]
+        else:
+            want_done = action == "done"
+            for e in found:
+                e["done"] = want_done
+
+        err = _save_todo_file(path, entries, meta)
+        if err:
+            return err
+        verb = {"done": "已勾选完成", "undone": "已取消完成", "delete": "已删除"}[action]
+        lines = [f"{verb} {len(found)} 步："]
+        lines += [f"- {e['id']} {e['content']}" for e in found]
+        if missing:
+            lines.append(f"（未找到：{', '.join(missing)}）")
+        lines.append(f"（{_todo_summary(entries)}）")
+        if action == "done":
+            remaining = [e for e in _todo_items(entries) if not e["done"]]
+            if remaining:
+                lines.append(f"下一步：{remaining[0]['id']} {remaining[0]['content']}")
+            else:
+                lines.append("全部子任务已完成，请向主人汇报最终结果与产出位置。")
+        return "\n".join(lines)
 
 
 # 技能名规范（agentskills.io）：小写字母/数字，单连字符分隔，不以 - 开头结尾，<=64
