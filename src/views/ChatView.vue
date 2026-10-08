@@ -126,13 +126,13 @@
                         <span class="sub-agent-name">{{ agentLabel(seg.agent) }}</span>
                       </div>
                       <div class="sub-agent-body">
-                        <MarkdownRenderer :content="seg.text" :done="!m.streaming" />
+                        <MarkdownRenderer :content="seg.text" :done="!m.streaming" @rendered="onMDRendered" />
                       </div>
                     </template>
-                    <MarkdownRenderer v-else :content="seg.text" :done="!m.streaming" />
+                    <MarkdownRenderer v-else :content="seg.text" :done="!m.streaming" @rendered="onMDRendered" />
                   </div>
                 </template>
-                <MarkdownRenderer v-else :content="m.content" :done="!m.streaming" />
+                <MarkdownRenderer v-else :content="m.content" :done="!m.streaming" @rendered="onMDRendered" />
               </template>
               <template v-else>{{ m.content }}</template>
             </div>
@@ -352,9 +352,7 @@ function isNearBottom() {
 function forceScrollBottom() {
   stickToBottom.value = true
   reasoningUnpinned.clear()
-  nextTick(() => {
-    if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight
-  })
+  nextTick(scrollListToBottom)
 }
 
 function openImagePreview(url) {
@@ -438,10 +436,28 @@ watch(
 const connText = computed(() => ({ open: '● 已连接', connecting: '○ 连接中…', reconnecting: '○ 重连中…', closed: '○ 未连接' }[socketState.status] || '○ 未连接'))
 const connClass = computed(() => socketState.status === 'open' ? 'online' : 'offline')
 
+// 上一次程序化滚动后的 scrollTop：onMsgListScroll 据此识别"自己触发的滚动"，
+// 避免把自动贴底误判为用户上翻而错误地暂停自动跟随
+let expectedScrollTop = -1
+
+// 立即贴底（同步执行，必须在 DOM 更新之后调用）
+function scrollListToBottom() {
+  const el = listRef.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+  expectedScrollTop = el.scrollTop
+}
+
+// 由 MarkdownRenderer 的 rendered 事件驱动：此刻本帧 DOM 已更新、浏览器尚未绘制，
+// 在同一帧内贴底，不会出现"先滚到底、内容随后长高"的抖动
+function onMDRendered() {
+  if (stickToBottom.value) scrollListToBottom()
+}
+
 function scrollBottom() {
   nextTick(() => {
     // 仅在用户未上翻时自动跟随到底部；用户手动上翻后不再强制滚动
-    if (listRef.value && stickToBottom.value) listRef.value.scrollTop = listRef.value.scrollHeight
+    if (stickToBottom.value) scrollListToBottom()
   })
 }
 
@@ -792,6 +808,9 @@ function onMsgListScroll() {
   if (scrollTop < 50 && chat.hasMore && !chat.loadingMore) {
     onLoadMore()
   }
+  // 程序化贴底产生的 scroll 事件不代表用户意图，直接忽略；
+  // 否则流式期间每帧的自动贴底都会把状态改写成"贴底"，用户上翻的意图会被吞掉
+  if (Math.abs(scrollTop - expectedScrollTop) < 1) return
   // 同步"是否贴底"状态：用户手动上翻 → 暂停自动跟随并显示浮动按钮；滚回底部 → 恢复自动跟随
   stickToBottom.value = isNearBottom()
 }
@@ -860,7 +879,9 @@ onMounted(() => {
   .conv-pinned-group { max-height: 50%; padding-bottom: 0; border-bottom: none; }
 }
 
-.msg-list { flex: 1; overflow-y: auto; padding: 16px 20px; padding-bottom: 100px; }
+/* overflow-anchor: none —— 关闭浏览器滚动锚定：
+   流式尾部由脚本原地更新，若浏览器再自行"锚定补偿"，会与自动贴底相互打架产生位移抖动 */
+.msg-list { flex: 1; overflow-y: auto; padding: 16px 20px; padding-bottom: 100px; overflow-anchor: none; }
 .empty-hint { text-align: center; color: #64748b; margin-top: 60px; }
 .empty-emoji { font-size: 44px; margin-bottom: 10px; }
 
