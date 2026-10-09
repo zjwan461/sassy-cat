@@ -1129,6 +1129,11 @@ MAX_SKILL_MD_SIZE = 200 * 1024
 # 技能根目录：runtime/skills（与 skills_api、FilesystemBackend 的 /skills 虚拟目录一致）
 SKILLS_ROOT = os.path.join(work_dir, "skills")
 
+# 技能备份目录：runtime/backup（即虚拟路径 /backup）。
+# 旧的技能版本统一挪到这里，不再以 {skill_dir}.bak-xxx 的形式堆在 skills 目录内，
+# 免得被技能扫描逻辑当成新技能或干扰发现。
+BACKUP_ROOT = os.path.join(work_dir, "backup")
+
 
 def _slugify_skill_name(name: str) -> str:
     """把用户/模型给的名字规范化为合规技能名：小写、空格下划线转 -、去非法字符。"""
@@ -1218,7 +1223,8 @@ def create_skill(
       如 {"src": "/code/clean_data.py", "dest": "scripts/clean_data.py"}。
       src 必须是 / 开头、位于虚拟环境内的路径（如 /code、/data、/tmp 下的文件）。
     - overwrite: 同名技能已存在时是否覆盖（默认 False 直接拒绝）。
-      覆盖时旧版本自动备份为 "{name}.bak-时间戳"。
+      覆盖时旧版本自动备份到工作目录下的 backup 目录（runtime/backup，
+      虚拟路径为 /backup/{name}.bak-时间戳），不再留在 skills 目录内。
 
     返回创建结果。注意：新技能在**新会话**中才会被加载，当前会话不会立即生效。
     """
@@ -1247,10 +1253,15 @@ def create_skill(
                 f"错误：技能「{slug}」已存在。若确要替换，请传 overwrite=true"
                 "（旧版本会自动备份）。"
             )
-        backup = f"{skill_dir}.bak-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        backup = os.path.join(
+            BACKUP_ROOT,
+            f"{slug}.bak-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        )
         try:
-            os.rename(skill_dir, backup)
-            backup_note = f"（旧版本已备份为 {os.path.basename(backup)}）"
+            os.makedirs(BACKUP_ROOT, exist_ok=True)
+            # 跨目录移动，用 shutil.move；技能目录与 backup 同在 work_dir 下，正常是同一卷
+            shutil.move(skill_dir, backup)
+            backup_note = f"（旧版本已备份至 /backup/{os.path.basename(backup)}）"
         except OSError as e:
             return f"错误：备份旧技能失败：{e}"
 

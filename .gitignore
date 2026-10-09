@@ -38,5 +38,6 @@ Thumbs.db
 runtime/*
 !runtime/skills/
 runtime/skills/*timesheet
+runtime/skills/jarvis*
 .cospec
 code-review_result
