@@ -9,25 +9,46 @@
       3) 踏板轨迹插进了车轮圆里 —— 脚穿模进轮胎。
     这个脚本按 0..360° 均匀采样曲柄角，把上面三条全部量化。
 
+多腿支持（重要）：
+    骑手通常有两条腿，近侧/远侧髋关节往往**不是同一个坐标**（远侧为了做
+    透视层次一般会偏移）。早期版本 --hip 只能传一个坐标，等于只验了一条腿，
+    另一条腿全靠运气。现在 --hip 可重复传参，每条腿独立校验、独立判红；
+    一份报告里任一条腿有硬性违规，整体退出码就是 1。
+
 用法：
+    # 单腿（旧写法仍然兼容）
     python check_rig_geometry.py --bb 470 381 --hip 400 286 --crank 30 \
         --thigh 78 --shin 74 --rear-hub 382 368 --front-hub 592 368 --wheel-r 62 --ground 430
 
-省略参数时使用上面这套默认值（即 pelican-rider-2d.html 的实测几何）。
-退出码 0 = 通过；1 = 有硬性违规。
+    # 双腿（推荐：近侧 + 远侧各给一次 --hip）
+    python check_rig_geometry.py --bb 470 381 \
+        --hip 400 286 --hip 394 291 \
+        --crank 30 --thigh 78 --shin 74 \
+        --rear-hub 382 368 --front-hub 592 368 --wheel-r 62 --ground 430
+
+省略参数时使用上面那套默认几何（pelican-rider-2d.html 的实测值）。
+注意：远侧腿的踏板相位与近侧差 180°，但"踏板→髋"距离范围与膝角范围在
+整圈扫描下是对称的，所以两条腿用同一套采样即可，无需另传相位。
+退出码 0 = 全部腿通过；1 = 任一条腿有硬性违规。
 """
 
 import argparse
 import math
 import sys
 
+DEFAULT_HIP = [[400.0, 286.0]]
+
 
 def parse_args():
-    p = argparse.ArgumentParser(description="2D rider rig kinematics validator")
+    p = argparse.ArgumentParser(description="2D rider rig kinematics validator (multi-leg)")
     p.add_argument("--bb", nargs=2, type=float, default=[470.0, 381.0], metavar=("X", "Y"),
                    help="五通/中轴位置")
-    p.add_argument("--hip", nargs=2, type=float, default=[400.0, 286.0], metavar=("X", "Y"),
-                   help="髋关节（大腿根）位置")
+    p.add_argument("--hip", nargs=2, type=float, action="append", default=None,
+                   metavar=("X", "Y"),
+                   help="髋关节（大腿根）位置。可重复传参以校验多条腿，"
+                        "如 --hip 400 286 --hip 394 291")
+    p.add_argument("--hip-label", action="append", default=None,
+                   help="给对应 --hip 起的名字（可选，按顺序对应），如 --hip-label 近侧 --hip-label 远侧")
     p.add_argument("--crank", type=float, default=30.0, help="曲柄长度（踏板圆半径）")
     p.add_argument("--thigh", type=float, default=78.0, help="大腿骨长")
     p.add_argument("--shin", type=float, default=74.0, help="小腿骨长")
@@ -41,19 +62,22 @@ def parse_args():
                    help="允许腿伸直到总长的比例余量（px）")
     p.add_argument("--knee-limit", type=float, default=172.0,
                    help="膝角超过该度数视为'腿绷直僵硬'，仅警告")
-    return p.parse_args()
+    a = p.parse_args()
+    if not a.hip:
+        a.hip = [list(h) for h in DEFAULT_HIP]
+    if not a.hip_label:
+        a.hip_label = []
+    return a
 
 
-def main() -> int:
-    a = parse_args()
-
+def check_one_leg(a, hip, label):
+    """校验单条腿。返回 (hard_fail_count, warn_count, summary_str)。"""
     bb = a.bb
-    hip = a.hip
     reach = a.thigh + a.shin
     min_reach = abs(a.thigh - a.shin) + 2.0
 
     print("─" * 62)
-    print("  腿部运动学校验")
+    print(f"  腿部运动学校验 · {label}")
     print("─" * 62)
     print(f"  髋           : ({hip[0]:.0f}, {hip[1]:.0f})")
     print(f"  五通         : ({bb[0]:.0f}, {bb[1]:.0f})")
@@ -104,17 +128,16 @@ def main() -> int:
 
     hard_fail = 0
 
-    def report(label, items, unit="°"):
+    def report(lbl, items, unit="°"):
         """items 里的元素是 (曲柄角, 数值或标签)。第二项可能是字符串（如车轮名）。"""
         nonlocal hard_fail
         if not items:
-            print(f"  ✅ {label}: 0 次")
+            print(f"  ✅ {lbl}: 0 次")
             return
-        # 只挑第二项是数字的来做"最严重"排序，字符串元组兜底放在后面
         numeric = [it for it in items if len(it) > 1 and isinstance(it[1], (int, float))]
         worst = max(numeric, key=lambda t: t[1]) if numeric else items[0]
         detail = f"{worst[1]:.1f}" if isinstance(worst[1], (int, float)) else str(worst[1])
-        print(f"  ❌ {label}: {len(items)}/{a.samples} 次  最严重 {worst[0]:.1f}{unit} (值={detail})")
+        print(f"  ❌ {lbl}: {len(items)}/{a.samples} 次  最严重 {worst[0]:.1f}{unit} (值={detail})")
         hard_fail += 1
 
     # 距离范围检查（比逐点更直白）
@@ -136,17 +159,72 @@ def main() -> int:
     report("踏板插进车轮圆", wheel_hits)
     report("脚穿到地面以下", ground_hits)
 
+    warn = 0
     if knee_max > a.knee_limit:
         print(f"  ⚠️  最大膝角 {knee_max:.1f}° > {a.knee_limit:.0f}° —— 腿在某一段几乎绷直，"
               f"视觉上会显得僵硬。建议把髋抬高或前移一点。")
+        warn += 1
     else:
         print(f"  ✅ 最大膝角 {knee_max:.1f}° ≤ {a.knee_limit:.0f}°，全程保持自然弯曲")
 
     print("─" * 62)
     if hard_fail:
-        print(f"❌ 校验失败：{hard_fail} 项硬性违规，先改几何再出片。")
+        print(f"  ❌ 本条腿校验失败：{hard_fail} 项硬性违规，先改几何再出片。")
+    else:
+        print(f"  🎉 本条腿几何自洽。")
+    print("")
+
+    summary = (f"{label}: 距离 {dmin:.1f}~{dmax:.1f}px / 膝角 "
+               f"{knee_min:.1f}°~{knee_max:.1f}° / 违规 {hard_fail} 项")
+    return hard_fail, warn, summary
+
+
+def main() -> int:
+    a = parse_args()
+
+    legs = []
+    for idx, hip in enumerate(a.hip):
+        if idx < len(a.hip_label):
+            label = a.hip_label[idx]
+        elif len(a.hip) == 1:
+            label = "髋"
+        elif idx == 0:
+            label = "近侧腿"
+        elif idx == 1:
+            label = "远侧腿"
+        else:
+            label = f"第{idx + 1}条腿"
+        legs.append((label, hip))
+
+    print("")
+    print("═" * 62)
+    print(f"  骑具运动学校验 · 共 {len(legs)} 条腿")
+    print("═" * 62)
+    print("")
+
+    totals = {"fail": 0, "warn": 0}
+    summaries = []
+    for label, hip in legs:
+        f, w, s = check_one_leg(a, hip, label)
+        totals["fail"] += f
+        totals["warn"] += w
+        summaries.append(s)
+
+    print("═" * 62)
+    print("  汇总")
+    print("═" * 62)
+    for s in summaries:
+        print("  " + s)
+    print("")
+
+    if totals["fail"]:
+        print(f"❌ 共 {totals['fail']} 项硬性违规（{len(legs)} 条腿合计），先改几何再出片。")
         return 1
-    print("🎉 几何自洽：腿全程可及、膝盖有弯曲余量、踏板不穿轮不穿地。")
+
+    if len(legs) == 1:
+        print("💡 提示：本报告只覆盖 1 条腿。如果骑手有近侧/远侧两条腿且髋坐标不同，")
+        print("   请用 --hip X Y --hip X Y 各传一次，否则另一条腿没有被校验。")
+    print(f"🎉 几何自洽（{len(legs)} 条腿）：腿全程可及、膝盖有弯曲余量、踏板不穿轮不穿地。")
     print("   提示：这只是静态可达性检查。落地前仍要跑 smoke_test.py 看有没有运行时 NaN。")
     return 0
 

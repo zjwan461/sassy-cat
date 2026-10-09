@@ -7,11 +7,26 @@
     但这里用一套桩 DOM + 桩 Canvas 把 <script> 真的跑起来，逐帧驱动，
     顺手注入键盘/指针交互，任何异常都会被抓住。
 
+覆盖范围（两道检测）：
+    1) 运行时检测 —— Canvas 2D 调用 + SVG/DOM 的 setAttribute 参数里有没有
+       NaN / Infinity。**两条路径都查**（见下方"为什么 setAttribute 也要查"）。
+    2) 结构检测 —— 脚本里 getElementById('x') 取过的每个 id，是否真的在 HTML
+       里声明过。桩 DOM 会自动造出任何不存在的元素，所以拼错图层 id 不会抛异常，
+       页面却会静默少一层；这里把它变成硬性失败。
+
+为什么 setAttribute 也要查（重要）：
+    早期版本的桩 setAttribute 只做 el[k] = v 纯赋值，NaN 计数只发生在桩 Canvas
+    的 Proxy 里。结果：**SVG 路线的动画完全绕过了 NaN 关卡** —— 分母写错导致
+    坐标变 NaN（画面整体消失）、髋关节坐标写成 0/0（两条腿消失），冒烟测试
+    依然全绿。Canvas 页面碰不到这个坑，SVG 页面必踩。
+    所以这里对 setAttribute 做三层检查：数值型入参非有限值、字符串入参里含
+     "NaN"/"Infinity" 字面量（坐标常被拼进 transform 字符串，等价于漏检）。
+
 用法：
     python smoke_test.py path/to/animation.html
     python smoke_test.py path/to/animation.html --extra-js drive_extra.js
 
-退出码 0 = 全部阶段通过；1 = 有阶段失败（异常 / 动画循环没续跑）。
+退出码 0 = 全部阶段通过；1 = 有阶段失败（异常 / 动画循环没续跑 / NaN / id 缺失）。
 """
 
 import argparse
@@ -24,6 +39,8 @@ import tempfile
 from pathlib import Path
 
 SCRIPT_RE = re.compile(r"<script\b[^>]*>(.*?)</script\s*>", re.S | re.I)
+# HTML 里静态声明的 id（含 <g id="...">、<canvas id="..."> 等）
+ID_ATTR_RE = re.compile(r"""\bid\s*=\s*["']([^"']+)["']""", re.I)
 
 # ----------------------------------------------------------------------------
 # JS 桩环境：假 DOM / 假 Canvas / 可控时钟 / 手动 rAF 队列
@@ -34,8 +51,38 @@ const __noop = () => {};
 const __grad = { addColorStop: __noop };
 
 globalThis.__nanHits = 0;
+globalThis.__nanSamples = [];
 globalThis.__canvas = null;
 globalThis.__errors = [];
+
+/* 结构检测：脚本请求过的 id vs HTML 真正声明过的 id */
+globalThis.__declaredIds = [];
+globalThis.__knownIds = null;
+globalThis.__requestedIds = new Set();
+globalThis.__missingIds = [];
+
+function __ids() {
+  if (!globalThis.__knownIds) globalThis.__knownIds = new Set(globalThis.__declaredIds || []);
+  return globalThis.__knownIds;
+}
+
+/* 统一的"非有限值"审查：数值直接判，字符串扫 NaN/Infinity 字面量 */
+function __auditValue(v, where) {
+  let bad = false;
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) bad = true;
+  } else if (typeof v === 'string') {
+    // 坐标常被拼进 'translate(...)' / 'rotate(...)' 这类字符串，等价于漏检
+    if (v.indexOf('NaN') >= 0 || v.indexOf('Infinity') >= 0) bad = true;
+  }
+  if (bad) {
+    globalThis.__nanHits++;
+    if (globalThis.__nanSamples.length < 6) {
+      globalThis.__nanSamples.push(where + ' ← ' + String(v).slice(0, 60));
+    }
+  }
+  return bad;
+}
 
 /* ---------- 假 2D context：未定义的方法一律 no-op，并统计 NaN 参数 ---------- */
 function __makeCtx() {
@@ -58,8 +105,13 @@ function __makeCtx() {
       // 未知方法 -> no-op，但顺手检查数字参数里有没有 NaN / Infinity
       return function () {
         for (let i = 0; i < arguments.length; i++) {
-          const a = arguments[i];
-          if (typeof a === 'number' && !Number.isFinite(a)) { globalThis.__nanHits++; break; }
+          if (typeof arguments[i] === 'number' && !Number.isFinite(arguments[i])) {
+            globalThis.__nanHits++;
+            if (globalThis.__nanSamples.length < 6) {
+              globalThis.__nanSamples.push('ctx.' + String(k) + '() ← ' + String(arguments[i]));
+            }
+            break;
+          }
         }
       };
     },
@@ -97,7 +149,18 @@ function __makeEl(tag) {
     appendChild(c) { el.children.push(c); return c; },
     removeChild(c) { return c; },
     insertBefore(c) { el.children.push(c); return c; },
-    setAttribute(k, v) { el[k] = v; },
+    /* ★ 关键改动：setAttribute 不再是纯赋值，而是先过一遍非有限值审查。
+       Canvas 和 SVG 两条绘制路径由此统一覆盖。 */
+    setAttribute(k, v) {
+      __auditValue(v, 'setAttribute("' + String(k) + '")');
+      if (k === 'id' && typeof v === 'string') __ids().add(v);
+      el[k] = v;
+    },
+    setAttributeNS(_ns, k, v) {
+      __auditValue(v, 'setAttributeNS("' + String(k) + '")');
+      if (k === 'id' && typeof v === 'string') __ids().add(v);
+      el[k] = v;
+    },
     getAttribute() { return null; },
     hasAttribute() { return false; },
     removeAttribute: __noop,
@@ -132,10 +195,21 @@ function __attachDispatcher(obj) {
 
 /* ---------- document / window ---------- */
 const __els = Object.create(null);
-function __getEl(id) { if (!__els[id]) __els[id] = __makeEl('div'); return __els[id]; }
+function __getEl(id) {
+  if (!__els[id]) __els[id] = __makeEl('div');
+  return __els[id];
+}
 
 globalThis.document = __attachDispatcher({
-  getElementById: __getEl,
+  /* ★ 关键改动：记录脚本请求过的 id，凡是 HTML 里没声明过的就登记为缺失。
+     桩 DOM 会为任何 id 自动造元素，所以拼错 id 不会抛异常——必须在这里抓。 */
+  getElementById: (id) => {
+    globalThis.__requestedIds.add(String(id));
+    if (!__ids().has(String(id)) && globalThis.__missingIds.indexOf(String(id)) < 0) {
+      globalThis.__missingIds.push(String(id));
+    }
+    return __getEl(id);
+  },
   querySelector: (sel) => __getEl(sel),
   querySelectorAll: () => [],
   createElement: __makeEl,
@@ -204,6 +278,13 @@ function __run(name, frames, dt, before) {
   }
 }
 
+/* 0. 先把 HTML 里静态声明的 id 装进桩 DOM，再跑脚本 */
+globalThis.__declaredIds = __DECLARED_IDS || [];
+
+if (__DECLARED_IDS === null) {
+  console.log('ℹ️  未能从 HTML 中提取 id 声明（可能是纯 JS 动态建树），跳过 id 完整性检查。');
+}
+
 /* 1. 加载脚本 */
 try {
   new Function(__SRC)();
@@ -256,11 +337,26 @@ for (const p of __phases) {
 }
 console.log('');
 console.log('帧数总计: ' + total + '  |  阶段: ' + __phases.length + '  |  失败: ' + failed + '  |  警告: ' + warned);
-console.log('Canvas 非有限数值调用次数 (NaN/Infinity): ' + globalThis.__nanHits);
+
+/* --- 检查 A：非有限值（Canvas 调用 + DOM/SVG 属性两路合起来计数） --- */
+console.log('非有限数值 (NaN/Infinity) 次数: ' + globalThis.__nanHits);
 if (globalThis.__nanHits > 0) {
-  console.log('❌ 检测到 NaN/Infinity —— 几何计算里有除零或未定义坐标，画面会消失。');
+  console.log('❌ 检测到 NaN/Infinity —— 几何计算里有除零或未定义坐标，画面会消失或缺件。');
+  for (const s of globalThis.__nanSamples) console.log('     · ' + s);
   failed++;
 }
+
+/* --- 检查 B：getElementById 请求的 id 是否都真的存在 --- */
+console.log('getElementById 请求的 id 数: ' + globalThis.__requestedIds.size);
+if (globalThis.__missingIds.length > 0) {
+  console.log('❌ 有 ' + globalThis.__missingIds.length + ' 个 id 在 HTML 里找不到（实际渲染会拿到 null，静默少图层）：');
+  for (const id of globalThis.__missingIds.slice(0, 10)) console.log('     · #' + id);
+  failed++;
+} else if (globalThis.__requestedIds.size > 0) {
+  console.log('✅ 脚本请求的 id 全部存在（无静默缺层）');
+}
+
+console.log('');
 if (failed === 0) console.log('🎉 冒烟测试全部通过');
 process.exit(failed === 0 ? 0 : 1);
 """
@@ -272,6 +368,20 @@ def extract_script(html: str) -> str:
         sys.exit("❌ 没找到 <script> 块 —— 这可能是纯 CSS 动画页，冒烟测试不适用。")
     # 取最长的那个块：动画主逻辑通常在最后、且最长
     return max(blocks, key=len)
+
+
+def extract_declared_ids(html: str):
+    """从 HTML 里抽出所有静态声明的 id。extract 不到时返回 None（跳过检查）。"""
+    ids = ID_ATTR_RE.findall(html)
+    if not ids:
+        return None
+    # 去重且保持顺序
+    seen, out = set(), []
+    for i in ids:
+        if i not in seen:
+            seen.add(i)
+            out.append(i)
+    return out
 
 
 def main() -> int:
@@ -289,7 +399,10 @@ def main() -> int:
     if not path.is_file():
         sys.exit(f"❌ 文件不存在: {path}")
 
-    src = extract_script(path.read_text(encoding="utf-8"))
+    html = path.read_text(encoding="utf-8")
+    src = extract_script(html)
+    declared = extract_declared_ids(html)
+
     extra = ""
     if args.extra_js:
         extra = Path(args.extra_js).read_text(encoding="utf-8")
@@ -298,13 +411,15 @@ def main() -> int:
         HARNESS
         + "\nconst __SRC = " + json.dumps(src) + ";\n"
         + "const __EXTRA_JS = " + json.dumps(extra) + ";\n"
+        + "const __DECLARED_IDS = " + json.dumps(declared) + ";\n"
         + RUNNER
     )
 
     tmp = Path(tempfile.gettempdir()) / f"smoke_{path.stem}.js"
     tmp.write_text(bundle, encoding="utf-8")
 
-    print(f"🧪 冒烟测试: {path.name}  (提取脚本 {len(src)} 字符)")
+    nid = "（未声明）" if declared is None else str(len(declared))
+    print(f"🧪 冒烟测试: {path.name}  (提取脚本 {len(src)} 字符, HTML 声明 id {nid} 个)")
     proc = subprocess.run([node, str(tmp)], capture_output=True, text=True, encoding="utf-8", errors="replace")
     sys.stdout.write(proc.stdout or "")
     if proc.stderr:
