@@ -47,9 +47,11 @@
     </div>
   </div>
   
-  <!-- 展开的 markdown 内容 -->
-  <div v-if="expanded && attachment.markdownContent" class="doc-content">
-    <MarkdownRenderer :content="attachment.markdownContent" :done="true" />
+  <!-- 展开内容：有 markdown 时渲染；无内容（如未开启 OCR 解析）时给出提示，
+       保证文档图标始终可点击 -->
+  <div v-if="expanded" class="doc-content">
+    <MarkdownRenderer v-if="attachment.markdownContent" :content="attachment.markdownContent" :done="true" />
+    <div v-else class="doc-empty">暂无内容（未开启 OCR 解析或解析结果为空）</div>
   </div>
 </template>
 
@@ -67,9 +69,8 @@ const props = defineProps({
 const expanded = ref(false)
 
 function toggleExpand() {
-  if (props.attachment.markdownContent) {
-    expanded.value = !expanded.value
-  }
+  // 无内容也可展开（展示"暂无内容"提示），保证文档图标始终可点击
+  expanded.value = !expanded.value
 }
 
 const isPdf = computed(() => props.attachment.fileExt?.toLowerCase() === '.pdf')
@@ -148,7 +149,6 @@ function formatSize(bytes) {
   color: #64748b;
   font-size: 12px;
 }
-
 .doc-content {
   margin-top: 8px;
   padding: 12px;
@@ -157,5 +157,10 @@ function formatSize(bytes) {
   border-radius: 8px;
   max-height: 400px;
   overflow-y: auto;
+}
+
+.doc-empty {
+  font-size: 12px;
+  color: #64748b;
 }
 </style>

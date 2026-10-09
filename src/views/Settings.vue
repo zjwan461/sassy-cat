@@ -168,6 +168,10 @@
           <span class="hint">用于 internet_search 工具，留空则无法使用网络搜索功能</span>
         </div>
         <div class="field">
+          <label class="check"><input type="checkbox" v-model="form.agentEnableOcr" /> 启用对话文档解析（OCR）</label>
+          <span class="hint">开启后，Agent 对话中上传的文档会进行 OCR 解析并入库；关闭后仅保存文件到存储目录，不做解析</span>
+        </div>
+        <div class="field" v-if="form.agentEnableOcr">
           <label>对话文档解析引擎（OCR）</label>
           <select v-model="form.agentOcrEngine">
             <option value="markitdown">MarkItDown（快速）</option>
@@ -580,7 +584,7 @@ const form = reactive({
   quickAskShortcut: 'Alt+Shift+Q',
   reminderPoll: 5, reminderDuration: 8,
   tavilyApiKey: '',
-  agentOcrEngine: 'markitdown',
+  agentEnableOcr: true, agentOcrEngine: 'markitdown',
   interruptOn: defaultInterruptOn(),
   ragAutoEmbedding: true, ragEmbedType: 'local', ragEmbedModel: 'BAAI/bge-small-zh-v1.5',
   ragEmbedBaseUrl: '', ragEmbedApiKey: '', ragOcrEngine: 'docling',
@@ -738,7 +742,8 @@ async function loadConfig() {
   // Tavily API Key：掩码处理
   const tavilyKey = cfg.agent?.tavilyApiKey || ''
   form.tavilyApiKey = tavilyKey.length > 3 ? '***' + tavilyKey.slice(-3) : tavilyKey
-  // 对话 OCR 引擎
+  // 对话 OCR 引擎（开关缺省视为开启，与后端默认一致）
+  form.agentEnableOcr = cfg.agent?.enableOcr !== false
   form.agentOcrEngine = cfg.agent?.ocrEngine === 'docling' ? 'docling' : 'markitdown'
   // 高危操作人工确认：缺省视为打断（与后端默认一致）
   const interruptOn = cfg.agent?.interruptOn || {}
@@ -1002,6 +1007,7 @@ async function saveAll() {
     { path: 'voice.voiceName', value: form.voiceVoiceName },
     { path: 'voice.rate', value: Number(form.voiceRate) || 1 },
     { path: 'voice.pitch', value: Number(form.voicePitch) || 1 },
+    { path: 'agent.enableOcr', value: !!form.agentEnableOcr },
     { path: 'agent.ocrEngine', value: form.agentOcrEngine === 'docling' ? 'docling' : 'markitdown' },
     { path: 'agent.interruptOn', value: { ...form.interruptOn } },
     { path: 'rag.autoEmbedding', value: !!form.ragAutoEmbedding },

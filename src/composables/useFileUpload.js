@@ -165,12 +165,14 @@ export function buildAttachments() {
     })
   }
   
-  // 文档（仅已完成的）
+  // 文档（仅已完成的）：OCR 关闭时 markdown 为空，仍要展示文档图标（点击可展开，
+  // 内容为空），因此只要解析完成即纳入附件；有 markdown 时才拼接【文件: …】正文，
+  // 为空时 content 置空串、仅保留 filePath（供后端透传文件存储目录）
   for (const doc of pendingDocs.value) {
-    if (doc.status === 'done' && doc.markdown) {
+    if (doc.status === 'done') {
       attachments.push({
         type: 'text',
-        content: `【文件: ${doc.name}】\n\n${doc.markdown}`,
+        content: doc.markdown ? `【文件: ${doc.name}】\n\n${doc.markdown}` : '',
         name: doc.name,
         filePath: doc.filePath || '',
       })

@@ -583,12 +583,20 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
                 )
             elif att.get("type") == "text":
                 # OCR 结果：作为文本追加；前端把 OCR 响应的原始文件路径
-                # 随附件透传（filePath），一并带给模型，供其按需引用/读取源文件
-                if att.get("content"):
-                    text = att["content"]
-                    file_path = att.get("filePath")
-                    if file_path:
-                        text = f"{text}\n\n（原始文件路径: {file_path}）"
+                # 随附件透传（filePath），一并带给模型，供其按需引用/读取源文件。
+                # 注意：OCR 关闭时 markdown 可能为空，此时仍必须把「文件存储目录」
+                # 带给模型，故 content / filePath 任一非空都要保留该附件，
+                # 不能只判 content（否则空 markdown 会把整个附件连同 filePath 丢掉）。
+                markdown = (att.get("content") or "").strip()
+                file_path = att.get("filePath")
+                text = markdown
+                if file_path:
+                    text = (
+                        f"{text}\n\n（原始文件路径: {file_path}）"
+                        if text
+                        else f"（原始文件路径: {file_path}）"
+                    )
+                if text:
                     content_parts.append({"type": "text", "text": text})
         user_content = content_parts if content_parts else content
 
