@@ -27,7 +27,7 @@
 - [ ] 眼睛在喙根稍后方
 - [ ] 整体配色：白/米白身体 + 橙黄喙囊（不是全白或全黄）
 
-**自测**：把图截出来给没看过提示词的人看，能一眼说出"这是鹈鹕"才算过。
+**自测**：把图截出来（Phase 4 会给你 PNG）给没看过提示词的人看，能一眼说出"这是鹈鹕"才算过。
 
 ## 四、运动逻辑
 
@@ -41,15 +41,26 @@
 ## 五、健壮性
 
 - [ ] `dt` 被夹住（`Math.min(dt, 0.05)`），切标签页回来不瞬移
-- [ ] `resize` 时按 `devicePixelRatio` 重设画布尺寸
+- [ ] `resize` 时按 `devicePixelRatio` 重设画布/视口尺寸
+- [ ] **`resize` 回调只读事件，不给 `window` 属性赋值**（`window.innerWidth = ...` 在 `'use strict'` 下会抛 `TypeError`，且只在拖窗口时才炸）
 - [ ] 所有 `Math.acos` 的入参都夹到 `[-1, 1]`
 - [ ] 所有除法都防了零分母
 - [ ] 暂停时 `dt` 清零，恢复后不跳帧
-- [ ] 交互目标（`pointerdown` / `keydown`）注册在 `window` 或 `document` 上，不要只挂在 canvas 上
+- [ ] 交互目标（`pointerdown` / `keydown`）注册在 `window` 或 `document` 上，不要只挂在 canvas/svg 上
 
-## 六、验证留痕
+## 六、SVG 路线专项（用 SVG 时逐项核对）
 
-- [ ] `node --check` 通过
-- [ ] `smoke_test.py` 退出码 0，NaN 计数为 0
-- [ ] `check_rig_geometry.py` 退出码 0
-- [ ] 汇报里写出了实测数值，不是"应该没问题"
+- [ ] 所有旋转都写全 `rotate(angle, cx, cy)`，没有裸 `rotate(angle)`
+- [ ] 每个 `getElementById('xxx')` 的 id 都能在 HTML 里找到（拼错即静默少一层）
+- [ ] `<svg>` 同时给了 `viewBox` 和 `preserveAspectRatio`
+- [ ] 每个 `<line>` 的 `x1/y1/x2/y2`、每个 transform 的数值都不是 NaN（分母已防零）
+- [ ] 没有用文字/emoji 拼部件（无法参与几何校验，跨平台渲染也不一致）
+
+## 七、验证留痕（四关）
+
+- [ ] 第 1 关：自己扫了一遍结构（括号配对、`<script>`/标签闭合）
+- [ ] 第 2 关：`smoke_test.py` 退出码 0，**非有限值计数为 0**，**id 检查无缺失**
+- [ ] 第 3 关：`check_rig_geometry.py` 退出码 0，**近侧/远侧两条腿都传了 `--hip`**（若为双髋设计）
+- [ ] 第 4 关：`screenshot.py` 通过（或多时间点截图画面有变化）；本机无浏览器则记录"已跳过"
+- [ ] **人工看过截图**，确认要素齐全（不是只信脚本绿了）
+- [ ] 汇报里写出了实测数值，不是"应该没问题"；跳过的关卡也要明说

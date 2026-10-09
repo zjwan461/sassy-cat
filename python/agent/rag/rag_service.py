@@ -9,9 +9,15 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
     MarkdownHeaderTextSplitter,
+    HTMLHeaderTextSplitter,
+    LatexTextSplitter,
+    RecursiveJsonSplitter,
+    Language,
 )
 from langchain_core.documents import Document
 from uuid import uuid4
+import json
+import os
 import re
 import torch
 
@@ -149,6 +155,296 @@ class RAGService:
         
         return score >= 2
     
+    # 代码文件扩展名 -> langchain 语言（用于按语法分块）
+    _CODE_EXT_LANGUAGE: Dict[str, str] = {
+        ".py": Language.PYTHON,
+        ".pyi": Language.PYTHON,
+        ".js": Language.JS,
+        ".mjs": Language.JS,
+        ".cjs": Language.JS,
+        ".jsx": Language.JS,
+        ".ts": Language.TS,
+        ".tsx": Language.TS,
+        ".java": Language.JAVA,
+        ".kt": Language.KOTLIN,
+        ".kts": Language.KOTLIN,
+        ".go": Language.GO,
+        ".rs": Language.RUST,
+        ".rb": Language.RUBY,
+        ".php": Language.PHP,
+        ".cs": Language.CSHARP,
+        ".c": Language.C,
+        ".h": Language.C,
+        ".cpp": Language.CPP,
+        ".cc": Language.CPP,
+        ".hpp": Language.CPP,
+        ".scala": Language.SCALA,
+        ".swift": Language.SWIFT,
+        ".lua": Language.LUA,
+        ".pl": Language.PERL,
+        ".pm": Language.PERL,
+        ".r": Language.R,
+        ".hs": Language.HASKELL,
+        ".lhs": Language.HASKELL,
+        ".ex": Language.ELIXIR,
+        ".exs": Language.ELIXIR,
+        ".sol": Language.SOL,
+        ".rst": Language.RST,
+        ".ps1": Language.POWERSHELL,
+        ".bat": Language.POWERSHELL,
+        ".cmd": Language.POWERSHELL,
+    }
+
+    # 文档类扩展名 -> 内容类型（内容无明显特征时的兜底判断）
+    _DOC_EXT_CONTENT_TYPE: Dict[str, str] = {
+        ".md": "markdown",
+        ".markdown": "markdown",
+        ".html": "html",
+        ".htm": "html",
+        ".xhtml": "html",
+        ".json": "json",
+        ".tex": "latex",
+        ".latex": "latex",
+    }
+
+    @staticmethod
+    def _extract_ext(metadata: Optional[Dict[str, Any]]) -> str:
+        """从 metadata 中推断文件扩展名（优先显式 ext，其次 filename/source/name）。"""
+        if not metadata:
+            return ""
+        ext = str(metadata.get("ext") or "").strip().lower()
+        if ext:
+            return ext if ext.startswith(".") else f".{ext}"
+        for key in ("filename", "source", "file_name", "name"):
+            value = metadata.get(key)
+            if value:
+                _, e = os.path.splitext(os.path.basename(str(value)))
+                if e:
+                    return e.lower()
+        return ""
+
+    @staticmethod
+    def _looks_like_json(text: str) -> bool:
+        """判断文本是否为合法 JSON（对象或数组）。"""
+        stripped = text.lstrip()
+        if not stripped or stripped[0] not in "[{":
+            return False
+        try:
+            json.loads(text)
+            return True
+        except (ValueError, TypeError):
+            return False
+
+    @staticmethod
+    def _looks_like_html(text: str) -> bool:
+        """判断文本是否为 HTML（整体标记或标签密度）。"""
+        head = text[:2000].lower()
+        if "<!doctype html" in head or "<html" in head or "<body" in head:
+            return True
+        tag_hits = re.findall(
+            r"</?(?:div|p|span|table|thead|tbody|tr|td|th|ul|ol|li|h[1-6]|a|img|"
+            r"script|style|section|article|header|footer|nav|pre|code)\b[^>]*>",
+            text[:5000],
+            re.IGNORECASE,
+        )
+        return len(tag_hits) >= 5
+
+    @staticmethod
+    def _looks_like_latex(text: str) -> bool:
+        """判断文本是否为 LaTeX 源码。"""
+        return bool(
+            re.search(
+                r"\\documentclass|\\begin\{|\\section\{|\\subsection\{", text[:3000]
+            )
+        )
+
+    @classmethod
+    def detect_content_type(
+        cls,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        识别文档内容类型，用于选择合适的分块器
+
+        Returns:
+            'markdown' | 'html' | 'json' | 'latex' | 'code' | 'text'
+        """
+        text = content or ""
+        if not text.strip():
+            return "text"
+
+        ext = cls._extract_ext(metadata)
+
+        # 源码文件按代码处理：docling/markitdown 不会产出这些扩展名，
+        # 提前判定可避免代码里的 `# 注释` / `- ` 被误识别为 Markdown
+        if ext in cls._CODE_EXT_LANGUAGE:
+            return "code"
+
+        if cls._looks_like_json(text):
+            return "json"
+        if cls._looks_like_html(text):
+            return "html"
+        if cls.is_markdown(text):
+            return "markdown"
+        if cls._looks_like_latex(text):
+            return "latex"
+
+        # 内容无明显特征时，回退到扩展名提示（如几乎不含标记的 .md）
+        return cls._DOC_EXT_CONTENT_TYPE.get(ext, "text")
+
+    @staticmethod
+    def _recursive(chunk_size: int, chunk_overlap: int) -> RecursiveCharacterTextSplitter:
+        """创建一个通用递归字符分块器。"""
+        return RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+
+    @staticmethod
+    def _split_markdown(
+        content: str,
+        doc: Document,
+        markdown_headers: Optional[List[tuple]],
+        chunk_size: int,
+        chunk_overlap: int,
+    ) -> List[Document]:
+        """Markdown：先按标题层级切分，再用递归分块约束单块大小。"""
+        if markdown_headers is None:
+            markdown_headers = [("#", "h1"), ("##", "h2"), ("###", "h3")]
+
+        try:
+            header_splits = MarkdownHeaderTextSplitter(
+                headers_to_split_on=markdown_headers
+            ).split_text(content)
+        except Exception:
+            header_splits = []
+
+        if not header_splits:
+            header_splits = [doc]
+
+        # 标题分块只保证语义边界，长章节可能远超 chunk_size，
+        # 因此必须再走一次递归分块，避免单块超出 embedding 上下文
+        return RAGService._recursive(chunk_size, chunk_overlap).split_documents(
+            header_splits
+        )
+
+    @staticmethod
+    def _pack_small_documents(
+        docs: List[Document],
+        chunk_size: int,
+    ) -> List[Document]:
+        """把相邻且 metadata 相同的小分块合并，避免逐元素切分产生大量碎片。
+
+        仅做「向上合并到不超过 chunk_size」，不拆分大块。
+        """
+        packed: List[Document] = []
+        for d in docs:
+            if (
+                packed
+                and packed[-1].metadata == d.metadata
+                and len(packed[-1].page_content) + len(d.page_content) + 1 <= chunk_size
+            ):
+                merged = packed[-1]
+                merged.page_content = f"{merged.page_content}\n{d.page_content}"
+            else:
+                packed.append(
+                    Document(page_content=d.page_content, metadata=dict(d.metadata))
+                )
+        return packed
+
+    @staticmethod
+    def _split_html(
+        content: str,
+        metadata: Dict[str, Any],
+        chunk_size: int,
+        chunk_overlap: int,
+    ) -> List[Document]:
+        """HTML：按 h1~h3 标题结构切分，合并小碎片，再用递归分块约束单块大小。"""
+        try:
+            html_splits = HTMLHeaderTextSplitter(
+                headers_to_split_on=[("h1", "h1"), ("h2", "h2"), ("h3", "h3")],
+                return_each_element=False,
+            ).split_text(content)
+        except Exception:
+            html_splits = []
+
+        if not html_splits:
+            return RAGService._recursive(chunk_size, chunk_overlap).split_documents(
+                [Document(page_content=content, metadata=dict(metadata))]
+            )
+
+        # HTMLHeaderTextSplitter 会逐元素产出内容，先合并成较大的语义块
+        html_splits = RAGService._pack_small_documents(html_splits, chunk_size)
+        return RAGService._recursive(chunk_size, chunk_overlap).split_documents(
+            html_splits
+        )
+
+    @staticmethod
+    def _split_json(
+        content: str,
+        metadata: Dict[str, Any],
+        chunk_size: int,
+        chunk_overlap: int,
+    ) -> List[Document]:
+        """JSON：按层级结构切分，保持键值对的语义完整。"""
+        try:
+            data = json.loads(content)
+            splitter = RecursiveJsonSplitter(max_chunk_size=chunk_size)
+            return splitter.create_documents(texts=[data])
+        except Exception:
+            # 非法 JSON 或结构不适配时，退回通用递归分块
+            return RAGService._recursive(chunk_size, chunk_overlap).split_documents(
+                [Document(page_content=content, metadata=dict(metadata))]
+            )
+
+    @classmethod
+    def _split_code(
+        cls,
+        content: str,
+        metadata: Dict[str, Any],
+        language: Optional[str],
+        chunk_size: int,
+        chunk_overlap: int,
+    ) -> List[Document]:
+        """代码：按语言语法（类/函数边界）分块，未知语言退回通用递归分块。"""
+        doc = Document(page_content=content, metadata=dict(metadata))
+        lang = language or cls._CODE_EXT_LANGUAGE.get(cls._extract_ext(metadata))
+
+        if lang:
+            try:
+                return RecursiveCharacterTextSplitter.from_language(
+                    Language(lang),
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                ).split_documents([doc])
+            except (ValueError, KeyError):
+                pass
+
+        return cls._recursive(chunk_size, chunk_overlap).split_documents([doc])
+
+    @staticmethod
+    def _finalize_splits(
+        raw_splits: List[Document],
+        metadata: Dict[str, Any],
+    ) -> List[Document]:
+        """统一为分块附加原始 metadata，并过滤空内容。
+
+        合并顺序为「分块自身 metadata <- 调用方 metadata」：既保留分块器
+        生成的结构化信息（如 h1/h2 标题层级），又保证调用方 metadata
+        （kb_id/doc_id/source 等）不被覆盖。
+        """
+        all_splits: List[Document] = []
+        for split in raw_splits:
+            content = split.page_content
+            if not content or not content.strip():
+                continue
+            merged = dict(split.metadata or {})
+            merged.update(metadata)
+            split.metadata = merged
+            all_splits.append(split)
+        return all_splits
+
     def split_document(
         self,
         content: str,
@@ -156,53 +452,64 @@ class RAGService:
         markdown_headers: Optional[List[tuple]] = None,
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
+        content_type: Optional[str] = None,
+        language: Optional[str] = None,
     ) -> List[Document]:
         """
-        根据文档类型自动分块
-        
+        根据文档类型自动选择合适的分块器进行分块
+
+        支持的内容类型（content_type，为 None 时自动识别）：
+            - markdown：MarkdownHeaderTextSplitter + RecursiveCharacterTextSplitter
+            - html：HTMLHeaderTextSplitter + RecursiveCharacterTextSplitter
+            - json：RecursiveJsonSplitter
+            - latex：LatexTextSplitter
+            - code：RecursiveCharacterTextSplitter.from_language（按语言语法）
+            - text：RecursiveCharacterTextSplitter
+
         Args:
             content: 文档内容
-            metadata: 文档元数据
+            metadata: 文档元数据（会附加到每个分块）
             markdown_headers: Markdown 标题层级，如 [("#", "h1"), ("##", "h2")]
-            chunk_size: 递归分块的块大小
-            chunk_overlap: 递归分块的重叠大小
-            
+            chunk_size: 分块块大小
+            chunk_overlap: 分块重叠大小
+            content_type: 强制指定内容类型；None 时由内容自动识别
+            language: 代码分块语言（Language 值，如 "python"），仅 code 类型生效
+
         Returns:
             分块后的 Document 列表
         """
         if metadata is None:
             metadata = {}
-        
-        doc = Document(page_content=content, metadata=metadata)
-        
-        if self.is_markdown(content):
-            # Markdown 文档使用标题分块
-            if markdown_headers is None:
-                markdown_headers = [("#", "h1"), ("##", "h2")]
-            
-            text_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=markdown_headers)
-            raw_splits = text_splitter.split_text(doc.page_content)
-            
-            # 将原文档 metadata 附加给每个分块
-            all_splits = []
-            for split in raw_splits:
-                split.metadata.update(metadata)
-                all_splits.append(split)
-        else:
-            # 普通文本使用递归字符分块
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
+
+        content = content or ""
+        if not content.strip():
+            return []
+
+        ctype = content_type or self.detect_content_type(content, metadata)
+        doc = Document(page_content=content, metadata=dict(metadata))
+
+        if ctype == "markdown":
+            raw_splits = self._split_markdown(
+                content, doc, markdown_headers, chunk_size, chunk_overlap
             )
-            all_splits = text_splitter.split_documents([doc])
-        
-        # 过滤空内容
-        all_splits = [
-            doc for doc in all_splits 
-            if doc.page_content and doc.page_content.strip()
-        ]
-        
-        return all_splits
+        elif ctype == "html":
+            raw_splits = self._split_html(content, metadata, chunk_size, chunk_overlap)
+        elif ctype == "json":
+            raw_splits = self._split_json(content, metadata, chunk_size, chunk_overlap)
+        elif ctype == "latex":
+            raw_splits = LatexTextSplitter(
+                chunk_size=chunk_size, chunk_overlap=chunk_overlap
+            ).split_documents([doc])
+        elif ctype == "code":
+            raw_splits = self._split_code(
+                content, metadata, language, chunk_size, chunk_overlap
+            )
+        else:
+            raw_splits = self._recursive(chunk_size, chunk_overlap).split_documents(
+                [doc]
+            )
+
+        return self._finalize_splits(raw_splits, metadata)
     
     def add_documents(
         self,

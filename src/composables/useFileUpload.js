@@ -61,7 +61,8 @@ async function callOcrApi(file) {
   }
   
   const result = await response.json()
-  return result.markdown || ''
+  // 一并带回后端落盘的原始文件路径，供 chat.send 随附件透传
+  return { markdown: result.markdown || '', filePath: result.file_path || '' }
 }
 
 /**
@@ -106,11 +107,11 @@ export async function handleFiles(files) {
       pendingDocs.value.push(docEntry)
       
       try {
-        const markdown = await callOcrApi(file)
+        const { markdown, filePath } = await callOcrApi(file)
         // 替换数组元素而非原地修改，确保 Vue 响应式能检测到变化
         const idx = pendingDocs.value.findIndex(d => d.id === docId)
         if (idx !== -1) {
-          pendingDocs.value[idx] = { ...docEntry, markdown, status: 'done' }
+          pendingDocs.value[idx] = { ...docEntry, markdown, filePath, status: 'done' }
         }
       } catch (e) {
         const idx = pendingDocs.value.findIndex(d => d.id === docId)
@@ -164,13 +165,16 @@ export function buildAttachments() {
     })
   }
   
-  // 文档（仅已完成的）
+  // 文档（仅已完成的）：OCR 关闭时 markdown 为空，仍要展示文档图标（点击可展开，
+  // 内容为空），因此只要解析完成即纳入附件；有 markdown 时才拼接【文件: …】正文，
+  // 为空时 content 置空串、仅保留 filePath（供后端透传文件存储目录）
   for (const doc of pendingDocs.value) {
-    if (doc.status === 'done' && doc.markdown) {
+    if (doc.status === 'done') {
       attachments.push({
         type: 'text',
-        content: `【文件: ${doc.name}】\n\n${doc.markdown}`,
+        content: doc.markdown ? `【文件: ${doc.name}】\n\n${doc.markdown}` : '',
         name: doc.name,
+        filePath: doc.filePath || '',
       })
     }
   }

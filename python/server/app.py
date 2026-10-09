@@ -26,6 +26,7 @@ from server.db import init_db as init_message_db, close_db as close_message_db
 from server.db import get_messages_by_session, DEFAULT_KB_ID
 from server.db import kb_repository as kb_repo
 from uuid import uuid4
+import config_loader
 import paths
 import utils
 
@@ -92,6 +93,15 @@ def create_app() -> FastAPI:
         except OSError:
             logger.exception(f"保存上传文件失败: {chat_upload_dir}")
         try:
+            # OCR 开关（agent.enableOcr，默认开启）；关闭时只落盘到文件存储目录，不做解析
+            if not config_loader.current().get("agent.enableOcr", True):
+                logger.info(f"OCR 已关闭，仅保存文件到存储目录: {save_path}")
+                return {
+                    "status": "success",
+                    "filename": file.filename,
+                    "markdown": "",
+                    "file_path": save_path,
+                }
             result = await do_ocr("chat", file.filename or "unknown", file_bytes)
             markdown = result.get("page_content", "")
             # 异步后台保存到 default 知识库（OCR 内容自动向量化，供 RAG 检索），不阻塞 OCR 响应
@@ -106,6 +116,7 @@ def create_app() -> FastAPI:
                 "status": "success",
                 "filename": file.filename,
                 "markdown": markdown,
+                "file_path": save_path,
             }
         except HTTPException:
             raise

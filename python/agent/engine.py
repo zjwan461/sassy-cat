@@ -21,7 +21,10 @@ from agent.llms import build_chat_llm
 from agent.prompts import build_system_prompt
 from agent.tools.builtin_tools import (
     create_skill,
+    create_todo,
+    edit_todo,
     get_date_time,
+    get_todo,
     internet_search,
     run_command,
     save_user_info,
@@ -219,6 +222,9 @@ class AgentHolder:
                 internet_search,
                 run_command,
                 save_user_info,
+                create_todo,
+                get_todo,
+                edit_todo,
                 create_skill,
                 create_reminder,
                 list_reminders,

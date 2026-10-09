@@ -1,5 +1,14 @@
 <template>
-  <div class="markdown-body" ref="rootRef" v-html="html" @click="onClick"></div>
+  <!-- 双容器增量渲染：
+       .md-stable 只追加、永不重写 —— 已定稿的块只渲染一次，其 DOM 节点身份不变，
+                  横向滚动位置、文本选区、图片加载状态都不再被重置
+       .md-live   只渲染"仍可能变化的尾部"（通常是最后一个块），随分界点前移而"搬家"到 stable
+       注意：两个容器在模板里必须没有子节点，其内容完全由脚本接管
+             （Vue 不会清理"无 vnode 子节点"的元素，这是官方允许的手动 DOM 用法） -->
+  <div class="markdown-body" ref="rootRef" :class="{ 'md-full': done }" @click="onClick">
+    <div class="md-stable" ref="stableRef"></div>
+    <div class="md-live" ref="liveRef"></div>
+  </div>
   <!-- HTML 代码块预览弹窗：iframe 沙箱渲染（allow-scripts 但不含 allow-same-origin，隔离宿主环境） -->
   <Teleport to="body">
     <div v-if="previewVisible" class="md-preview-modal" @click.self="closePreview" @keydown.esc="closePreview">
@@ -15,11 +24,12 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick, onMounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import MarkdownIt from 'markdown-it'
 import texmath from 'markdown-it-texmath'
 import katex from 'katex'
 import hljs from 'highlight.js/lib/common'
+import { createStreamSplitter } from '../utils/streamSplitter'
 import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/atom-one-dark.css'
 
@@ -30,27 +40,58 @@ const props = defineProps({
   done: { type: Boolean, default: true },
 })
 
-const rootRef = ref(null)
-const html = ref('')
+// 本帧渲染完成（DOM 已更新、浏览器尚未绘制）时通知父组件，供其做贴底跟随：
+// 贴底动作与内容增长落在同一帧内，可消除"先滚到底、内容随后长高"的抖动
+const emit = defineEmits(['rendered'])
 
+const rootRef = ref(null)
+const stableRef = ref(null) // 已定稿区域：脚本接管、只追加、永不重写
+const liveRef = ref(null) // 活动尾部：脚本接管，可整段覆盖或原地追加文本
+
+// HTML 转义（用于把代码文本安全地放进 innerHTML）。
+// 直接复用 markdown-it 自带的转义实现，避免手写实体替换出错：
+// 原实现把实体替换写成了恒等变换（`&` 仍是 `&`），未高亮的代码块里
+// 出现 `<script>` 之类会被当成真实 HTML 注入，必须真正转义
 function escapeHtml(s) {
-  return s.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/"/g, '"')
+  return md.utils.escapeHtml(String(s))
+}
+
+// 语言别名：highlight.js/lib/common 注册的是正式名，模型常写缩写
+const LANG_ALIAS = {
+  py: 'python', js: 'javascript', ts: 'typescript',
+  sh: 'bash', shell: 'bash', zsh: 'bash', ps1: 'powershell',
+  yml: 'yaml', md: 'markdown', htm: 'html',
+  'c++': 'cpp', 'c#': 'csharp',
+}
+function normalizeLang(lang) {
+  const l = (lang || '').trim().toLowerCase()
+  return LANG_ALIAS[l] || l
+}
+
+// 超过该长度不做语法高亮：极端长代码块的高亮成本远大于收益
+const MAX_HIGHLIGHT_CHARS = 20000
+
+// 只高亮"已知语言"的代码，未知语言一律按纯文本转义。
+// 原先未知语言走 hljs.highlightAuto()，它会依次尝试全部内置语法并打分选优
+// （O(n × 语法数)）；在流式逐帧重渲染的场景下这是最大的性能黑洞，必须去掉。
+function highlightCode(code, lang) {
+  const l = normalizeLang(lang)
+  if (!l || l === 'text' || l === 'plaintext' || code.length > MAX_HIGHLIGHT_CHARS) {
+    return escapeHtml(code)
+  }
+  if (!hljs.getLanguage(l)) return escapeHtml(code)
+  try {
+    return hljs.highlight(code, { language: l }).value
+  } catch {
+    return escapeHtml(code)
+  }
 }
 
 const md = new MarkdownIt({
   html: false, // 禁止原始 HTML，防 XSS
   linkify: true,
   breaks: true, // 单个换行也换行，符合聊天习惯
-  highlight(code, lang) {
-    try {
-      if (lang && hljs.getLanguage(lang)) {
-        return hljs.highlight(code, { language: lang }).value
-      }
-      return hljs.highlightAuto(code).value
-    } catch {
-      return escapeHtml(code)
-    }
-  },
+  highlight: highlightCode,
 })
 
 md.use(texmath, {
@@ -60,36 +101,46 @@ md.use(texmath, {
   classesForModern: false,
 })
 
+// 代码块外壳：fence 规则与"未闭合代码块"快速路径共用同一套结构，
+// 保证流式/定稿两种形态的样式与交互（复制/预览按钮）完全一致
+function codeBlockHtml(label, bodyHtml, { preview = false, streaming = false, hljsClass = '' } = {}) {
+  const previewBtn = preview
+    ? `<button class="md-preview" type="button" title="在弹窗中预览 HTML">🌐 预览</button>`
+    : ''
+  const copyBtn = `<button class="md-copy" type="button" title="复制代码">📋 复制</button>`
+  return (
+    `<div class="md-code"${streaming ? ' data-streaming="1"' : ''}>` +
+    `<div class="md-code-head"><span class="md-code-lang">${escapeHtml(label || 'text')}</span>` +
+    `<span class="md-code-btns">${previewBtn}${copyBtn}</span></div>` +
+    `<pre><code${hljsClass}>${bodyHtml}</code></pre>` +
+    `</div>`
+  )
+}
+
 // 自定义 fence：代码块加语言标签 + 复制按钮；html 代码块额外提供预览按钮；mermaid 特殊处理
 md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   const token = tokens[idx]
-  const lang = (token.info || '').trim().split(/\s+/)[0].toLowerCase()
+  const lang = normalizeLang((token.info || '').trim().split(/\s+/)[0])
   const code = token.content
-  // html/htm 代码块：右上角提供“预览”按钮，点击后在沙箱 iframe 中渲染
-  const isHtmlBlock = lang === 'html' || lang === 'htm'
-  const previewBtn = isHtmlBlock
-    ? `<button class="md-preview" type="button" title="在弹窗中预览 HTML">🌐 预览</button>`
-    : ''
+  // env.streaming：该片段尚未定稿（活动尾部的普通渲染）——
+  // 不做语法高亮，避免每帧对同一段代码重复高亮
+  const streaming = !!(env && env.streaming)
 
-  // Mermaid：完成后渲染为图占位（由 renderMermaid 异步替换为 SVG），流式期间按普通代码展示
+  // Mermaid：定稿后才渲染为图占位（由 renderMermaidBlocks 异步替换为 SVG）
   if (lang === 'mermaid') {
     if (props.done) {
       return `<div class="md-mermaid" data-src="${encodeURIComponent(code)}"><pre><code>${escapeHtml(code)}</code></pre></div>`
     }
-    return `<div class="md-code" data-streaming="1"><div class="md-code-head"><span class="md-code-lang">mermaid</span></div><pre><code>${escapeHtml(code)}</code></pre></div>`
+    return codeBlockHtml('mermaid', escapeHtml(code), { streaming: true })
   }
 
-  const highlighted = md.options.highlight
-    ? md.options.highlight(code, lang)
-    : escapeHtml(code)
-  const body = highlighted || escapeHtml(code)
-  return (
-    `<div class="md-code">` +
-    `<div class="md-code-head"><span class="md-code-lang">${escapeHtml(lang || 'text')}</span>` +
-    `<span class="md-code-btns">${previewBtn}<button class="md-copy" type="button" title="复制代码">📋 复制</button></span></div>` +
-    `<pre><code class="hljs${lang ? ' language-' + escapeHtml(lang) : ''}">${body}</code></pre>` +
-    `</div>`
-  )
+  // 已定稿的分块：一次高亮到位（每个块只渲染一次，全生命周期 O(n) 总量）
+  const body = streaming ? escapeHtml(code) : (highlightCode(code, lang) || escapeHtml(code))
+  return codeBlockHtml(lang, body, {
+    preview: lang === 'html',
+    streaming,
+    hljsClass: !streaming && lang ? ` class="hljs language-${escapeHtml(lang)}"` : '',
+  })
 }
 
 // 表格包裹容器便于横向滚动
@@ -154,36 +205,239 @@ async function renderMermaidBlocks() {
   }
 }
 
-// rAF 节流：流式高频 delta 下每帧最多重渲染一次
+// ---------- 流式增量渲染引擎 ----------
+// 设计见 plans/streaming-markdown-render-perf-plan.md：
+//   1) 稳定前缀（.md-stable）只追加、永不重写 ⇒ 已定稿区域的滚动/选区/图片不受影响
+//   2) 活动尾部（.md-live）只渲染"最后一个块"级别的小片段 ⇒ 单帧成本与消息总长解耦
+//   3) 尾部是"未闭合代码块"时走 DOM 原地追加文本 ⇒ 连尾块自身的横向滚动位置也保留
+//   4) 定稿（done）时整段一次性重渲 ⇒ 吸收分块带来的语义偏差，与"整段渲染"结果一致
+
+const splitter = createStreamSplitter()
+
+let renderedSrc = '' // 已渲染的完整源码：区分"追加"与"分叉/回退"（重试会清空 content）
+let committed = 0 // 已提交进 .md-stable 的源码长度（分界点）
+let liveMode = 'empty' // 尾部形态：empty | flow | fence
+let fenceKey = '' // 未闭合代码块的头部（```lang）
+let fenceBody = '' // 已写入 <code> 的正文，用于计算增量
+
 let rafId = null
-let pending = false
-function scheduleRender() {
-  if (rafId !== null) {
-    pending = true
+let pendingRender = false
+let lastRenderTs = 0
+let doneRendered = false
+
+// 流式期间的最小渲染间隔（约 20fps）：文本追加在 15~20fps 下已足够顺滑，
+// 能显著减少无效解析；定稿渲染不受此限制
+const MIN_RENDER_INTERVAL = 50
+
+// 每帧渲染一次 markdown，env 独立（不共享，避免跨片段残留状态）。
+// 代价：跨块引用式链接 [x][1] 需等定稿整段重渲才能解析 —— 属可接受偏差
+function mdRender(src, streaming) {
+  return md.render(src, { streaming })
+}
+
+// 把新增的"块安全分界点之前"的内容渲染一次并追加进稳定容器
+function appendStable(chunkSrc) {
+  const el = stableRef.value
+  if (!el || !chunkSrc) return
+  let html
+  try {
+    html = mdRender(chunkSrc, false)
+  } catch (e) {
+    console.warn('[markdown] 分块渲染失败，退化为纯文本:', e)
+    html = `<pre class="md-plain-fallback">${escapeHtml(chunkSrc)}</pre>`
+  }
+  el.insertAdjacentHTML('beforeend', html) // 只追加：既有 DOM 节点身份不变
+}
+
+function clearDom() {
+  if (stableRef.value) stableRef.value.innerHTML = ''
+  if (liveRef.value) liveRef.value.innerHTML = ''
+  splitter.reset()
+  committed = 0
+  liveMode = 'empty'
+  fenceKey = ''
+  fenceBody = ''
+}
+
+/** 该行是否为与 marker 同符号、长度不短于 marker 的闭合围栏行 */
+function isFenceClose(line, marker) {
+  const t = line.trim()
+  if (!t || t[0] !== marker[0] || t.length < marker.length) return false
+  return t === marker[0].repeat(t.length)
+}
+
+/**
+ * 判断一段源码是否"整体就是尚未闭合的围栏代码块"，是则返回可原地追加的头部与正文。
+ * 已闭合（正文里已有闭合围栏）则返回 null，交给 markdown-it 正常渲染。
+ */
+function parseOpenFence(src) {
+  const m = /^ {0,3}(`{3,}|~{3,})([^\n]*)/.exec(src)
+  if (!m) return null
+  const marker = m[2]
+  const key = m[1] + marker + m[3]
+  let bodyStart = m[0].length
+  if (src[bodyStart] === '\r') bodyStart++
+  if (src[bodyStart] === '\n') bodyStart++
+  const body = src.slice(bodyStart)
+  if (body.split('\n').some((line) => isFenceClose(line, marker))) return null
+  const label = (m[3] || '').trim().split(/\s+/)[0].toLowerCase() || 'text'
+  return { key, label, body }
+}
+
+function updateLiveFenceSkeleton(label) {
+  const el = liveRef.value
+  if (!el) return null
+  el.innerHTML = codeBlockHtml(label, '', { streaming: true })
+  return el.querySelector('pre code')
+}
+
+// 渲染活动尾部：优先走"未闭合代码块原地追加"，否则整块覆盖
+function renderTail(tail) {
+  const el = liveRef.value
+  if (!el) return
+  if (!tail) {
+    if (liveMode !== 'empty') el.innerHTML = ''
+    liveMode = 'empty'
+    fenceKey = ''
+    fenceBody = ''
     return
   }
-  doRender()
-}
-function doRender() {
-  rafId = null
+
+  const open = parseOpenFence(tail)
+  if (open) {
+    let codeEl = null
+    if (liveMode === 'fence' && fenceKey === open.key) {
+      codeEl = el.querySelector('pre code')
+    }
+    if (!codeEl) {
+      fenceBody = ''
+      codeEl = updateLiveFenceSkeleton(open.label)
+    }
+    liveMode = 'fence'
+    fenceKey = open.key
+    if (codeEl) {
+      if (open.body.startsWith(fenceBody)) {
+        const delta = open.body.slice(fenceBody.length)
+        if (delta) codeEl.appendChild(document.createTextNode(delta))
+      } else {
+        codeEl.textContent = open.body // 极少见：头部/正文被改写，整体回填
+      }
+      fenceBody = open.body
+    }
+    return
+  }
+
+  liveMode = 'flow'
+  fenceKey = ''
+  fenceBody = ''
   try {
-    html.value = md.render(props.content || '')
-  } catch {
-    html.value = escapeHtml(props.content || '')
+    el.innerHTML = mdRender(tail, true) // streaming：未定稿片段不高亮、不画 Mermaid 图
+  } catch (e) {
+    console.warn('[markdown] 尾段渲染失败，退化为纯文本:', e)
+    el.innerHTML = `<pre class="md-plain-fallback">${escapeHtml(tail)}</pre>`
   }
-  nextTick(() => {
-    if (props.done) renderMermaidBlocks()
-  })
-  if (pending) {
-    pending = false
-    rafId = requestAnimationFrame(doRender)
+}
+
+function doRender() {
+  const stable = stableRef.value
+  const live = liveRef.value
+  if (!stable || !live) return
+  const src = props.content || ''
+  if (rootRef.value) rootRef.value.dataset.renderMode = props.done ? 'full' : 'incremental'
+
+  // ---- 定稿：整段一次性渲染（与 Mermaid 的"完成后才画图"路径天然合并）----
+  if (props.done) {
+    if (doneRendered && src === renderedSrc) return
+    try {
+      stable.innerHTML = mdRender(src, false)
+    } catch (e) {
+      console.warn('[markdown] 整段渲染失败，退化为纯文本:', e)
+      stable.innerHTML = `<pre class="md-plain-fallback">${escapeHtml(src)}</pre>`
+    }
+    live.innerHTML = ''
+    splitter.reset()
+    splitter.feed(src)
+    committed = src.length
+    liveMode = 'empty'
+    fenceKey = ''
+    fenceBody = ''
+    renderedSrc = src
+    doneRendered = true
+    nextTick(renderMermaidBlocks)
+    emit('rendered')
+    return
   }
+  doneRendered = false
+
+  // 内容不是"在上次基础上追加"（重试清空、分段替换等）⇒ 整体重来，避免增量状态错位
+  if (!src.startsWith(renderedSrc)) {
+    clearDom()
+    renderedSrc = ''
+  }
+
+  splitter.feed(src)
+  const boundary = splitter.commitBoundary(src)
+  if (boundary > committed) {
+    appendStable(src.slice(committed, boundary))
+    committed = boundary
+    liveMode = 'flow'
+    fenceKey = ''
+    fenceBody = ''
+  }
+  renderTail(src.slice(committed))
+  renderedSrc = src
+  emit('rendered')
+}
+
+function safeRender() {
+  try {
+    doRender()
+  } catch (e) {
+    console.warn('[markdown] 渲染异常:', e)
+  }
+}
+
+// 尾部异常长（如模型长时间不输出空行、整段是一个超长段落）时进一步降频，
+// 避免退化成"每帧 O(尾长)"的高频重排
+function currentInterval() {
+  const tailLen = (props.content || '').length - committed
+  return tailLen > 4000 ? 200 : MIN_RENDER_INTERVAL
+}
+
+function onFrame() {
+  rafId = null
+  if (!pendingRender) return
+  if (!props.done && currentInterval() - (performance.now() - lastRenderTs) > 0) {
+    rafId = requestAnimationFrame(onFrame) // 未到最小间隔：下一帧再看
+    return
+  }
+  pendingRender = false
+  lastRenderTs = performance.now()
+  safeRender()
+}
+
+// rAF 节流 + 最小间隔：流式高频 delta 下合并渲染；
+// 页面隐藏时只累积不渲染（数据在 store 侧持续累积，切回前台再补渲染，不会丢内容）
+function scheduleRender() {
+  pendingRender = true
+  if (rafId !== null) return
+  if (document.hidden) return
+  rafId = requestAnimationFrame(onFrame)
+}
+
+function onVisibilityChange() {
+  if (!document.hidden && pendingRender) scheduleRender()
 }
 
 watch(() => [props.content, props.done], scheduleRender, { flush: 'post' })
 onMounted(() => {
-  html.value = md.render(props.content || '')
-  nextTick(renderMermaidBlocks)
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  safeRender()
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  if (rafId !== null) cancelAnimationFrame(rafId)
+  rafId = null
 })
 
 // ---------- HTML 代码块预览 ----------
@@ -262,6 +516,19 @@ async function onClick(e) {
 .markdown-body { white-space: normal; word-break: break-word; line-height: 1.7; font-size: 14px; }
 .markdown-body > *:first-child { margin-top: 0; }
 .markdown-body > *:last-child { margin-bottom: 0; }
+
+/* 双容器增量渲染（.md-stable 只追加 / .md-live 覆盖尾部）：
+   两个容器都是无 padding/border 的普通 div，子元素外边距会透过容器边界正常折叠，
+   因此相邻块间距与"单容器整段渲染"一致；只有整篇的第一个/最后一个块需要单独归零 */
+.markdown-body > .md-live:empty { display: none; }
+.markdown-body > .md-stable > :first-child { margin-top: 0; }
+.markdown-body > .md-live > :last-child { margin-bottom: 0; }
+/* 定稿时（整篇都在 stable 内）末块不留外边距，与旧行为一致 */
+.markdown-body.md-full > .md-stable > :last-child { margin-bottom: 0; }
+/* 前缀为空时（流式最开始）live 即为文档起始，其首块不留上外边距 */
+.markdown-body:has(> .md-stable:empty) > .md-live > :first-child { margin-top: 0; }
+/* 渲染兜底：极端情况下退化为纯文本时的容器样式 */
+.md-plain-fallback { margin: 0.5em 0; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
 .markdown-body p { margin: 0.5em 0; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3,
 .markdown-body h4, .markdown-body h5, .markdown-body h6 {

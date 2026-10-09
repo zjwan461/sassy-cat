@@ -56,6 +56,7 @@ DEFAULTS = {
         "skillsEnabled": True,
         "maxToolRounds": 10,
         "tavilyApiKey": "",  # Tavily 网络搜索 API Key
+        "enableOcr": True,  # agent对话上传文件是否启用OCR解析，默认开启；关闭时仅保存文件不做解析
         "ocrEngine": "markitdown",  # agent对话时的ocr引擎，默认markitdown(快速),可选docling(更精细可识图)
         # 高危工具人工确认策略：true=执行前打断等待用户确认，false=直接放行
         # 见 agent/engine.py（构建 deep agent 时作为 interrupt_on 传入）

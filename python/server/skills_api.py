@@ -202,6 +202,32 @@ def _count_files(tree: list) -> tuple:
     return total, refs, scripts
 
 
+def _count_skill_files(skill_dir: str) -> tuple:
+    """单次遍历统计技能目录：(文件总数, references 文件数, scripts 文件数)。
+
+    与 "_scan_tree 建树 + _count_files/_section_counts 递归计数" 相比：
+    - 不构造任何文件树节点，省去大量临时 dict 分配；
+    - 不做文本判定（_looks_textual 会打开每个文件读 8KB），列表页用不到；
+    因此技能目录庞大时可显著降低磁盘 IO 与内存开销。
+    统计口径与 _scan_tree 保持一致（仅忽略各级以 "." 开头的隐藏项）。
+    """
+    root = os.path.realpath(skill_dir)
+    total = refs = scripts = 0
+    for cur, dirs, files in os.walk(root):
+        # 就地过滤隐藏目录，避免对 .git/__pycache__ 等无谓下潜
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        rel = os.path.relpath(cur, root)
+        # 顶层目录名决定其下文件归属哪个分区（references/scripts）
+        top = "" if rel == os.curdir else rel.replace("\\", "/").split("/", 1)[0].lower()
+        n = sum(1 for fn in files if not fn.startswith("."))
+        total += n
+        if top == "references":
+            refs += n
+        elif top == "scripts":
+            scripts += n
+    return total, refs, scripts
+
+
 def _section_counts(tree: list, top_dir: str) -> int:
     """技能根下某个目录（references/scripts）内文件数。"""
     for node in tree:
@@ -219,31 +245,33 @@ async def list_skills():
     items = []
     for name in sorted(os.listdir(SKILLS_ROOT), key=str.lower):
         skill_dir = os.path.realpath(os.path.join(SKILLS_ROOT, name))
-        if not name.startswith(".") and os.path.isdir(skill_dir):
-            tree = _scan_tree(skill_dir)
-            skill_md = os.path.join(skill_dir, "SKILL.md")
-            meta = {}
-            if os.path.isfile(skill_md):
-                try:
-                    with open(skill_md, "r", encoding="utf-8") as f:
-                        meta = _parse_frontmatter(f.read(8192))
-                except (OSError, UnicodeDecodeError):
-                    meta = {}
+        if name.startswith(".") or not os.path.isdir(skill_dir):
+            continue
+        # 列表页只需要聚合计数与元信息：单次目录遍历完成统计，
+        # 不再构建完整文件树、也不再逐个读文件做文本判定，避免大目录下的无谓磁盘 IO。
+        total, ref_count, script_count = _count_skill_files(skill_dir)
+        skill_md = os.path.join(skill_dir, "SKILL.md")
+        meta = {}
+        if os.path.isfile(skill_md):
             try:
-                mtime = os.path.getmtime(skill_dir)
-            except OSError:
-                mtime = 0
-            total, _, _ = _count_files(tree)
-            items.append({
-                "name": name,
-                "displayName": meta.get("name") or name,
-                "description": meta.get("description") or "",
-                "fileCount": total,
-                "referenceCount": _section_counts(tree, "references"),
-                "scriptCount": _section_counts(tree, "scripts"),
-                "hasSkillMd": os.path.isfile(skill_md),
-                "updatedAt": int(mtime * 1000),
-            })
+                with open(skill_md, "r", encoding="utf-8") as f:
+                    meta = _parse_frontmatter(f.read(8192))
+            except (OSError, UnicodeDecodeError):
+                meta = {}
+        try:
+            mtime = os.path.getmtime(skill_dir)
+        except OSError:
+            mtime = 0
+        items.append({
+            "name": name,
+            "displayName": meta.get("name") or name,
+            "description": meta.get("description") or "",
+            "fileCount": total,
+            "referenceCount": ref_count,
+            "scriptCount": script_count,
+            "hasSkillMd": os.path.isfile(skill_md),
+            "updatedAt": int(mtime * 1000),
+        })
     return {"items": items}
 
 
