@@ -582,9 +582,14 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
                     }
                 )
             elif att.get("type") == "text":
-                # OCR 结果：作为文本追加
+                # OCR 结果：作为文本追加；前端把 OCR 响应的原始文件路径
+                # 随附件透传（filePath），一并带给模型，供其按需引用/读取源文件
                 if att.get("content"):
-                    content_parts.append({"type": "text", "text": att["content"]})
+                    text = att["content"]
+                    file_path = att.get("filePath")
+                    if file_path:
+                        text = f"{text}\n\n（原始文件路径: {file_path}）"
+                    content_parts.append({"type": "text", "text": text})
         user_content = content_parts if content_parts else content
 
     # 会话以服务端激活项为唯一权威：客户端携带的 sessionId 可能是切换前的过期值

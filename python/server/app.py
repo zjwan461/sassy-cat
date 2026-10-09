@@ -106,6 +106,7 @@ def create_app() -> FastAPI:
                 "status": "success",
                 "filename": file.filename,
                 "markdown": markdown,
+                "file_path": save_path,
             }
         except HTTPException:
             raise
