@@ -3,6 +3,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import Dashboard from './views/Dashboard.vue'
 import SkillManager from './views/SkillManager.vue'
+import McpManager from './views/McpManager.vue'
 import SkillDetail from './views/SkillDetail.vue'
 import Logs from './views/Logs.vue'
 import About from './views/About.vue'
@@ -17,6 +18,7 @@ const routes = [
   { path: '/chat', component: ChatView },
   { path: '/kb', component: KnowledgeBase },
   { path: '/kb/:kbId', component: KnowledgeBaseDetail },
+  { path: '/mcp', component: McpManager },
   { path: '/skills', component: SkillManager },
   { path: '/skills/:name', component: SkillDetail },
   { path: '/logs', component: Logs },

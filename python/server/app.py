@@ -14,6 +14,7 @@ from fastapi import FastAPI, WebSocket, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent import engine as agent_engine
+from agent.tools import mcp_tools
 from agent.rag import model_download
 from agent.rag.rag_service import get_rag_service
 from ocr.ocr_engine import do_ocr
@@ -22,6 +23,7 @@ from server.ws_agent import ws_agent_endpoint
 from server.kb_api import router as kb_router
 from server.stats_api import router as stats_router
 from server.skills_api import router as skills_router
+from server.mcp_api import router as mcp_router
 from server.db import init_db as init_message_db, close_db as close_message_db
 from server.db import get_messages_by_session, DEFAULT_KB_ID
 from server.db import kb_repository as kb_repo
@@ -43,6 +45,12 @@ async def lifespan(app: FastAPI):
     await agent_engine.init_db()
     # 初始化消息数据库（SQLAlchemy 异步引擎）
     await init_message_db()
+    # 装载注册表中「已启用」MCP server 的工具（失败隔离，不阻塞启动；
+    # 注册表后续变更由 mcp_api 触发增量刷新）
+    try:
+        await mcp_tools.refresh()
+    except Exception:
+        logger.exception("MCP 工具初始装载异常（agent 将以无 MCP 工具运行）")
     stop_event = asyncio.Event()
     proactive_task = asyncio.create_task(scheduler.run_forever(stop_event))
     reminder_task = asyncio.create_task(reminder_runner.run_forever(stop_event))
@@ -207,6 +215,7 @@ def create_app() -> FastAPI:
     app.include_router(kb_router)
     app.include_router(stats_router)
     app.include_router(skills_router)
+    app.include_router(mcp_router)
 
     @app.websocket("/ws/agent")
     async def ws_agent(websocket: WebSocket):

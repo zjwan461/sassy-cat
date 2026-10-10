@@ -37,6 +37,7 @@ from agent.tools.reminder_tools import (
 )
 from agent.tools.rag_tools import search_from_kb
 from agent.tools.subagent_tool import call_dsh
+from agent.tools.mcp_tools import get_mcp_tools
 from agent.constant import DB_URL, WORK_DIR
 from agent.middlewares import trim_messages, inject_metadata, load_metadata
 from langchain.agents.middleware import SummarizationMiddleware
@@ -212,27 +213,31 @@ class AgentHolder:
         # 高危工具人工确认策略（agent.interruptOn，可在设置页配置）：
         # true = 执行前打断等待用户确认；false = 直接放行
         interrupt_on = cfg.get("agent.interruptOn") or {}
+        # MCP 工具（注册表中「已启用」server 经 tools/list 装载的缓存）：
+        # 装载发生在服务启动与注册表变更时（见 agent.tools.mcp_tools），
+        # 此处只读缓存、零 IO；停用的 server 不进入工具列表
+        tools = [
+            get_date_time,
+            internet_search,
+            run_command,
+            save_user_info,
+            create_todo,
+            get_todo,
+            edit_todo,
+            create_skill,
+            create_reminder,
+            list_reminders,
+            complete_reminder,
+            cancel_reminder,
+            search_from_kb,
+            call_dsh,
+        ] + get_mcp_tools()
         # 共享持久层单例：未显式 init_db 时惰性初始化（如 CLI 调试入口）
         agent = create_deep_agent(
             # name="SassyCat", # 加上这个本地ninfer会报错
             model=llm,
             skills=["/skills"],
-            tools=[
-                get_date_time,
-                internet_search,
-                run_command,
-                save_user_info,
-                create_todo,
-                get_todo,
-                edit_todo,
-                create_skill,
-                create_reminder,
-                list_reminders,
-                complete_reminder,
-                cancel_reminder,
-                search_from_kb,
-                call_dsh,
-            ],
+            tools=tools,
             interrupt_on=interrupt_on,
             backend=FilesystemBackend(root_dir=WORK_DIR, virtual_mode=True),
             checkpointer=get_checkpointer(),
