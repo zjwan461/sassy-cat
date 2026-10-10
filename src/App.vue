@@ -151,6 +151,7 @@ const menuItems = [
   { path: '/', label: '本喵战绩', icon: '😼', disabled: false },
   { path: '/chat', label: '唠嗑', icon: '💬', disabled: false },
   { path: '/kb', label: '藏书阁', icon: '📚', disabled: false },
+  { path: '/mcp', label: 'MCP', icon: '🔌', disabled: false },
   { path: '/skills', label: 'Skill', icon: '🛠️', disabled: false },
   { path: '/logs', label: '日志', icon: '📋', disabled: false },
   { path: '/settings', label: '设置', icon: '🐟', disabled: false },
