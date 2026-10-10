@@ -74,7 +74,7 @@ def _find_python() -> str:
     return sys.executable
 
 
-@tool
+# @tool
 def run_python(code: str):
     """使用项目环境（.venv 或 python_env）中的 Python 解释器执行 Python 代码，返回执行结果。"""
     python_exe = _find_python()
@@ -394,7 +394,7 @@ def _decode_output(data: bytes | None) -> str:
         return data.decode("utf-8", errors="replace")
 
 
-@tool
+# @tool
 def run_command(command: list[str], timeout: int = 60):
     """执行系统命令，返回执行结果。
 

@@ -11,7 +11,8 @@ import threading
 
 import aiosqlite
 from deepagents import create_deep_agent
-from deepagents.backends import FilesystemBackend
+
+from agent.virtual_shell import VirtualShellBackend
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite.aio import AsyncSqliteStore
 
@@ -26,7 +27,6 @@ from agent.tools.builtin_tools import (
     get_date_time,
     get_todo,
     internet_search,
-    run_command,
     save_user_info,
 )
 from agent.tools.reminder_tools import (
@@ -219,7 +219,6 @@ class AgentHolder:
         tools = [
             get_date_time,
             internet_search,
-            run_command,
             save_user_info,
             create_todo,
             get_todo,
@@ -239,7 +238,12 @@ class AgentHolder:
             skills=["/skills"],
             tools=tools,
             interrupt_on=interrupt_on,
-            backend=FilesystemBackend(root_dir=WORK_DIR, virtual_mode=True),
+            # backend=FilesystemBackend(root_dir=WORK_DIR, virtual_mode=True),
+            # VirtualShellBackend = LocalShellBackend + 虚拟路径重写：
+            # - inherit_env=True：继承 PATH 等环境变量，python/node 等外部命令可用
+            # - /skills/... 等虚拟路径在执行前重写为 WORK_DIR 下真实路径，
+            #   否则 Windows 下 shell 会把 /skills/x 解析成 <当前盘符>:\skills\x
+            backend=VirtualShellBackend(root_dir=WORK_DIR, virtual_mode=True, inherit_env=True),
             checkpointer=get_checkpointer(),
             system_prompt=system_prompt,
             store=get_store(),

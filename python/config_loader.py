@@ -61,11 +61,11 @@ DEFAULTS = {
         # 高危工具人工确认策略：true=执行前打断等待用户确认，false=直接放行
         # 见 agent/engine.py（构建 deep agent 时作为 interrupt_on 传入）
         "interruptOn": {
-            "run_command": True,
             "write_file": True,
             "edit_file": True,
             "delete": True,
             "call_dsh": True,
+            "execute": True,
         },
     },
     # dsh(DeepSeek Harness) 子代理：独立于 llm/agent 配置档的全局配置块，

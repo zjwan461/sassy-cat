@@ -12,7 +12,7 @@
     "enableOcr": true,
     "ocrEngine": "markitdown",
     "interruptOn": {
-      "run_command": true,
+      "execute": true,
       "write_file": true,
       "edit_file": true,
       "delete": true
