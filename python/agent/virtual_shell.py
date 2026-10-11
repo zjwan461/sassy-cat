@@ -18,14 +18,19 @@
   分隔符 & ; | && || 之后、cmd /c 之后）做识别与替换。
 - 执行方式与 shell=True 内部行为一致（CreateProcess 原始命令行
   `cmd.exe /c <字符串>`，不经 list2cmdline 转义，避免引号地狱）。
+- 超时治理：输出落临时文件（不走管道）+ 超时终止整棵进程树，
+  规避 Windows 下 start /b 长驻子进程持有管道句柄、
+  导致 subprocess.run(timeout=...) 的 TimeoutExpired 永远抛不出的永久卡死。
 """
 
 from __future__ import annotations
 
 import os
 import re
+import signal
 import subprocess
 import sys
+import tempfile
 from typing import TYPE_CHECKING
 
 from deepagents.backends import LocalShellBackend
@@ -75,8 +80,38 @@ def _q(path: str) -> str:
     return path
 
 
+def _kill_process(proc: subprocess.Popen, *, tree: bool = True) -> None:
+    """终止命令进程；tree=True 时连同 start /b 起的后台孙进程一并清算。
+
+    - Windows：taskkill /F /T /PID 按父子关系整棵树强制结束。
+    - POSIX：进程已以 start_new_session 自成进程组，直接 killpg 整组。
+    全程吞掉异常：这是超时兜底，绝不能反过来把"超时返回"再次卡住。
+    """
+    try:
+        if tree and _IS_WINDOWS:
+            subprocess.run(  # noqa: S603
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+        elif tree:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        proc.kill()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class VirtualShellBackend(LocalShellBackend):
     """LocalShellBackend 外观，execute() 底层走 run_command 同款加固管线。"""
+
+    # 超时后是否连带清算 start /b 起的后台孙进程：
+    #   True （默认）→ 终止整棵进程树，避免残留孤儿继续占用端口/输出句柄；
+    #   False        → 仅杀直接子进程（cmd.exe），后台服务按原样存活（跨命令复用守护进程时用）。
+    _kill_tree_on_timeout = True
 
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         if not command or not isinstance(command, str):
@@ -97,7 +132,13 @@ class VirtualShellBackend(LocalShellBackend):
         if problem:
             return ExecuteResponse(output=problem, exit_code=1, truncated=False)
 
-        # ---- 执行：字节捕获（解码交给 _decode_output，避免 GBK 乱码） ----
+        # ---- 执行：输出落临时文件 + 超时杀进程树（不再用管道捕获） ----
+        # 为什么弃用 subprocess.run(capture_output=True, timeout=...)：Windows 下命令里
+        # 若用 start /b 起了长驻子进程，子进程会继承 stdout/stderr 的管道句柄；run()
+        # 超时后只 process.kill() 掉直接子进程（cmd.exe），孙进程仍存活并占着管道，
+        # 于是 run() 内部"kill 之后再 communicate()"永远等不到管道 EOF，永久阻塞 ——
+        # TimeoutExpired 根本抛不出来，表现为"不自动超时、一直卡住"。
+        # 改为把输出重定向到临时文件：不依赖管道 EOF，超时后能立即杀进程树并读回已有输出。
         try:
             if _IS_WINDOWS:
                 # 与 Python shell=True 内部行为一致：cmd.exe /c "<命令>" 整体再包一层引号。
@@ -110,18 +151,50 @@ class VirtualShellBackend(LocalShellBackend):
             else:
                 argv = cmd
                 shell = True
-            result = subprocess.run(  # noqa: S603
-                argv,
-                shell=shell,
-                check=False,
-                capture_output=True,
-                stdin=subprocess.DEVNULL,
-                timeout=effective_timeout,
-                env=(self._env if self._env else None),
-                cwd=str(self.cwd),
-                start_new_session=(sys.platform != "win32"),
+
+            with tempfile.TemporaryFile() as out_f, tempfile.TemporaryFile() as err_f:
+                proc = subprocess.Popen(  # noqa: S603
+                    argv,
+                    shell=shell,
+                    stdin=subprocess.DEVNULL,
+                    stdout=out_f,
+                    stderr=err_f,
+                    env=(self._env if self._env else None),
+                    cwd=str(self.cwd),
+                    start_new_session=(sys.platform != "win32"),
+                    creationflags=(
+                        subprocess.CREATE_NEW_PROCESS_GROUP if _IS_WINDOWS else 0
+                    ),
+                )
+                timed_out = False
+                try:
+                    returncode = proc.wait(timeout=effective_timeout)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    _kill_process(proc, tree=self._kill_tree_on_timeout)
+                    try:
+                        returncode = proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        # 极端情况（如内核态不可中断）仍不退出：放弃等待，直接返回超时
+                        returncode = 124
+                # 字节捕获（解码交给 _decode_output，避免 GBK 乱码）：
+                # 输出已写入文件而非管道，此刻直接读回即可，无需等进程关闭句柄。
+                out_f.seek(0)
+                raw_stdout = out_f.read()
+                err_f.seek(0)
+                raw_stderr = err_f.read()
+        except Exception as e:  # noqa: BLE001
+            return ExecuteResponse(
+                output=f"Error executing command ({type(e).__name__}): {e}",
+                exit_code=1,
+                truncated=False,
             )
-        except subprocess.TimeoutExpired:
+
+        stdout = _decode_output(raw_stdout)
+        stderr = _decode_output(raw_stderr)
+
+        # ---- 超时：退出码 124，并尽量回带超时前已产出的部分输出 ----
+        if timed_out:
             if timeout is not None:
                 msg = (
                     f"Error: Command timed out after {effective_timeout} seconds "
@@ -132,17 +205,12 @@ class VirtualShellBackend(LocalShellBackend):
                     f"Error: Command timed out after {effective_timeout} seconds. "
                     "For long-running commands, re-run using the timeout parameter."
                 )
+            partial = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part)
+            if partial:
+                msg = f"{msg}\n\nPartial output before timeout:\n{partial}"
             return ExecuteResponse(output=msg, exit_code=124, truncated=False)
-        except Exception as e:  # noqa: BLE001
-            return ExecuteResponse(
-                output=f"Error executing command ({type(e).__name__}): {e}",
-                exit_code=1,
-                truncated=False,
-            )
 
         # ---- 输出整形：与 LocalShellBackend 的 ExecuteResponse 语义一致 ----
-        stdout = _decode_output(result.stdout)
-        stderr = _decode_output(result.stderr)
         output_parts = []
         if stdout:
             output_parts.append(stdout)
@@ -157,12 +225,12 @@ class VirtualShellBackend(LocalShellBackend):
             output += f"\n\n... Output truncated at {self._max_output_bytes} bytes."
             truncated = True
 
-        if result.returncode != 0:
-            output = f"{output.rstrip()}\n\nExit code: {result.returncode}"
+        if returncode != 0:
+            output = f"{output.rstrip()}\n\nExit code: {returncode}"
 
         return ExecuteResponse(
             output=output,
-            exit_code=result.returncode,
+            exit_code=returncode,
             truncated=truncated,
         )
 
