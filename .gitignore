@@ -39,5 +39,6 @@ runtime/*
 !runtime/skills/
 runtime/skills/fubon*
 runtime/skills/jarvis*
+runtime/skills/comfyui*
 .cospec
 code-review_result
