@@ -1,12 +1,15 @@
 import asyncio
+import base64
+import io
 import logging
 import os
+import uuid
 
 from langchain.agents.middleware import before_agent, before_model, wrap_model_call
 from langchain.agents.middleware.types import PrivateStateAttr
 from langchain.agents import AgentState
 from langgraph.runtime import Runtime
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain.messages import RemoveMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 import config_loader
@@ -45,14 +48,310 @@ async def trim_messages(state: AgentState, runtime: Runtime) -> dict[str, Any] |
         return None  # No changes needed
 
     first_msg = messages[0]
-    recent_messages = (
-        messages[-memory_window:]
-        if len(messages) % 2 == 0
-        else messages[-memory_window + 1 :]
-    )
+    # 起点与旧写法等价（偶数取最后 window 条；奇数多让一位，保持奇偶对齐），
+    # 另外补两个边界：至少保留尾部 1 条（window=1 时旧写法会退化成"一条不裁"），
+    # 且起点不能落在 ToolMessage 上 —— 它配对的 AIMessage(tool_calls) 会被留在
+    # 裁剪区外，LangGraph / 上游会因「tool_call 找不到对应结果」直接报错。
+    tail_start = len(messages) - memory_window + (0 if len(messages) % 2 == 0 else 1)
+    tail_start = max(1, min(tail_start, len(messages) - 1))
+    while tail_start > 1 and isinstance(messages[tail_start], ToolMessage):
+        tail_start -= 1
+    recent_messages = messages[tail_start:]
     new_messages = [first_msg] + recent_messages
 
     return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *new_messages]}
+
+
+# ========================= 对话历史里的媒体块守卫 =========================
+# 问题：read_file 读图片时，deepagents 的 FilesystemMiddleware 会把整张图以 base64
+# 塞进 ToolMessage 的 content 块（用户上传的附件同理进入 HumanMessage）。而框架里
+# 每一处「token / 体积」启发式都刻意跳过二进制块，于是没有任何环节会管它：
+#   - langchain_core.count_tokens_approximately：image 块固定只算 85 token，base64 一字符不计；
+#   - langchain SummarizationMiddleware：按上面的计数判定阈值，永远不会因图片触发压缩；
+#   - deepagents 大工具结果外迁：只用文本长度判定（_extract_text_from_message）；
+#   - deepagents 消息驱逐：同样只量文本块。
+# 后果：图片只进不出。之后每一轮模型调用都要把历史里所有图片的 base64 重新发一遍，
+# 上下文占用随「读图次数」线性增长，直到上游直接报「上下文超长 / 请求体过大」。
+# 本地网关常按字符数折 token，一张几百 KB 的截图就足以打爆窗口。本中间件补上这一环。
+MEDIA_BLOCK_TYPES = frozenset({"image", "image_url", "audio", "video", "file"})
+# 媒体块换成的文本占位前缀（模型据此知道"这里原本有图、怎么重新拿到"）
+MEDIA_ELIDED_PREFIX = "[媒体已省略]"
+_MEDIA_KIND_CN = {
+    "image": "图片",
+    "image_url": "图片",
+    "audio": "音频",
+    "video": "视频",
+    "file": "文件",
+}
+
+
+def _as_int(value: Any, default: int) -> int:
+    """宽松解析整数配置，非法值回退默认（与 engine._as_int 同款语义）"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _media_guard_config() -> dict[str, int]:
+    """读取 llm.profiles.<active>.contextCompression 下的媒体守卫参数（全部带默认值）。
+
+    keep       同一来源（用户消息 / 工具结果 / 其它）各保留最近 N 条含媒体消息，
+               更早的媒体块替换为文本占位；0 = 一律占位（模型彻底看不到图）
+    max_bytes  单条消息内联媒体载荷合计上限（字节）；0 = 不做体积限制
+    max_px     图片降采样后的最长边像素
+    quality    降采样重编码的 JPEG 质量
+    """
+    try:
+        profile = config_loader.current().active_llm_profile() or {}
+        cc = profile.get("contextCompression") or {}
+        if not isinstance(cc, dict):
+            cc = {}
+    except (AttributeError, TypeError):
+        cc = {}
+    return {
+        "keep": max(0, _as_int(cc.get("mediaKeep"), 1)),
+        "max_bytes": max(0, _as_int(cc.get("mediaMaxKB"), 512)) * 1024,
+        "max_px": max(64, _as_int(cc.get("mediaMaxPx"), 1280)),
+        "quality": min(95, max(30, _as_int(cc.get("mediaJpegQuality"), 80))),
+    }
+
+
+def _blocks_of(message: Any) -> list:
+    """取消息的 content 块列表；纯字符串内容（无多模态块）返回空列表"""
+    content = getattr(message, "content", None)
+    return content if isinstance(content, list) else []
+
+
+def _parse_data_url(url: str) -> tuple[str, str] | None:
+    """拆 `data:<mime>[;base64],<payload>`，返回 (载荷, mime)；无法拆分返回 None"""
+    try:
+        header, payload = url.split(",", 1)
+    except ValueError:
+        return None
+    mime = header[5:].split(";")[0] if header.startswith("data:") else ""
+    return payload, (mime or "application/octet-stream")
+
+
+def _media_payload(block: Any) -> tuple[str, str] | None:
+    """取出媒体块的「内联载荷」与其 MIME；非内联媒体块返回 None。
+
+    只认真正占上下文的内联形式：
+      1) 标准块 {"type": "image", "base64": "...", "mime_type": "..."}
+      2) OpenAI 风格 {"type": "image_url", "image_url": {"url": "data:...;base64,..."}}
+      3) 归一化后的 {"type": "image", "url": "data:..."}
+    url / file_id 这类引用型块由服务端自己取图，不占上下文，原样保留。
+    """
+    if not isinstance(block, dict):
+        return None
+    raw = block.get("base64")
+    if isinstance(raw, str) and raw:
+        return raw, (block.get("mime_type") or "application/octet-stream")
+    for key in ("url", "image_url"):
+        value = block.get(key)
+        if isinstance(value, dict):
+            value = value.get("url")
+        if isinstance(value, str) and value.startswith("data:"):
+            return _parse_data_url(value)
+    return None
+
+
+def _payload_bytes(block: Any) -> int:
+    """估算块内联载荷对应的原始字节数（base64 → ×3/4，用于体积判定与日志）"""
+    info = _media_payload(block)
+    if info is None:
+        return 0
+    return len(info[0]) * 3 // 4
+
+
+def _media_mime(block: Any) -> str:
+    info = _media_payload(block)
+    return info[1] if info else "unknown"
+
+
+def _elide_block(block: Any, message: Any) -> dict:
+    """把媒体块换成人可读、模型可恢复的文本占位（带原始路径，供 read_file 重新取回）"""
+    kind = block.get("type") if isinstance(block, dict) else "image"
+    kind_cn = _MEDIA_KIND_CN.get(kind, "媒体")
+    size_kb = _payload_bytes(block) // 1024
+    kwargs = getattr(message, "additional_kwargs", None) or {}
+    path = kwargs.get("read_file_path") if isinstance(kwargs, dict) else None
+    if path:
+        text = (
+            f"{MEDIA_ELIDED_PREFIX}为节省上下文，这里原本的{kind_cn}（{path}，"
+            f"{_media_mime(block)}，约 {size_kb}KB）已移除。需要再次查看时，"
+            f"请用 read_file 重新读取该路径。"
+        )
+    else:
+        text = (
+            f"{MEDIA_ELIDED_PREFIX}为节省上下文，这条消息里原本的{kind_cn}"
+            f"（{_media_mime(block)}，约 {size_kb}KB）已移除。如仍需查看，"
+            f"请让主人重新发送。"
+        )
+    return {"type": "text", "text": text}
+
+
+def _elide_media_blocks(blocks: list, message: Any) -> list:
+    """把一条消息里的全部内联媒体块替换为文本占位，其余块原位保留"""
+    return [
+        block if _media_payload(block) is None else _elide_block(block, message)
+        for block in blocks
+    ]
+
+
+def _shrink_image_block(block: Any, *, max_px: int, quality: int) -> dict | None:
+    """把图片块降采样并重编码为 JPEG，返回同形状的新块；不适用 / 失败返回 None。
+
+    同步阻塞（PIL 解码整图），调用方须用 asyncio.to_thread 包装。
+    保持原有块形状（base64 字段 / image_url data URL / url data URL）只换载荷，
+    避免改变下游 translator 的归一化路径。
+    """
+    if not isinstance(block, dict) or not _media_mime(block).startswith("image/"):
+        return None
+    info = _media_payload(block)
+    if info is None:
+        return None
+    try:
+        from PIL import Image
+    except Exception:  # noqa: BLE001 — 缺 Pillow 时退化为占位，不能影响主流程
+        logger.warning("Pillow 不可用，超大图片无法降采样，退化为文本占位")
+        return None
+    try:
+        raw = base64.b64decode(info[0], validate=False)
+        with Image.open(io.BytesIO(raw)) as img:
+            if img.mode in ("RGBA", "LA", "P"):
+                # 透明区压到白底，否则转 JPEG 后会变黑
+                rgba = img.convert("RGBA")
+                canvas = Image.new("RGB", rgba.size, (255, 255, 255))
+                canvas.paste(rgba, mask=rgba.split()[-1])
+                img = canvas
+            else:
+                img = img.convert("RGB")
+            if max(img.size) > max_px:
+                scale = max_px / max(img.size)
+                img = img.resize(
+                    (max(1, round(img.width * scale)), max(1, round(img.height * scale))),
+                    Image.LANCZOS,
+                )
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
+    except Exception:  # noqa: BLE001 — 解码/编码失败同样退化为占位
+        logger.warning("图片降采样失败（损坏或非常规编码），退化为文本占位", exc_info=True)
+        return None
+
+    payload = base64.b64encode(buf.getvalue()).decode("ascii")
+    new_mime = "image/jpeg"
+    if isinstance(block.get("base64"), str):
+        return {**block, "base64": payload, "mime_type": new_mime}
+    image_url = block.get("image_url")
+    if isinstance(image_url, dict):
+        return {**block, "image_url": {**image_url, "url": f"data:{new_mime};base64,{payload}"}}
+    if isinstance(block.get("url"), str):
+        return {**block, "url": f"data:{new_mime};base64,{payload}", "mime_type": new_mime}
+    return None
+
+
+async def _shrink_or_elide(blocks: list, message: Any, conf: dict[str, int]) -> list:
+    """单条消息内联载荷超限时的两级处理：先降采样图片，仍超限的块按体积从大到小占位"""
+    max_bytes = conf["max_bytes"]
+    new_blocks = list(blocks)
+
+    for i, block in enumerate(new_blocks):
+        if _payload_bytes(block) == 0:
+            continue
+        shrunk = await asyncio.to_thread(
+            _shrink_image_block, block, max_px=conf["max_px"], quality=conf["quality"]
+        )
+        if shrunk is not None:
+            new_blocks[i] = shrunk
+
+    if sum(_payload_bytes(b) for b in new_blocks) > max_bytes:
+        order = sorted(
+            (i for i, b in enumerate(new_blocks) if _payload_bytes(b) > 0),
+            key=lambda i: _payload_bytes(new_blocks[i]),
+            reverse=True,
+        )
+        for i in order:
+            if sum(_payload_bytes(b) for b in new_blocks) <= max_bytes:
+                break
+            new_blocks[i] = _elide_block(new_blocks[i], message)
+
+    return new_blocks
+
+
+def _bucket_of(message: Any) -> str:
+    """媒体消息归类：用户消息 / 工具结果 / 其它，各自独立计算保留额度。"""
+    if isinstance(message, HumanMessage):
+        return "user"
+    if isinstance(message, ToolMessage):
+        return "tool"
+    return "other"
+
+
+@before_model
+async def trim_media_history(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
+    """收敛历史里的内联媒体块（图片/音视频/PDF 的 base64）。
+
+    两级规则（均幂等，重复执行不会再有变化）：
+
+    1. **保留额度**：同一来源（用户消息 / 工具结果 / 其它）各自最多保留最近
+       `mediaKeep` 条含媒体消息，更早的媒体块替换为文本占位（带原始路径，模型可用
+       read_file 重新取回）。于是请求里的图片数量与「已进行多少轮」无关，恒定 O(keep)，
+       这是防止越聊越大的关键。
+    2. **体积上限**：单条消息内联载荷合计超过 `mediaMaxKB` 时，图片先降采样重编码为
+       JPEG（最长边 `mediaMaxPx`、质量 `mediaJpegQuality`），仍超限的块退化为占位。
+       专治「一张截图就爆窗口」（本地网关常按字符数折 token，base64 会直接超窗）。
+
+    为什么用 before_model 写回 state，而不是 wrap_model_call 只改本次请求：
+    只有写回 state（同 id 覆盖）才能把 base64 从 checkpoint 里真正抹掉，
+    否则下一轮模型调用又会原样重发；wrap_model_call 只挡得住当前这一次。
+    """
+    messages = state.get("messages") or []
+    if not messages:
+        return None
+
+    conf = _media_guard_config()
+    if conf["keep"] <= 0 and conf["max_bytes"] <= 0:
+        return None  # 两种手段都关掉 → 保持旧行为，什么都不动
+
+    keep_counts: dict[str, int] = {}
+    updated: list = []
+
+    # 从最新往最旧扫：每个来源的头 keep 条媒体消息保留，其余收敛
+    for message in reversed(messages):
+        blocks = _blocks_of(message)
+        if not blocks or not any(_media_payload(b) is not None for b in blocks):
+            continue
+
+        bucket = _bucket_of(message)
+        seen = keep_counts.get(bucket, 0)
+        keep_counts[bucket] = seen + 1
+
+        new_blocks = None
+        if seen >= conf["keep"]:
+            new_blocks = _elide_media_blocks(blocks, message)
+        elif conf["max_bytes"] > 0 and sum(_payload_bytes(b) for b in blocks) > conf["max_bytes"]:
+            new_blocks = await _shrink_or_elide(blocks, message, conf)
+
+        if new_blocks is None or new_blocks == blocks:
+            continue
+
+        # 同 id 覆盖才能替换 state 里的原消息；缺 id 的消息（旧 checkpoint 里的历史）
+        # 必须就地补上，否则 LangGraph 会把这份副本当成新消息追加，反而多一条
+        if not getattr(message, "id", None):
+            message.id = uuid.uuid4().hex
+        updated.append(message.model_copy(update={"content": new_blocks}))
+
+    if not updated:
+        return None
+
+    logger.info(
+        "媒体守卫：收敛 %d 条消息的内联媒体块（保留额度=%d/来源，单条上限=%dKB）",
+        len(updated),
+        conf["keep"],
+        conf["max_bytes"] // 1024,
+    )
+    return {"messages": updated}
 
 
 # 元信息整块边界标记：用于幂等注入（重建时先剥离旧块再拼新块）

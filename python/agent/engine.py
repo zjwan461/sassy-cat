@@ -39,7 +39,12 @@ from agent.tools.rag_tools import search_from_kb
 from agent.tools.subagent_tool import call_dsh
 from agent.tools.mcp_tools import get_mcp_tools
 from agent.constant import DB_URL, WORK_DIR
-from agent.middlewares import trim_messages, inject_metadata, load_metadata
+from agent.middlewares import (
+    trim_messages,
+    trim_media_history,
+    inject_metadata,
+    load_metadata,
+)
 from langchain.agents.middleware import SummarizationMiddleware
 
 logger = logging.getLogger(__name__)
@@ -70,6 +75,12 @@ def _resolve_context_compression(cfg: "config_loader.AppConfig"):
 
     返回构建好的 SummarizationMiddleware；未启用时返回 None。
     摘要提示词使用 langchain SummarizationMiddleware 的内置默认值。
+
+    注意（为什么它治不了"读图爆上下文"）：本中间件判定阈值用的是
+    count_tokens_approximately，而该计数对 image 块固定只算 85 token、base64 一个字符
+    都不计（见 langchain_core.messages.utils）。图片再多也撞不到阈值，阈值形同虚设；
+    真要触发时，摘要调用本身还会把 base64 一起喂给摘要模型。媒体块由
+    middlewares.trim_media_history 单独收敛（见该函数 docstring）。
     """
     profile = cfg.active_llm_profile() or {}
     cc = profile.get("contextCompression") or {}
@@ -116,11 +127,21 @@ def _resolve_context_compression(cfg: "config_loader.AppConfig"):
 
 
 def _build_middleware(cfg: "config_loader.AppConfig") -> list:
-    """装配中间件列表：先跑廉价的条数裁剪，再跑按 token 的摘要压缩。"""
-    middleware = [trim_messages, inject_metadata, load_metadata]
+    """装配中间件列表。before_model 钩子在 LangGraph 里各自成节点、按列表顺序串行执行，
+    因此下面的顺序就是每次模型调用前的执行顺序：
+
+    1. trim_messages      —— 廉价的「条数」裁剪（memoryWindow）
+    2. trim_media_history —— 媒体块守卫：限制历史内联图片/音视频/PDF 的数量与单条体积
+    3. summarization      —— 按 token 的摘要压缩（可选，见 _resolve_context_compression）
+    4. inject_metadata / load_metadata —— 运行时元信息注入
+
+    顺序理由：2 必须排在 3 之前 —— 3 会把待压缩历史交给摘要 LLM，若历史里还留着
+    base64 图片，摘要调用自己就会超窗；先由 2 把二进制块收敛掉，摘要才只看文本。
+    """
+    middleware = [trim_messages, trim_media_history, inject_metadata, load_metadata]
     summarization_mw = _resolve_context_compression(cfg)
     if summarization_mw is not None:
-        middleware.insert(1, summarization_mw)
+        middleware.insert(2, summarization_mw)
     return middleware
 
 
@@ -251,8 +272,11 @@ class AgentHolder:
             # 运行时元信息（画像/系统/软件/知识库/技能）写入 state；
             # inject_metadata（wrap_model_call）在每次模型调用前把该块注入 system message，
             # 不再逐次查库/扫盘。
-            # 上下文自动压缩按 llm.profiles.<active>.contextCompression 决定是否接入
-            # （见 _build_middleware），默认启用。
+            # 上下文治理见 _build_middleware：trim_messages（条数）+ trim_media_history
+            # （媒体块数量/体积，专治 read_file 读图爆上下文）+ SummarizationMiddleware
+            # （token 摘要压缩，按 llm.profiles.<active>.contextCompression 决定是否接入）。
+            # 另注：deepagents 的 create_deep_agent 自身也会装一个带媒体外迁的
+            # SummarizationMiddleware（core stack），故上下文压缩能力实际是两套并存的。
             middleware=_build_middleware(cfg),
         )
         return agent

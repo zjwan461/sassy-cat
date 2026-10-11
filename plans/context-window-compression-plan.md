@@ -303,3 +303,79 @@ async def compress_context(state: AgentState, runtime: Runtime) -> dict | None:
 - `contextWindow` 已在前端「模型连接」卡片可配（步进器，默认 262144，范围 8192~1048576）；
   **后端逻辑本次仅设计** —— 待 §十 步骤 1~3 实现后，它才会真正参与上下文治理。
 - 压缩子参数（`threshold` 等）用 `DEFAULTS` 内置默认，暂未在设置页暴露。
+
+---
+
+## 附二、媒体块守卫：`trim_media_history`（已实现，专治「读图爆上下文」）
+
+> 触发背景：agent 用 `read_file` 读图片时**极大概率爆上下文**，而 `trim_messages` 与
+> `SummarizationMiddleware` 都拦不住 —— 因为二者的判据全建立在「文本计数」之上。
+
+### 1. 为什么原有机制全部失效
+
+deepagents 的 `read_file` 读到图片时，会把**整张图的 base64** 塞进 ToolMessage 的
+`content` 块（`{"type": "image", "base64": ..., "mime_type": ...}`；单张图原始字节上限
+约 500KB ≈ 667KB base64 字符）；用户上传的附件走同一种块结构进入 HumanMessage。
+而框架里每一处「token / 体积」启发式都**刻意跳过二进制块**：
+
+| 环节 | 实现位置 | 对图片的处理 |
+|------|----------|--------------|
+| `count_tokens_approximately` | `langchain_core.messages.utils` | image 块固定只算 **85 token**，base64 一字符不计 |
+| `SummarizationMiddleware`（langchain 版） | 判据即上面的计数 | 阈值永远撞不到 → 从不因图片触发压缩；真触发时还会把 base64 一起喂给摘要模型 |
+| deepagents 大工具结果外迁 | `_process_large_message` | 只用**文本长度**判定（`_extract_text_from_message`），纯图片结果文本为空 → 永不外迁 |
+| deepagents 消息驱逐 | `_message_eviction` | 同样只量文本块，替换时还**特意保留**非文本块 |
+| `trim_messages` | 只数**条数** | 一条消息里塞 10MB 图片也照样「没超窗」 |
+
+于是图片只进不出：之后每一轮模型调用都要把历史里所有图片重新发一遍，占用随读图次数
+线性增长，直到上游报「上下文超长 / 请求体过大」。本地/兼容网关常按字符数折 token，
+一张几百 KB 的截图就足以打爆窗口。
+
+### 2. 修法（`python/agent/middlewares.py::trim_media_history`，`@before_model`）
+
+两级、均幂等：
+
+1. **保留额度**：同一来源（用户消息 / 工具结果 / 其它）各保留最近 `mediaKeep` 条含媒体
+   消息，更早的媒体块换成文本占位；占位里带**原始路径**（`read_file` 的
+   `additional_kwargs.read_file_path`），模型需要时自行重新读取。请求里的图片数因此与
+   「聊了多少轮」无关，恒为 O(keep)。
+2. **体积上限**：单条消息内联载荷合计超过 `mediaMaxKB` 时，图片先降采样重编码为 JPEG
+   （最长边 `mediaMaxPx`、质量 `mediaJpegQuality`，透明区压白底），仍超限的块退化为占位。
+
+关键实现约束：
+
+- 用 **before_model 写回 state（同 id 覆盖）**，而非 `wrap_model_call` 只改本次请求 ——
+  只有写回才能把 base64 从 checkpoint 里真正抹掉；缺 id 的历史消息就地补 uuid，否则
+  LangGraph 会把这份副本当新消息追加。
+- 顺序：`trim_messages → trim_media_history → SummarizationMiddleware → inject_metadata`
+  （见 `engine._build_middleware`）。媒体守卫**必须**排在摘要之前，否则摘要调用自己就会
+  带上 base64 图片而超窗。
+
+### 3. 配置（`llm.profiles.<active>.contextCompression`）
+
+| 键 | 默认 | 含义 |
+|----|------|------|
+| `mediaKeep` | 1 | 每种来源保留的最近含媒体消息条数；0 = 一律占位 |
+| `mediaMaxKB` | 512 | 单条消息内联媒体载荷上限（KB）；0 = 不限 |
+| `mediaMaxPx` | 1280 | 降采样后最长边像素 |
+| `mediaJpegQuality` | 80 | 降采样 JPEG 质量 |
+
+设置页已在「模型连接」卡片提供这 4 项的控件（历史图片保留条数 / 单条消息图片体积上限 /
+降采样最长边 / JPEG 质量），与「启用上下文自动压缩」开关**并列独立**（后者只管摘要压缩），
+随「保存设置」写入 `llm.profiles.<当前配置档>.contextCompression.*` 并触发热重建。
+
+### 4. 自检
+
+`runtime/tmp/test_media_guard.py`（离线，无需 LLM / WS 服务）：旧图收敛 + 同 id 覆盖 +
+幂等 / 超大图降采样 / 压不进上限退化为占位 / 分桶保留 / `trim_messages` 工具对边界 /
+engine 装配顺序。
+
+### 5. 遗留（不在本次改动范围内）
+
+- **两套摘要并存**：`create_deep_agent` 自身在 core stack 装了一个带「媒体外迁到 backend
+  artifacts」的 `SummarizationMiddleware`，本项目又额外挂了一个 langchain 版（见
+  `engine._resolve_context_compression`）。二者判据与产物都不同，长期应合并为一套，且
+  合并时要保留 deepagents 版的媒体外迁能力。
+- **留在上下文里的那一张图仍被低估**：`count_tokens_approximately` 只按 85 token 计，
+  SummarizationMiddleware 对本轮图片依旧「看不见」；媒体守卫把数量压到 O(keep) 后影响
+  已可控，若要更精确，可给 SummarizationMiddleware 传自定义 `token_counter`，让 base64
+  按 `len/4` 计。

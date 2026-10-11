@@ -33,11 +33,24 @@ DEFAULTS = {
                 #   model      生成摘要所用的 LLM 配置档名，""=复用当前激活档
                 #   threshold  触发压缩的上下文占用百分比（占 contextWindow，默认 80）
                 #   keepRecent 压缩后保留的最近原始消息条数（默认 10）
+                # 媒体守卫（见 agent/middlewares.py::trim_media_history，专治「读图爆上下文」）：
+                # 框架所有 token/体积启发式都会跳过图片等二进制块（image 块固定只算 85 token，
+                # base64 一字符不计），因此必须单独收敛历史里的内联媒体：
+                #   mediaKeep        同一来源（用户消息 / 工具结果）各保留最近 N 条含媒体
+                #                    消息，更早的媒体块换成带路径的文本占位（默认 1；0=一律占位）
+                #   mediaMaxKB       单条消息内联媒体载荷合计上限（KB）：超限的图片降采样为
+                #                    JPEG，仍超限的块换成占位（默认 512；0=不限）
+                #   mediaMaxPx       降采样后图片最长边像素（默认 1280）
+                #   mediaJpegQuality 降采样重编码的 JPEG 质量（默认 80）
                 "contextCompression": {
                     "enabled": True,
                     "model": "",
                     "threshold": 80,
                     "keepRecent": 10,
+                    "mediaKeep": 1,
+                    "mediaMaxKB": 512,
+                    "mediaMaxPx": 1280,
+                    "mediaJpegQuality": 80,
                 },
                 "extraParams": {},
             }
