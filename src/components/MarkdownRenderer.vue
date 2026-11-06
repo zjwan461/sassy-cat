@@ -512,125 +512,420 @@ async function onClick(e) {
 </script>
 
 <style>
-/* 非 scoped：作用于 v-html 注入的内容 */
-.markdown-body { white-space: normal; word-break: break-word; line-height: 1.7; font-size: 14px; }
-.markdown-body > *:first-child { margin-top: 0; }
-.markdown-body > *:last-child { margin-bottom: 0; }
+/* =========================================================
+   Markdown 正文排版（非 scoped：作用于 v-html 注入内容）
+   目标：在聊天里读长文也舒服——行高、字距、代码块、表格统一调过。
+   ========================================================= */
+
+.markdown-body {
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.78;
+  font-size: 14px;
+  color: var(--text-1);
+  letter-spacing: 0.004em;
+}
+
+.markdown-body > *:first-child {
+  margin-top: 0;
+}
+
+.markdown-body > *:last-child {
+  margin-bottom: 0;
+}
 
 /* 双容器增量渲染（.md-stable 只追加 / .md-live 覆盖尾部）：
    两个容器都是无 padding/border 的普通 div，子元素外边距会透过容器边界正常折叠，
    因此相邻块间距与"单容器整段渲染"一致；只有整篇的第一个/最后一个块需要单独归零 */
-.markdown-body > .md-live:empty { display: none; }
-.markdown-body > .md-stable > :first-child { margin-top: 0; }
-.markdown-body > .md-live > :last-child { margin-bottom: 0; }
-/* 定稿时（整篇都在 stable 内）末块不留外边距，与旧行为一致 */
-.markdown-body.md-full > .md-stable > :last-child { margin-bottom: 0; }
-/* 前缀为空时（流式最开始）live 即为文档起始，其首块不留上外边距 */
-.markdown-body:has(> .md-stable:empty) > .md-live > :first-child { margin-top: 0; }
-/* 渲染兜底：极端情况下退化为纯文本时的容器样式 */
-.md-plain-fallback { margin: 0.5em 0; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
-.markdown-body p { margin: 0.5em 0; }
-.markdown-body h1, .markdown-body h2, .markdown-body h3,
-.markdown-body h4, .markdown-body h5, .markdown-body h6 {
-  margin: 1em 0 0.5em; line-height: 1.4; color: #f1f5f9; font-weight: 700;
+.markdown-body > .md-live:empty {
+  display: none;
 }
-.markdown-body h1 { font-size: 1.5em; border-bottom: 1px solid #334155; padding-bottom: 0.25em; }
-.markdown-body h2 { font-size: 1.3em; border-bottom: 1px solid #334155; padding-bottom: 0.2em; }
-.markdown-body h3 { font-size: 1.15em; }
-.markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size: 1.05em; }
-.markdown-body ul, .markdown-body ol { margin: 0.5em 0; padding-left: 1.6em; }
-.markdown-body li { margin: 0.2em 0; }
-.markdown-body li > p { margin: 0.2em 0; }
+
+.markdown-body > .md-stable > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > .md-live > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body.md-full > .md-stable > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body:has(> .md-stable:empty) > .md-live > :first-child {
+  margin-top: 0;
+}
+
+.md-plain-fallback {
+  margin: 0.6em 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+}
+
+.markdown-body p {
+  margin: 0.65em 0;
+}
+
+/* ---------- 标题 ---------- */
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 1.25em 0 0.55em;
+  line-height: 1.45;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  color: var(--text-1);
+}
+
+.markdown-body h1 {
+  font-size: 1.42em;
+  padding-bottom: 0.32em;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.markdown-body h2 {
+  font-size: 1.24em;
+  padding-bottom: 0.26em;
+  border-bottom: 1px solid var(--line-1);
+}
+
+.markdown-body h3 {
+  font-size: 1.1em;
+}
+
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  font-size: 1em;
+  color: var(--text-2);
+}
+
+/* ---------- 列表 ---------- */
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.6em 0;
+  padding-left: 1.5em;
+}
+
+.markdown-body li {
+  margin: 0.25em 0;
+}
+
+.markdown-body li > p {
+  margin: 0.2em 0;
+}
+
+.markdown-body li::marker {
+  color: var(--amber-500);
+}
+
+/* ---------- 引用 ---------- */
 .markdown-body blockquote {
-  margin: 0.6em 0; padding: 0.4em 0.9em; border-left: 3px solid #6366f1;
-  background: #0f172a99; color: #94a3b8; border-radius: 0 6px 6px 0;
+  margin: 0.8em 0;
+  padding: 0.55em 1em;
+  border-left: 2px solid var(--amber-500);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: rgba(239, 168, 76, 0.045);
+  color: var(--text-2);
 }
-.markdown-body blockquote p { margin: 0.2em 0; }
-.markdown-body a { color: #818cf8; text-decoration: none; }
-.markdown-body a:hover { text-decoration: underline; }
-.markdown-body hr { border: none; border-top: 1px solid #334155; margin: 1em 0; }
-.markdown-body strong { color: #f8fafc; }
-.markdown-body img { max-width: 100%; border-radius: 8px; }
+
+.markdown-body blockquote p {
+  margin: 0.25em 0;
+}
+
+/* ---------- 链接 / 强调 / 分割线 ---------- */
+.markdown-body a {
+  color: var(--azure-400);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(143, 182, 232, 0.3);
+  transition: border-color var(--dur-fast), color var(--dur-fast);
+}
+
+.markdown-body a:hover {
+  color: #B3CFF3;
+  border-bottom-color: var(--azure-400);
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--line-1);
+  margin: 1.2em 0;
+}
+
+.markdown-body strong {
+  color: var(--text-1);
+  font-weight: 650;
+}
+
+.markdown-body em {
+  color: var(--text-2);
+}
+
+.markdown-body img {
+  max-width: 100%;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-1);
+}
+
+/* ---------- 行内代码 ---------- */
 .markdown-body code:not(.hljs) {
-  background: #33415580; border: 1px solid #334155; border-radius: 4px;
-  padding: 0.1em 0.35em; font-size: 0.92em; color: #fbbf24;
-  font-family: Consolas, 'Courier New', monospace;
+  padding: 0.14em 0.4em;
+  font-family: var(--font-mono);
+  font-size: 0.89em;
+  color: var(--amber-300);
+  background: rgba(239, 168, 76, 0.08);
+  border: 1px solid rgba(239, 168, 76, 0.16);
+  border-radius: 5px;
 }
 
-/* 表格 */
-.md-table-wrap { overflow-x: auto; margin: 0.6em 0; }
-.markdown-body table { border-collapse: collapse; width: 100%; font-size: 0.95em; }
-.markdown-body th, .markdown-body td { border: 1px solid #334155; padding: 6px 10px; text-align: left; }
-.markdown-body th { background: #1e293b; color: #e2e8f0; font-weight: 600; }
-.markdown-body tr:nth-child(even) td { background: #0f172a66; }
+/* ---------- 表格 ---------- */
+.md-table-wrap {
+  margin: 0.8em 0;
+  overflow-x: auto;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
 
-/* 代码块 */
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--line-1);
+  border-right: 1px solid var(--line-1);
+}
+
+.markdown-body th:last-child,
+.markdown-body td:last-child {
+  border-right: none;
+}
+
+.markdown-body tr:last-child td {
+  border-bottom: none;
+}
+
+.markdown-body th {
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-1);
+  font-weight: 600;
+  font-size: 0.95em;
+}
+
+.markdown-body tbody tr {
+  transition: background var(--dur-fast);
+}
+
+.markdown-body tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* ---------- 代码块 ---------- */
 .markdown-body .md-code {
-  margin: 0.7em 0; background: #0b1120; border: 1px solid #334155;
-  border-radius: 8px; overflow: hidden;
+  margin: 0.85em 0;
+  background: var(--ink-1000);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  overflow: hidden;
 }
+
 .markdown-body .md-code-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 4px 10px; background: #1e293b; border-bottom: 1px solid #334155;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 12px;
+  background: rgba(255, 255, 255, 0.025);
+  border-bottom: 1px solid var(--line-1);
 }
-.markdown-body .md-code-lang { font-size: 12px; color: #64748b; text-transform: lowercase; }
-.markdown-body .md-code-btns { display: flex; align-items: center; gap: 6px; }
+
+.markdown-body .md-code-lang {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-4);
+}
+
+.markdown-body .md-code-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .markdown-body .md-copy,
 .markdown-body .md-preview {
-  border: 1px solid #334155; background: transparent; color: #94a3b8;
-  font-size: 12px; padding: 2px 10px; border-radius: 5px; cursor: pointer;
-  opacity: 0; transition: opacity 0.15s, background 0.15s, color 0.15s;
+  height: 22px;
+  padding: 0 9px;
+  font-size: 11px;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast), background var(--dur-fast), color var(--dur-fast),
+    border-color var(--dur-fast);
 }
+
 .markdown-body .md-code:hover .md-copy,
-.markdown-body .md-code:hover .md-preview { opacity: 1; }
+.markdown-body .md-code:hover .md-preview {
+  opacity: 1;
+}
+
 .markdown-body .md-copy:hover,
-.markdown-body .md-preview:hover { background: #334155; color: #e2e8f0; }
-.markdown-body .md-copy.copied { opacity: 1; color: #34d399; border-color: #065f46; }
-.markdown-body .md-copy.copy-fail { opacity: 1; color: #f87171; border-color: #7f1d1d; }
+.markdown-body .md-preview:hover {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--line-3);
+}
+
+.markdown-body .md-copy.copied {
+  opacity: 1;
+  color: var(--jade-400);
+  border-color: rgba(126, 203, 161, 0.4);
+}
+
+.markdown-body .md-copy.copy-fail {
+  opacity: 1;
+  color: var(--coral-400);
+  border-color: rgba(233, 119, 110, 0.4);
+}
+
 .markdown-body .md-code pre {
-  margin: 0; padding: 10px 12px; overflow-x: auto;
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
   background: transparent !important;
 }
+
 .markdown-body .md-code pre code {
-  font-family: Consolas, 'Courier New', monospace; font-size: 13px;
-  line-height: 1.55; background: transparent !important; padding: 0; white-space: pre;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.62;
+  background: transparent !important;
+  white-space: pre;
 }
 
-/* Mermaid */
+/* ---------- Mermaid ---------- */
 .markdown-body .md-mermaid {
-  margin: 0.7em 0; padding: 10px; background: #0b1120; border: 1px solid #334155;
-  border-radius: 8px; overflow-x: auto; text-align: center;
+  margin: 0.85em 0;
+  padding: 12px;
+  background: var(--ink-1000);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  overflow-x: auto;
+  text-align: center;
 }
-.markdown-body .md-mermaid pre { margin: 0; text-align: left; }
-.markdown-body .md-mermaid-svg svg { max-width: 100%; height: auto; }
-.markdown-body .md-mermaid-error-tip { color: #fbbf24; font-size: 12px; margin-bottom: 6px; text-align: left; }
 
-/* KaTeX */
-.markdown-body .katex { font-size: 1.06em; }
-.markdown-body .katex-display { margin: 0.7em 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
-.markdown-body .texmath { color: #e2e8f0; }
+.markdown-body .md-mermaid pre {
+  margin: 0;
+  text-align: left;
+}
 
-/* HTML 预览弹窗（Teleport 到 body，非 scoped） */
+.markdown-body .md-mermaid-svg svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-body .md-mermaid-error-tip {
+  margin-bottom: 6px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--warn-400);
+}
+
+/* ---------- KaTeX ---------- */
+.markdown-body .katex {
+  font-size: 1.06em;
+}
+
+.markdown-body .katex-display {
+  margin: 0.8em 0;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown-body .texmath {
+  color: var(--text-1);
+}
+
+/* ---------- HTML 预览弹窗（Teleport 到 body，非 scoped） ---------- */
 .md-preview-modal {
-  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0, 0, 0, 0.6); display: flex;
-  align-items: center; justify-content: center; z-index: 1100;
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(3, 5, 8, 0.72);
+  backdrop-filter: blur(6px);
+  animation: fadeIn var(--dur) var(--ease-out);
 }
+
 .md-preview-panel {
-  width: min(860px, 92vw); height: min(640px, 86vh);
-  display: flex; flex-direction: column; background: #1e293b;
-  border: 1px solid #334155; border-radius: 12px; overflow: hidden;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); outline: none;
+  display: flex;
+  flex-direction: column;
+  width: min(860px, 92vw);
+  height: min(640px, 86vh);
+  background: var(--ink-850);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-3);
+  outline: none;
 }
+
 .md-preview-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 14px; background: #172033; border-bottom: 1px solid #334155; flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  padding: 10px 16px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--line-1);
 }
-.md-preview-title { color: #e2e8f0; font-size: 13px; font-weight: 600; }
+
+.md-preview-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
 .md-preview-close {
-  border: none; background: transparent; color: #94a3b8; cursor: pointer;
-  font-size: 14px; padding: 4px 8px; border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
 }
-.md-preview-close:hover { background: #334155; color: #e2e8f0; }
-.md-preview-frame { flex: 1; width: 100%; border: none; background: #fff; }
+
+.md-preview-close:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-1);
+}
+
+.md-preview-frame {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
 </style>

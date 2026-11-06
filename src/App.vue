@@ -1,30 +1,49 @@
 <template>
   <div class="layout">
-    <!-- 左侧边栏 -->
+    <!-- 左侧导航 -->
     <aside class="sidebar">
-      <div class="sidebar-header">
-        <div class="logo"><img :src="logoUrl" alt="logo" /></div>
-        <div class="app-name">{{ appConfig.name }}</div>
+      <div class="brand">
+        <div class="brand-mark">
+          <img :src="logoUrl" alt="优墨" />
+        </div>
+        <div class="brand-text">
+          <div class="brand-name">{{ appConfig.name }}</div>
+          <div class="brand-sub">AI 桌宠</div>
+        </div>
       </div>
 
-      <div class="sidebar-divider"></div>
-
       <nav class="nav-menu">
-        <router-link
-          v-for="item in menuItems"
-          :key="item.label"
-          :to="item.path"
-          class="nav-item"
-          :class="{ disabled: item.disabled, active: !item.disabled && isMenuActive(item.path) }"
-        >
-          <span class="nav-icon">{{ item.icon }}</span>
-          <span class="nav-label">{{ item.label }}</span>
-        </router-link>
+        <div v-for="group in menuGroups" :key="group.title" class="nav-group">
+          <div class="nav-group-title">{{ group.title }}</div>
+          <router-link
+            v-for="item in group.items"
+            :key="item.label"
+            :to="item.path"
+            class="nav-item"
+            :class="{ disabled: item.disabled, active: !item.disabled && isMenuActive(item.path) }"
+          >
+            <AppIcon :name="item.icon" :size="17" class="nav-icon" />
+            <span class="nav-label">{{ item.label }}</span>
+          </router-link>
+        </div>
       </nav>
+
+      <div class="rail-foot">
+        <div class="rail-status">
+          <span class="status-dot" :class="connClass"></span>
+          <span class="status-text">{{ connText }}</span>
+        </div>
+        <span class="rail-version">v{{ appConfig.version }}</span>
+      </div>
     </aside>
+
     <!-- 右侧内容区 -->
     <main class="content">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <transition name="page" mode="out-in">
+          <component :is="Component" />
+        </transition>
+      </router-view>
     </main>
 
     <!-- 知识库后台上传悬浮指示（全局渲染：任意 tab 均可见，点击回到详情页展开进度窗） -->
@@ -34,8 +53,12 @@
       title="点击查看进度"
       @click="revealUploadProgress"
     >
-      <span class="upload-spinner sm"></span>
-      <span class="fab-text">处理中 {{ kbUploadDone }}/{{ kbUploadTotal }} · {{ kbUploadCurrent }}</span>
+      <span class="upload-spinner"></span>
+      <span class="fab-text">
+        <span class="fab-label">处理中</span>
+        <span class="tabular">{{ kbUploadDone }}/{{ kbUploadTotal }}</span>
+        <span class="fab-current">{{ kbUploadCurrent }}</span>
+      </span>
     </div>
   </div>
 </template>
@@ -46,6 +69,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { appConfig } from './appConfig'
 import { useAgentSocket } from './composables/useAgentSocket'
 import { useKbUploadState } from './composables/useKbUploadState'
+import AppIcon from './components/AppIcon.vue'
 import logoUrl from '../assets/icon.png'
 
 const route = useRoute()
@@ -147,131 +171,279 @@ onBeforeUnmount(() => {
   offProactiveMessage?.()
 })
 
-const menuItems = [
-  { path: '/', label: '本喵战绩', icon: '😼', disabled: false },
-  { path: '/chat', label: '唠嗑', icon: '💬', disabled: false },
-  { path: '/kb', label: '藏书阁', icon: '📚', disabled: false },
-  { path: '/mcp', label: 'MCP', icon: '🔌', disabled: false },
-  { path: '/skills', label: 'Skill', icon: '🛠️', disabled: false },
-  { path: '/logs', label: '日志', icon: '📋', disabled: false },
-  { path: '/settings', label: '设置', icon: '🐟', disabled: false },
-  { path: '/about', label: '关于', icon: 'ℹ️', disabled: false }
+// 导航按「日常 / 扩展 / 系统」分组：比一条长列表更容易被扫读，
+// 也让"日常三件套"在视觉上自然成为主路径
+const menuGroups = [
+  {
+    title: '日常',
+    items: [
+      { path: '/', label: '本喵战绩', icon: 'dashboard', disabled: false },
+      { path: '/chat', label: '唠嗑', icon: 'chat', disabled: false },
+      { path: '/kb', label: '藏书阁', icon: 'book', disabled: false },
+    ],
+  },
+  {
+    title: '扩展',
+    items: [
+      { path: '/mcp', label: 'MCP', icon: 'plug', disabled: false },
+      { path: '/skills', label: 'Skill', icon: 'wrench', disabled: false },
+    ],
+  },
+  {
+    title: '系统',
+    items: [
+      { path: '/logs', label: '日志', icon: 'list', disabled: false },
+      { path: '/settings', label: '设置', icon: 'settings', disabled: false },
+      { path: '/about', label: '关于', icon: 'info', disabled: false },
+    ],
+  },
 ]
+
+const connClass = computed(() => socketState.status === 'open' ? 'on' : socketState.status === 'closed' ? 'off' : 'warn')
+const connText = computed(() => ({
+  open: '服务在线',
+  connecting: '正在连接',
+  reconnecting: '正在重连',
+  closed: '服务离线',
+}[socketState.status] || '服务离线'))
 </script>
 
 <style scoped>
 .layout {
   display: flex;
   height: 100vh;
-  background: #0f172a;
   overflow: hidden;
+  position: relative;
+  /* 环境光：左上一点暖、右上一点冷，让纯黑底不显得"死" */
+  background:
+    radial-gradient(1100px 620px at 8% -12%, rgba(239, 168, 76, 0.055), transparent 62%),
+    radial-gradient(900px 560px at 102% -6%, rgba(143, 182, 232, 0.045), transparent 58%),
+    var(--ink-950);
+}
+
+/* 颗粒噪点：极低透明度，经屏幕后几乎看不见，但能消除大面积渐变的"塑料感" */
+.layout::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 /* ===== 侧边栏 ===== */
 .sidebar {
-  width: 168px;
-  min-width: 168px;
-  background: #1e293b;
-  border-right: 1px solid #334155;
+  position: relative;
+  z-index: 1;
+  width: var(--sidebar-w);
+  min-width: var(--sidebar-w);
   display: flex;
   flex-direction: column;
+  background: linear-gradient(180deg, #0D1017 0%, #0A0C11 100%);
+  border-right: 1px solid var(--line-1);
 }
 
-.sidebar-header {
+.brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 16px 16px;
+  padding: 18px 14px 16px;
 }
 
-.logo {
-  width: 32px;
-  height: 32px;
+/* 黑猫是纯黑剪影：必须落在浅色「月光瓦片」上才看得见，
+   同时用琥珀色外发光把它和侧栏联系起来 */
+.brand-mark {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: 11px;
+  background: linear-gradient(150deg, #FBF0DA 0%, #E9D2A6 100%);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.14),
+    0 6px 18px -6px rgba(239, 168, 76, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
-.logo img {
-  width: 100%;
-  height: 100%;
+.brand-mark img {
+  width: 24px;
+  height: 24px;
   object-fit: contain;
-  border-radius: 10px;
-}
-.app-name {
-  font-size: 16px;
-  font-weight: 700;
-  color: #f1f5f9;
 }
 
-.sidebar-divider {
-  height: 1px;
-  background: #334155;
-  margin: 0 12px 10px;
+.brand-text {
+  min-width: 0;
 }
+
+.brand-name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text-1);
+  line-height: 1.2;
+}
+
+.brand-sub {
+  margin-top: 3px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-4);
+}
+
 /* ===== 菜单 ===== */
 .nav-menu {
   flex: 1;
-  padding: 0 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  min-height: 0;
+  padding: 0 10px 12px;
   overflow-y: auto;
 }
 
+.nav-group + .nav-group {
+  margin-top: 6px;
+}
+
+.nav-group-title {
+  padding: 14px 10px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-4);
+  user-select: none;
+}
+
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 12px;
-  border-radius: 8px;
-  color: #94a3b8;
+  height: 36px;
+  padding: 0 10px;
+  margin-bottom: 2px;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
   text-decoration: none;
-  font-size: 14px;
-  transition: all 0.2s;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+
+.nav-item .nav-icon {
+  color: var(--text-3);
+  transition: color var(--dur-fast) var(--ease-out), transform var(--dur) var(--ease-spring);
 }
 
 .nav-item:hover:not(.disabled):not(.active) {
-  background: #273449;
-  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-1);
 }
 
+.nav-item:hover:not(.disabled) .nav-icon {
+  color: var(--amber-300);
+  transform: translateY(-0.5px);
+}
+
+/* 选中态：不是一整块高饱和色，而是「被点亮」——
+   暖色薄底 + 左侧琥珀指示条 + 图标发光 */
 .nav-item.active {
-  background: #4f46e5;
-  color: #ffffff;
-  font-weight: 500;
+  color: var(--amber-200);
+  background: linear-gradient(90deg, rgba(239, 168, 76, 0.16), rgba(239, 168, 76, 0.03));
+  box-shadow: inset 0 0 0 1px rgba(239, 168, 76, 0.14);
+}
+
+.nav-item.active .nav-icon {
+  color: var(--amber-400);
+  filter: drop-shadow(0 0 6px rgba(239, 168, 76, 0.45));
+}
+
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  width: 2px;
+  height: 18px;
+  border-radius: 0 2px 2px 0;
+  background: var(--amber-grad);
+  transform: translateY(-50%);
+  box-shadow: 0 0 10px rgba(239, 168, 76, 0.7);
 }
 
 .nav-item.disabled {
-  opacity: 0.45;
+  opacity: 0.35;
   cursor: not-allowed;
   pointer-events: none;
 }
 
-.nav-icon {
-  font-size: 16px;
-  width: 20px;
-  text-align: center;
+/* ===== 侧栏底部：服务状态 ===== */
+.rail-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--line-1);
 }
-/* ===== 内容区 ===== */
+
+.rail-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background var(--dur), box-shadow var(--dur);
+}
+
+.status-dot.on {
+  background: var(--jade-400);
+  box-shadow: 0 0 0 3px rgba(126, 203, 161, 0.13);
+}
+
+.status-dot.warn {
+  background: var(--amber-400);
+  box-shadow: 0 0 0 3px var(--amber-a12);
+  animation: breathe 1.8s ease-in-out infinite;
+}
+
+.status-dot.off {
+  background: var(--coral-400);
+  box-shadow: 0 0 0 3px var(--coral-a12);
+}
+
+.status-text {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rail-version {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-4);
+}
+
 /* ===== 内容区 ===== */
 .content {
+  position: relative;
+  z-index: 1;
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
-  padding: 32px 40px;
-}
-
-.content::-webkit-scrollbar {
-  width: 8px;
-}
-
-.content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.content::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 4px;
+  padding: 26px 32px 30px;
 }
 
 /* ===== 知识库后台上传悬浮指示 ===== */
@@ -282,36 +454,93 @@ const menuItems = [
   z-index: 999;
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: #1e293b;
-  border: 1px solid #4f46e5;
-  border-radius: 999px;
-  padding: 10px 16px;
+  gap: 9px;
+  max-width: 380px;
+  padding: 9px 14px 9px 12px;
+  border-radius: var(--r-full);
+  background: rgba(16, 19, 26, 0.92);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--amber-a35);
+  box-shadow: var(--shadow-3), 0 0 0 4px rgba(239, 168, 76, 0.05);
   cursor: pointer;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  animation: fab-in 0.25s ease;
+  animation: fab-in var(--dur) var(--ease-spring);
+  transition: border-color var(--dur), transform var(--dur) var(--ease-out);
 }
-.upload-fab:hover { border-color: #818cf8; }
+
+.upload-fab:hover {
+  border-color: var(--amber-a55);
+  transform: translateY(-1px);
+}
+
 @keyframes fab-in {
-  from { opacity: 0; transform: translateY(10px); }
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
   to { opacity: 1; transform: none; }
 }
-.upload-spinner.sm {
-  width: 14px;
-  height: 14px;
+
+.upload-spinner {
+  width: 13px;
+  height: 13px;
   flex-shrink: 0;
-  border: 2px solid rgba(129, 140, 248, 0.25);
-  border-top-color: #818cf8;
+  border: 2px solid var(--amber-a20);
+  border-top-color: var(--amber-400);
   border-radius: 50%;
-  animation: fab-spin 0.9s linear infinite;
+  animation: spin 0.9s linear infinite;
 }
-@keyframes fab-spin { to { transform: rotate(360deg); } }
+
 .fab-text {
-  font-size: 12px;
-  color: #cbd5e1;
-  max-width: 260px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  min-width: 0;
+}
+
+.fab-label {
+  color: var(--amber-300);
+  font-weight: 600;
+}
+
+.fab-current {
+  max-width: 190px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--text-3);
+}
+
+/* 窄屏：侧栏收成图标轨道，给内容让出空间 */
+@media (max-width: 980px) {
+  .sidebar {
+    width: 62px;
+    min-width: 62px;
+  }
+  .brand {
+    justify-content: center;
+    padding: 16px 0 12px;
+  }
+  .brand-text,
+  .nav-group-title,
+  .nav-label,
+  .rail-status .status-text,
+  .rail-version {
+    display: none;
+  }
+  .nav-menu {
+    padding: 0 8px 12px;
+  }
+  .nav-item {
+    justify-content: center;
+    padding: 0;
+  }
+  .nav-item.active::before {
+    left: -8px;
+  }
+  .rail-foot {
+    justify-content: center;
+  }
+  .content {
+    padding: 20px 18px 24px;
+  }
 }
 </style>

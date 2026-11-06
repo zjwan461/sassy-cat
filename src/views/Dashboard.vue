@@ -2,54 +2,88 @@
   <div class="page">
     <header class="page-header">
       <div>
-        <h1 class="page-title">本喵的辉煌战绩 😼</h1>
+        <div class="eyebrow">今日概览</div>
+        <h1 class="page-title">本喵的辉煌战绩</h1>
         <p class="page-subtitle">你每天陪优墨聊了多少，本喵都替你记着呢</p>
       </div>
       <div class="header-actions">
-        <span class="update-time" v-if="lastUpdated">更新于 {{ lastUpdated }}</span>
+        <span class="update-time" v-if="lastUpdated">
+          <AppIcon name="clock" :size="12" />
+          更新于 {{ lastUpdated }}
+        </span>
         <button class="btn-refresh" :disabled="loading" @click="manualRefresh">
-          <span :class="{ spinning: loading }">⟳</span>
-          {{ loading ? '加载中…' : '刷新' }}
+          <AppIcon name="refresh" :size="14" :class="{ spinning: loading }" />
+          {{ loading ? '加载中' : '刷新' }}
         </button>
       </div>
     </header>
 
     <!-- 错误空态（Python 服务未运行 / 仍在冷启动等） -->
-    <section v-if="error" class="card empty-card">
-      <div class="empty-icon">⚠️</div>
-      <div class="empty-text">{{ error }}</div>
-      <p v-if="retrying" class="empty-hint">本喵正在自动重试…（第 {{ retryCount }} / {{ RETRY_MAX }} 次）</p>
-      <button class="btn-retry" @click="manualRefresh">重试</button>
+    <section v-if="error" class="card error-card">
+      <div class="error-icon"><AppIcon name="alert" :size="22" /></div>
+      <div class="error-title">账本一时翻不开</div>
+      <div class="error-text">{{ error }}</div>
+      <p v-if="retrying" class="error-hint">
+        <span class="ui-spinner"></span>
+        本喵正在自动重试（第 {{ retryCount }} / {{ RETRY_MAX }} 次）
+      </p>
+      <button class="btn-retry" @click="manualRefresh">立即重试</button>
     </section>
 
     <template v-else>
       <!-- KPI 指标卡片 -->
       <div class="kpi-grid">
-        <section v-for="k in kpiCards" :key="k.label" class="card kpi-card">
-          <div class="kpi-icon" :style="{ background: k.color + '22', color: k.color }">{{ k.icon }}</div>
-          <div class="kpi-body">
-            <div class="kpi-label">{{ k.label }}</div>
-            <div class="kpi-value">{{ k.value }}</div>
-            <div class="kpi-sub" v-html="k.sub"></div>
+        <section
+          v-for="k in kpiCards"
+          :key="k.label"
+          class="card kpi-card"
+          :class="`kpi--${k.accent}`"
+        >
+          <div class="kpi-top">
+            <span class="kpi-icon"><AppIcon :name="k.icon" :size="15" /></span>
+            <span class="kpi-label">{{ k.label }}</span>
           </div>
+          <div class="kpi-value tabular">{{ k.value }}</div>
+          <div class="kpi-sub" v-html="k.sub"></div>
         </section>
       </div>
+
+      <!-- 知识库家底：三项指标合并成一条横向摘要，避免 KPI 网格出现孤行 -->
+      <section class="card kb-summary">
+        <div class="kb-summary-head">
+          <span class="kb-summary-icon"><AppIcon name="book" :size="15" /></span>
+          <div>
+            <div class="kb-summary-title">藏书阁家底</div>
+            <div class="kb-summary-sub">知识库、文档、分片都堆在这了</div>
+          </div>
+        </div>
+        <div class="kb-stats">
+          <div v-for="s in kbStats" :key="s.label" class="kb-stat">
+            <span class="kb-stat-value tabular">{{ s.value }}</span>
+            <span class="kb-stat-label">{{ s.label }}</span>
+          </div>
+        </div>
+      </section>
 
       <!-- 近 7 天趋势 -->
       <section class="card chart-card">
         <div class="card-header">
-          <span>近 7 天你找本喵的次数 📈</span>
-          <span class="card-sub">柱形 = 对话次数 · 折线 = Token 用量</span>
+          <div class="card-head-main">
+            <span class="card-title">近 7 天你找本喵的次数</span>
+            <span class="card-sub">柱形 = 对话次数 · 折线 = Token 用量</span>
+          </div>
         </div>
-        <div ref="trendRef" class="chart-box" style="height: 300px"></div>
+        <div ref="trendRef" class="chart-box" style="height: 292px"></div>
       </section>
 
       <div class="chart-row">
         <!-- Token 构成环图 -->
         <section class="card chart-card">
           <div class="card-header">
-            <span>本喵烧掉的脑细胞 🧠（输入 / 输出）</span>
-            <span class="card-sub">输入 = 你说的话 · 输出 = 本喵的回话</span>
+            <div class="card-head-main">
+              <span class="card-title">本喵烧掉的脑细胞</span>
+              <span class="card-sub">输入 = 你说的话 · 输出 = 本喵的回话</span>
+            </div>
           </div>
           <div class="donut-wrap">
             <div ref="tokenTodayRef" class="chart-box donut-box"></div>
@@ -60,10 +94,12 @@
         <!-- 知识库分布 -->
         <section class="card chart-card">
           <div class="card-header">
-            <span>本喵的藏书阁家底 📚</span>
-            <span class="card-sub">按库统计文档数与分片数</span>
+            <div class="card-head-main">
+              <span class="card-title">本喵的藏书阁分布</span>
+              <span class="card-sub">按库统计文档数与分片数</span>
+            </div>
           </div>
-          <div ref="kbRef" class="chart-box" style="height: 300px"></div>
+          <div ref="kbRef" class="chart-box" style="height: 292px"></div>
         </section>
       </div>
     </template>
@@ -74,6 +110,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { fetchDashboardStats } from '../api/stats'
 import { useAgentSocket } from '../composables/useAgentSocket'
+import AppIcon from '../components/AppIcon.vue'
 
 // ---------- ECharts 按需引入（控制打包体积） ----------
 import * as echarts from 'echarts/core'
@@ -87,20 +124,21 @@ echarts.use([
   CanvasRenderer,
 ])
 
-// ---------- 主题色（与全局深色风格一致） ----------
+// ---------- 主题色：与 tokens.css 的「墨夜 · 琥珀」保持一致 ----------
 const COLOR = {
-  text: '#94a3b8',
-  textStrong: '#e2e8f0',
-  axis: '#334155',
-  tooltipBg: '#1e293b',
-  tooltipBorder: '#334155',
-  blue: '#38bdf8',
-  violet: '#a78bfa',
-  green: '#34d399',
-  amber: '#fbbf24',
-  rose: '#fb7185',
-  cyan: '#22d3ee',
-  slate: '#475569',
+  text: '#7B8392',
+  textStrong: '#EBE9E4',
+  axis: 'rgba(255,255,255,0.10)',
+  split: 'rgba(255,255,255,0.055)',
+  tooltipBg: 'rgba(14,17,24,0.96)',
+  tooltipBorder: 'rgba(255,255,255,0.12)',
+  amber: '#EFA84C',
+  amberDeep: '#B4691C',
+  azure: '#8FB6E8',
+  jade: '#7ECBA1',
+  coral: '#E9776E',
+  lilac: '#C0A6E8',
+  track: 'rgba(255,255,255,0.055)',
 }
 
 // ---------- 数据状态 ----------
@@ -135,35 +173,32 @@ const kpiCards = computed(() => {
   const hTok = d.token.total
   return [
     {
-      label: '今日对话次数', icon: '💬', color: COLOR.blue,
+      label: '今日对话次数', icon: 'chat', accent: 'amber',
       value: fmtInt(d.chat.today), sub: todayChatQuip.value,
     },
     {
-      label: '今日 Token 用量', icon: '⚡', color: COLOR.amber,
+      label: '今日 Token 用量', icon: 'zap', accent: 'amber',
       value: fmtCompact(tTok.totalTokens),
       sub: `输入 ${fmtCompact(tTok.inputTokens)} · 输出 ${fmtCompact(tTok.outputTokens)}`,
     },
     {
-      label: '历史对话次数', icon: '🗂️', color: COLOR.violet,
+      label: '历史对话次数', icon: 'list', accent: 'azure',
       value: fmtInt(d.chat.total), sub: `日均 ${avgChats.value} 次，本喵都记着呢`,
     },
     {
-      label: '历史 Token 用量', icon: '🔋', color: COLOR.rose,
+      label: '历史 Token 用量', icon: 'bar-chart', accent: 'azure',
       value: fmtCompact(hTok.totalTokens),
       sub: `输入 ${fmtCompact(hTok.inputTokens)} · 输出 ${fmtCompact(hTok.outputTokens)}`,
     },
-    {
-      label: '知识库个数', icon: '📚', color: COLOR.green,
-      value: fmtInt(d.kb.kbCount), sub: '本喵的藏书阁',
-    },
-    {
-      label: '知识库文档个数', icon: '📄', color: COLOR.cyan,
-      value: fmtInt(d.kb.docCount), sub: '本喵已读的书',
-    },
-    {
-      label: '知识库分片个数', icon: '🧩', color: '#818cf8',
-      value: fmtInt(d.kb.chunkCount), sub: '嚼碎了记脑子里',
-    },
+  ]
+})
+
+const kbStats = computed(() => {
+  const d = (stats.value || baseEmpty).kb
+  return [
+    { label: '个知识库', value: fmtInt(d.kbCount) },
+    { label: '份文档', value: fmtInt(d.docCount) },
+    { label: '个分片', value: fmtInt(d.chunkCount) },
   ]
 })
 
@@ -193,12 +228,46 @@ const charts = shallowRef([])
 const tooltipStyle = {
   backgroundColor: COLOR.tooltipBg,
   borderColor: COLOR.tooltipBorder,
+  borderWidth: 1,
+  padding: [9, 12],
   textStyle: { color: COLOR.textStrong, fontSize: 12 },
+  extraCssText: 'border-radius:10px;box-shadow:0 16px 40px -16px rgba(0,0,0,0.85);backdrop-filter:blur(8px);',
+}
+
+// 统一的轴样式：去掉轴线，只留极淡的虚线网格
+const axisLabel = { color: COLOR.text, fontSize: 11 }
+const axisLine = { show: false }
+const splitLine = { lineStyle: { color: COLOR.split, type: [3, 4] } }
+
+const legendStyle = {
+  icon: 'roundRect',
+  itemWidth: 8,
+  itemHeight: 8,
+  itemGap: 18,
+  top: 2,
+  textStyle: { color: COLOR.text, fontSize: 11 },
 }
 
 function disposeCharts() {
   charts.value.forEach((c) => c.dispose())
   charts.value = []
+}
+
+function emptyGraphic(text) {
+  return [
+    {
+      type: 'text',
+      left: 'center',
+      top: '46%',
+      style: {
+        text,
+        fill: COLOR.text,
+        fontSize: 13,
+        fontWeight: 400,
+        letterSpacing: 0.4,
+      },
+    },
+  ]
 }
 
 function initCharts() {
@@ -212,57 +281,41 @@ function initCharts() {
     const dates = d.trend.map((x) => x.date)
     const hasTrend = dates.length > 0
     c.setOption({
-      graphic: hasTrend
-        ? []
-        : [
-            {
-              type: 'text',
-              left: 'center',
-              top: '45%',
-              style: {
-                text: '近 7 天还没有对话记录，快去和本喵唠两句 😼',
-                fill: COLOR.text,
-                fontSize: 14,
-                fontWeight: 500,
-              },
-            },
-          ],
+      graphic: hasTrend ? [] : emptyGraphic('近 7 天还没有对话记录，快去和本喵唠两句'),
       tooltip: {
         trigger: 'axis',
-        axisPointer: { type: 'shadow' },
+        axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(255,255,255,0.035)' } },
         ...tooltipStyle,
         valueFormatter: (v) => fmtInt(v),
       },
-      legend: {
-        data: ['你找本喵', '烧掉的 Token'],
-        textStyle: { color: COLOR.text },
-        top: 4,
-      },
-      grid: { left: 50, right: 60, top: 40, bottom: 28 },
+      legend: { ...legendStyle, data: ['你找本喵', '烧掉的 Token'] },
+      grid: { left: 46, right: 54, top: 44, bottom: 26 },
       xAxis: {
         type: 'category',
         data: dates,
-        axisLine: { lineStyle: { color: COLOR.axis } },
-        axisLabel: { color: COLOR.text },
+        axisLine,
+        axisTick: { show: false },
+        axisLabel: { ...axisLabel, margin: 12 },
       },
       yAxis: [
         {
           type: 'value',
           name: '次数',
-          nameTextStyle: { color: COLOR.text },
+          nameTextStyle: { color: COLOR.text, fontSize: 11, padding: [0, 0, 4, -24] },
           minInterval: 1,
-          splitLine: { lineStyle: { color: COLOR.axis, type: 'dashed' } },
-          axisLabel: { color: COLOR.text },
+          splitLine,
+          axisLine,
+          axisTick: { show: false },
+          axisLabel,
         },
         {
           type: 'value',
           name: 'Token',
-          nameTextStyle: { color: COLOR.text },
+          nameTextStyle: { color: COLOR.text, fontSize: 11, padding: [0, -18, 4, 0] },
           splitLine: { show: false },
-          axisLabel: {
-            color: COLOR.text,
-            formatter: (v) => fmtCompact(v),
-          },
+          axisLine,
+          axisTick: { show: false },
+          axisLabel: { ...axisLabel, formatter: (v) => fmtCompact(v) },
         },
       ],
       series: [
@@ -270,28 +323,30 @@ function initCharts() {
           name: '你找本喵',
           type: 'bar',
           data: d.trend.map((x) => x.chats),
-          barMaxWidth: 28,
+          barMaxWidth: 24,
           itemStyle: {
-            borderRadius: [5, 5, 0, 0],
+            borderRadius: [4, 4, 0, 0],
             color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: COLOR.blue },
-              { offset: 1, color: '#0369a1' },
+              { offset: 0, color: COLOR.amber },
+              { offset: 1, color: COLOR.amberDeep },
             ]),
           },
+          emphasis: { itemStyle: { color: '#F7C173' } },
         },
         {
           name: '烧掉的 Token',
           type: 'line',
           yAxisIndex: 1,
-          smooth: true,
-          symbolSize: 7,
+          smooth: 0.35,
+          symbolSize: 6,
+          symbol: 'circle',
           data: d.trend.map((x) => x.tokens),
-          itemStyle: { color: COLOR.amber },
-          lineStyle: { width: 2.5, color: COLOR.amber },
+          itemStyle: { color: COLOR.azure, borderColor: '#0E1118', borderWidth: 2 },
+          lineStyle: { width: 2, color: COLOR.azure, shadowBlur: 10, shadowColor: 'rgba(143,182,232,0.35)' },
           areaStyle: {
             color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: 'rgba(251,191,36,0.25)' },
-              { offset: 1, color: 'rgba(251,191,36,0)' },
+              { offset: 0, color: 'rgba(143,182,232,0.22)' },
+              { offset: 1, color: 'rgba(143,182,232,0)' },
             ]),
           },
         },
@@ -308,10 +363,10 @@ function initCharts() {
     c.setOption({
       title: {
         text: title,
-        subtext: has ? fmtCompact(tok.totalTokens) : '暂无数据',
+        subtext: has ? fmtCompact(tok.totalTokens) : '暂无',
         left: 'center',
-        top: '38%',
-        textStyle: { color: COLOR.text, fontSize: 13, fontWeight: 400 },
+        top: '37%',
+        textStyle: { color: COLOR.text, fontSize: 11, fontWeight: 500, letterSpacing: 1 },
         subtextStyle: { color: COLOR.textStrong, fontSize: 20, fontWeight: 700 },
       },
       tooltip: {
@@ -322,17 +377,18 @@ function initCharts() {
       series: [
         {
           type: 'pie',
-          radius: ['58%', '78%'],
-          center: ['50%', '50%'],
+          radius: ['62%', '82%'],
+          center: ['50%', '52%'],
           avoidLabelOverlap: false,
           label: { show: false },
           labelLine: { show: false },
+          itemStyle: { borderColor: '#12161F', borderWidth: 3 },
           data: has
             ? [
-                { name: '听你唠叨（输入）', value: tok.inputTokens, itemStyle: { color: COLOR.violet } },
-                { name: '本喵高见（输出）', value: tok.outputTokens, itemStyle: { color: COLOR.cyan } },
+                { name: '听你唠叨（输入）', value: tok.inputTokens, itemStyle: { color: COLOR.amber } },
+                { name: '本喵高见（输出）', value: tok.outputTokens, itemStyle: { color: COLOR.azure } },
               ]
-            : [{ name: '无数据', value: 1, itemStyle: { color: COLOR.slate } }],
+            : [{ name: '无数据', value: 1, itemStyle: { color: COLOR.track, borderWidth: 0 } }],
         },
       ],
     })
@@ -348,39 +404,23 @@ function initCharts() {
     const names = per.map((x) => x.name)
     const hasKb = per.length > 0
     c.setOption({
-      graphic: hasKb
-        ? []
-        : [
-            {
-              type: 'text',
-              left: 'center',
-              top: '45%',
-              style: {
-                text: '还没有知识库，去「知识库」页面建一个吧 📚',
-                fill: COLOR.text,
-                fontSize: 14,
-                fontWeight: 500,
-              },
-            },
-          ],
+      graphic: hasKb ? [] : emptyGraphic('还没有知识库，去「藏书阁」建一个吧'),
       tooltip: {
         trigger: 'axis',
-        axisPointer: { type: 'shadow' },
+        axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(255,255,255,0.035)' } },
         ...tooltipStyle,
         valueFormatter: (v) => fmtInt(v),
       },
-      legend: {
-        data: ['藏书（文档）', '笔记（分片）'],
-        textStyle: { color: COLOR.text },
-        top: 4,
-      },
-      grid: { left: 50, right: 20, top: 40, bottom: per.length > 4 ? 56 : 28 },
+      legend: { ...legendStyle, data: ['藏书（文档）', '笔记（分片）'] },
+      grid: { left: 46, right: 18, top: 44, bottom: per.length > 4 ? 54 : 26 },
       xAxis: {
         type: 'category',
         data: names.length ? names : ['暂无知识库'],
-        axisLine: { lineStyle: { color: COLOR.axis } },
+        axisLine,
+        axisTick: { show: false },
         axisLabel: {
-          color: COLOR.text,
+          ...axisLabel,
+          margin: 12,
           interval: 0,
           rotate: names.length > 4 ? 24 : 0,
           formatter: (v) => (v.length > 8 ? v.slice(0, 7) + '…' : v),
@@ -389,8 +429,10 @@ function initCharts() {
       yAxis: {
         type: 'value',
         minInterval: 1,
-        splitLine: { lineStyle: { color: COLOR.axis, type: 'dashed' } },
-        axisLabel: { color: COLOR.text },
+        splitLine,
+        axisLine,
+        axisTick: { show: false },
+        axisLabel,
       },
       series: [
         {
@@ -398,16 +440,16 @@ function initCharts() {
           type: 'bar',
           stack: 'kb',
           data: per.map((x) => x.docCount),
-          barMaxWidth: 34,
-          itemStyle: { color: COLOR.green, borderRadius: [0, 0, 0, 0] },
+          barMaxWidth: 30,
+          itemStyle: { color: COLOR.jade },
         },
         {
           name: '笔记（分片）',
           type: 'bar',
           stack: 'kb',
           data: per.map((x) => x.chunkCount),
-          barMaxWidth: 34,
-          itemStyle: { color: '#0d9488', borderRadius: [5, 5, 0, 0] },
+          barMaxWidth: 30,
+          itemStyle: { color: COLOR.amber, borderRadius: [4, 4, 0, 0] },
         },
       ],
     })
@@ -516,193 +558,353 @@ onUnmounted(() => {
 
 <style scoped>
 .page {
-  max-width: 1200px;
+  max-width: 1180px;
+  margin: 0 auto;
+  animation: fadeUp var(--dur-slow) var(--ease-out) backwards;
 }
 
+/* ===== 页头 ===== */
 .page-header {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  margin-bottom: 24px;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: var(--amber-500);
+  margin-bottom: 8px;
 }
 
 .page-title {
-  font-size: 30px;
+  font-size: 26px;
   font-weight: 700;
-  color: #f1f5f9;
-  margin-bottom: 6px;
+  letter-spacing: -0.02em;
+  color: var(--text-1);
+  line-height: 1.25;
 }
 
 .page-subtitle {
-  font-size: 14px;
-  color: #64748b;
+  margin-top: 7px;
+  font-size: 13px;
+  color: var(--text-3);
 }
 
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
 }
 
 .update-time {
-  font-size: 12px;
-  color: #64748b;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
 }
 
 .btn-refresh {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  font-size: 13px;
-  color: #e2e8f0;
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 9px;
+  gap: 7px;
+  height: 32px;
+  padding: 0 13px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
   cursor: pointer;
-  transition: background 0.2s;
+  transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
 }
 
 .btn-refresh:hover:not(:disabled) {
-  background: #273449;
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--line-3);
 }
 
 .btn-refresh:disabled {
-  opacity: 0.6;
+  opacity: 0.55;
   cursor: default;
 }
 
 .spinning {
-  display: inline-block;
   animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
 }
 
 /* ===== 卡片通用 ===== */
 .card {
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 14px;
+  position: relative;
+  background: linear-gradient(180deg, var(--ink-850), var(--ink-800));
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  box-shadow: var(--hairline), 0 1px 2px rgba(0, 0, 0, 0.3);
   overflow: hidden;
 }
 
-.card-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  padding: 16px 22px;
-  font-size: 15px;
-  font-weight: 600;
-  color: #e2e8f0;
-  border-bottom: 1px solid #334155;
-}
-
-.card-sub {
-  font-size: 12px;
-  font-weight: 400;
-  color: #64748b;
-}
-
 /* ===== 错误空态 ===== */
-.empty-card {
-  padding: 64px 24px;
+.error-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
+  padding: 56px 24px;
+  text-align: center;
 }
 
-.empty-icon {
-  font-size: 36px;
+.error-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 4px;
+  border-radius: var(--r-md);
+  color: var(--amber-400);
+  background: var(--amber-a12);
+  border: 1px solid var(--amber-a20);
 }
 
-.empty-text {
-  font-size: 14px;
-  color: #94a3b8;
+.error-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-1);
 }
 
-.empty-hint {
-  margin: 0;
+.error-text {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-3);
+  max-width: 60ch;
+}
+
+.error-hint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-4);
 }
 
 .btn-retry {
-  padding: 8px 24px;
+  margin-top: 8px;
+  height: 34px;
+  padding: 0 22px;
   font-size: 13px;
-  color: #f1f5f9;
-  background: #0ea5e9;
+  font-weight: 600;
+  color: var(--amber-ink);
+  background: var(--amber-grad);
   border: none;
-  border-radius: 9px;
+  border-radius: var(--r-sm);
   cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  transition: filter var(--dur-fast), box-shadow var(--dur-fast);
 }
 
 .btn-retry:hover {
-  background: #38bdf8;
+  filter: brightness(1.07);
+  box-shadow: var(--shadow-amber), inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 
 /* ===== KPI 卡片 ===== */
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
-  margin-bottom: 20px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
 }
 
 .kpi-card {
+  padding: 16px 18px 18px;
+  transition: border-color var(--dur), transform var(--dur) var(--ease-out), box-shadow var(--dur);
+  animation: fadeUp 420ms var(--ease-out) both;
+}
+
+/* 四张卡片依次入场的 30ms 错峰：比整块同时出现更有节奏 */
+.kpi-card:nth-child(1) { animation-delay: 20ms; }
+.kpi-card:nth-child(2) { animation-delay: 50ms; }
+.kpi-card:nth-child(3) { animation-delay: 80ms; }
+.kpi-card:nth-child(4) { animation-delay: 110ms; }
+
+.kpi-card:hover {
+  border-color: var(--line-2);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-2), var(--hairline);
+}
+
+/* 顶部一道极淡的色相条，给同类指标一点身份区分 */
+.kpi-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--k), transparent);
+  opacity: 0.55;
+}
+
+.kpi--amber { --k: var(--amber-400); --k-soft: var(--amber-a12); }
+.kpi--azure { --k: var(--azure-400); --k-soft: var(--azure-a12); }
+.kpi--jade { --k: var(--jade-400); --k-soft: var(--jade-a12); }
+
+.kpi-top {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 18px 20px;
+  gap: 8px;
+  margin-bottom: 14px;
 }
 
 .kpi-icon {
-  width: 44px;
-  height: 44px;
-  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
-  border-radius: 12px;
-}
-
-.kpi-body {
-  min-width: 0;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  color: var(--k);
+  background: var(--k-soft);
+  border: 1px solid color-mix(in srgb, var(--k) 22%, transparent);
 }
 
 .kpi-label {
-  font-size: 13px;
-  color: #94a3b8;
-  margin-bottom: 4px;
-  white-space: nowrap;
-}
-
-.kpi-value {
-  font-size: 24px;
-  font-weight: 700;
-  color: #f1f5f9;
-  font-family: 'Consolas', 'Monaco', monospace;
-  line-height: 1.2;
-}
-
-.kpi-sub {
   font-size: 12px;
-  color: #64748b;
-  margin-top: 3px;
+  color: var(--text-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.kpi-value {
+  font-size: 27px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--text-1);
+}
+
+.kpi-sub {
+  margin-top: 7px;
+  font-size: 11.5px;
+  color: var(--text-4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ===== 知识库摘要条 ===== */
+.kb-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 14px 20px;
+  margin-bottom: 16px;
+  animation: fadeUp 420ms var(--ease-out) both;
+  animation-delay: 140ms;
+}
+
+.kb-summary-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.kb-summary-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  color: var(--jade-400);
+  background: var(--jade-a12);
+  border: 1px solid rgba(126, 203, 161, 0.22);
+}
+
+.kb-summary-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.kb-summary-sub {
+  font-size: 11.5px;
+  color: var(--text-4);
+  margin-top: 1px;
+}
+
+.kb-stats {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+
+.kb-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.kb-stat-value {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text-1);
+  letter-spacing: -0.01em;
+}
+
+.kb-stat-label {
+  font-size: 11.5px;
+  color: var(--text-4);
+}
+
 /* ===== 图表 ===== */
 .chart-card {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
+  animation: fadeUp 460ms var(--ease-out) both;
+  animation-delay: 170ms;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 15px 20px 9px;
+}
+
+.card-head-main {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.card-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-1);
+  letter-spacing: -0.01em;
+}
+
+.card-sub {
+  font-size: 11.5px;
+  color: var(--text-4);
 }
 
 .chart-box {
@@ -711,30 +913,46 @@ onUnmounted(() => {
 
 .chart-row {
   display: grid;
-  grid-template-columns: 1fr 1.2fr;
-  gap: 20px;
+  grid-template-columns: 1fr 1.15fr;
+  gap: 16px;
 }
 
 .chart-row .chart-card {
   margin-bottom: 0;
 }
 
-@media (max-width: 900px) {
-  .chart-row {
-    grid-template-columns: 1fr;
-  }
-}
-
 .donut-wrap {
   display: flex;
+  padding: 0 6px 10px;
 }
 
 .donut-box {
   flex: 1;
-  height: 260px;
+  height: 258px;
 }
 
-@media (max-width: 560px) {
+@media (max-width: 1180px) {
+  .kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  .chart-row {
+    grid-template-columns: 1fr;
+  }
+  .page-title {
+    font-size: 23px;
+  }
+}
+
+@media (max-width: 620px) {
+  .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+  .kb-stats {
+    gap: 18px;
+  }
   .donut-wrap {
     flex-direction: column;
   }

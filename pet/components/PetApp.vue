@@ -563,32 +563,45 @@ onBeforeUnmount(() => {
 .pet-sprite.spritesheet svg,
 .pet-sprite.spritesheet .css-sprite { animation: none !important; }
 
+/* 气泡：不用纯白，改成与主窗口品牌瓦片同源的「月光纸」——
+   在任意桌面壁纸上都有清晰边界，又不会像系统提示框那样刺眼 */
 .bubble-wrap { position: absolute; bottom: 118px; left: 50%; transform: translateX(-50%); width: 280px; z-index: 10; }
 .bubble {
-  background: #fff; color: #1e293b; border-radius: 12px; padding: 9px 13px;
-  font-size: 13px; line-height: 1.5; position: relative;
-  box-shadow: 0 4px 16px rgba(0,0,0,.25); word-break: break-word;
+  background: linear-gradient(170deg, #FDF6E8 0%, #F7EAD2 100%);
+  color: #2C2113; border-radius: 14px; padding: 10px 14px;
+  font-size: 13px; line-height: 1.6; position: relative;
+  border: 1px solid rgba(239, 168, 76, 0.35);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, .55), 0 2px 6px rgba(0, 0, 0, .18);
+  word-break: break-word;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
 }
 .bubble::after {
   content: ''; position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%);
-  border: 7px solid transparent; border-top-color: #fff; border-bottom: none;
+  border: 7px solid transparent; border-top-color: #F7EAD2; border-bottom: none;
 }
 .bubble-text.clamped {
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .bubble.expanded .bubble-text { max-height: 200px; overflow-y: auto; }
 .bubble.expanded .bubble-text::-webkit-scrollbar { width: 4px; }
-.bubble.expanded .bubble-text::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
-.bubble-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+.bubble.expanded .bubble-text::-webkit-scrollbar-thumb { background: rgba(44, 33, 19, .22); border-radius: 2px; }
+.bubble-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; }
 .bbtn {
-  border: none; background: #eef2ff; color: #4338ca; font-size: 11px;
-  border-radius: 6px; padding: 2px 8px; cursor: pointer; line-height: 1.6;
+  border: 1px solid rgba(180, 105, 28, .22);
+  background: rgba(239, 168, 76, .16); color: #8A4E12; font-size: 11px;
+  border-radius: 999px; padding: 2px 9px; cursor: pointer; line-height: 1.6;
+  transition: background .15s, border-color .15s;
 }
-.bbtn:hover { background: #e0e7ff; }
-.bbtn-x { background: #fee2e2; color: #b91c1c; }
-.bbtn-x:hover { background: #fecaca; }
+.bbtn:hover { background: rgba(239, 168, 76, .3); border-color: rgba(180, 105, 28, .4); }
+.bbtn-x { background: rgba(180, 60, 50, .1); color: #9A332B; border-color: rgba(180, 60, 50, .2); }
+.bbtn-x:hover { background: rgba(180, 60, 50, .18); }
 .quick-input input {
-  width: 100%; box-sizing: border-box; background: #1e293b; color: #e2e8f0;
-  border: 1px solid #6366f1; border-radius: 10px; padding: 8px 10px; font-size: 13px; outline: none;
+  width: 100%; box-sizing: border-box;
+  background: #10131A; color: #EBE9E4;
+  border: 1px solid rgba(239, 168, 76, .5); border-radius: 10px;
+  padding: 9px 11px; font-size: 13px;
+  box-shadow: 0 0 0 3px rgba(239, 168, 76, .12), 0 10px 30px -10px rgba(0, 0, 0, .6);
 }
+.quick-input input::placeholder { color: #6B7280; }
+.quick-input input:focus { outline: none; border-color: #EFA84C; }
 </style>

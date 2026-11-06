@@ -63,15 +63,15 @@ function closeImagePreview() {
 
 <style scoped>
 .file-preview {
-  padding: 8px 12px;
-  border-bottom: 1px solid #334155;
-  background: #172033;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-1);
+  background: rgba(0, 0, 0, 0.18);
   max-height: 200px;
   overflow-y: auto;
 }
 
 .preview-section {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .preview-section:last-child {
@@ -79,13 +79,15 @@ function closeImagePreview() {
 }
 
 .preview-label {
-  font-size: 11px;
-  color: #94a3b8;
-  margin-bottom: 6px;
-  font-weight: 500;
+  margin-bottom: 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-4);
 }
 
-/* 图片网格 */
+/* ---------- 图片网格 ---------- */
 .image-grid {
   display: flex;
   flex-wrap: wrap;
@@ -94,17 +96,17 @@ function closeImagePreview() {
 
 .image-item {
   position: relative;
-  width: 64px;
-  height: 64px;
-  border-radius: 6px;
+  width: 62px;
+  height: 62px;
+  border-radius: var(--r-sm);
   overflow: hidden;
-  border: 1px solid #334155;
-  cursor: pointer;
-  transition: border-color 0.15s;
+  border: 1px solid var(--line-2);
+  cursor: zoom-in;
+  transition: border-color var(--dur-fast);
 }
 
 .image-item:hover {
-  border-color: #6366f1;
+  border-color: var(--amber-a55);
 }
 
 .image-item img {
@@ -115,29 +117,30 @@ function closeImagePreview() {
 
 .image-item .remove-btn {
   position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
-  border: none;
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
+  top: 3px;
+  right: 3px;
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 17px;
+  height: 17px;
+  font-size: 13px;
+  line-height: 1;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.66);
+  backdrop-filter: blur(4px);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity var(--dur-fast);
 }
 
 .image-item:hover .remove-btn {
   opacity: 1;
 }
 
-/* 文档列表 */
+/* ---------- 文档列表 ---------- */
 .doc-list {
   display: flex;
   flex-direction: column;
@@ -148,22 +151,23 @@ function closeImagePreview() {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
-  background: #0f172a;
-  border: 1px solid #334155;
-  border-radius: 6px;
+  padding: 7px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  transition: border-color var(--dur-fast);
 }
 
 .doc-item.loading {
-  border-color: #6366f1;
+  border-color: var(--amber-a35);
 }
 
 .doc-item.done {
-  border-color: #059669;
+  border-color: rgba(126, 203, 161, 0.35);
 }
 
 .doc-item.error {
-  border-color: #dc2626;
+  border-color: rgba(233, 119, 110, 0.4);
 }
 
 .doc-info {
@@ -173,85 +177,83 @@ function closeImagePreview() {
 
 .doc-name {
   font-size: 12px;
-  color: #e2e8f0;
+  color: var(--text-1);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .doc-status {
-  font-size: 11px;
-  margin-top: 2px;
   display: flex;
   align-items: center;
   gap: 4px;
+  margin-top: 2px;
+  font-size: 10.5px;
 }
 
 .status-loading {
-  color: #6366f1;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--amber-300);
 }
 
 .status-loading .spinner {
   display: inline-block;
-  width: 10px;
-  height: 10px;
-  border: 2px solid #6366f1;
-  border-top-color: transparent;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--amber-a35);
+  border-top-color: var(--amber-400);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
 .status-done {
-  color: #34d399;
+  color: var(--jade-400);
 }
 
 .status-error {
-  color: #f87171;
+  color: var(--coral-400);
 }
 
 .doc-item .remove-btn {
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  background: transparent;
-  color: #64748b;
-  border: none;
-  font-size: 16px;
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s, color 0.15s;
+  width: 20px;
+  height: 20px;
+  font-size: 15px;
+  color: var(--text-4);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
 }
 
 .doc-item .remove-btn:hover {
-  background: #334155;
-  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-1);
 }
 
-/* 图片放大预览弹窗 */
+/* ---------- 图片放大预览 ---------- */
 .image-modal {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.8);
+  inset: 0;
+  z-index: 1000;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
-  cursor: pointer;
+  background: rgba(3, 5, 8, 0.86);
+  backdrop-filter: blur(6px);
+  cursor: zoom-out;
+  animation: fadeIn var(--dur) var(--ease-out);
 }
 
 .image-modal img {
   max-width: 90%;
   max-height: 90%;
-  border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-3);
 }
 </style>

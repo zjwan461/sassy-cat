@@ -1,0 +1,132 @@
+/* =========================================================
+   优墨 · 设计令牌 (Design Tokens)
+   视觉主题：「墨夜 · 琥珀」—— 墨色深夜里的一点暖光。
+   黑猫是墨，眼睛是琥珀；界面以近黑的冷墨打底，
+   只用一种高饱和暖色做信号，安静、克制、有温度。
+   ========================================================= */
+
+:root {
+  /* ---------- 墨色底（由深到浅） ---------- */
+  --ink-1000: #06080B; /* 最深：遮罩 / 代码块底 */
+  --ink-950: #090C11; /* 应用画布 */
+  --ink-900: #0E1118; /* 侧边栏 / 面板底 */
+  --ink-850: #12161F; /* 卡片底（渐变起） */
+  --ink-800: #161B25; /* 卡片底（渐变止） */
+  --ink-750: #1A202B; /* 抬升面 / hover */
+  --ink-700: #202732; /* 悬浮层 / 输入框 focus */
+  --ink-600: #2A323F; /* 强分割 / 控件底 */
+
+  /* ---------- 描边（发丝线，靠白色透明叠加保持「墨」感） ---------- */
+  --line-1: rgba(255, 255, 255, 0.055); /* 默认卡片描边 */
+  --line-2: rgba(255, 255, 255, 0.09); /* hover / 分组线 */
+  --line-3: rgba(255, 255, 255, 0.14); /* 强调描边 / 分隔 */
+  --line-4: rgba(255, 255, 255, 0.22); /* 极强描边 */
+
+  /* ---------- 文字（微暖的白，避免纯白的刺眼） ---------- */
+  --text-1: #EBE9E4; /* 标题 / 正文强调 */
+  --text-2: #A9B0BC; /* 正文 / 次强调 */
+  --text-3: #7B8392; /* 辅助说明 */
+  --text-4: #5E6675; /* 占位 / 极弱 */
+  --text-5: #3B424F; /* 装饰性文本 */
+
+  /* ---------- 琥珀：唯一的主色 ---------- */
+  --amber-100: #FBE7C4;
+  --amber-200: #F8D49B;
+  --amber-300: #F3BE73;
+  --amber-400: #EFA84C; /* 主色 */
+  --amber-500: #E08F33;
+  --amber-600: #BC7222;
+  --amber-ink: #2A1A07; /* 琥珀底上的文字 */
+  --amber-a08: rgba(239, 168, 76, 0.08);
+  --amber-a12: rgba(239, 168, 76, 0.12);
+  --amber-a20: rgba(239, 168, 76, 0.2);
+  --amber-a35: rgba(239, 168, 76, 0.35);
+  --amber-a55: rgba(239, 168, 76, 0.55);
+  --amber-grad: linear-gradient(135deg, #F3BE73 0%, #EFA84C 45%, #DE8F35 100%);
+
+  /* ---------- 辅助色（只在语义/图表里出现，饱和度压低） ---------- */
+  --jade-400: #7ECBA1; /* 成功 */
+  --jade-a12: rgba(126, 203, 161, 0.12);
+  --coral-400: #E9776E; /* 危险 */
+  --coral-a12: rgba(233, 119, 110, 0.12);
+  --azure-400: #8FB6E8; /* 信息 / 链接 */
+  --azure-a12: rgba(143, 182, 232, 0.12);
+  --lilac-400: #C0A6E8; /* 子 Agent / 特殊来源 */
+  --lilac-a12: rgba(192, 166, 232, 0.12);
+  --warn-400: #E8C06A; /* 警示（高危确认） */
+  --warn-a12: rgba(232, 192, 106, 0.12);
+
+  /* 图表色板：同明度、同灰度的六个低饱和色，放在一起不打架 */
+  --chart-1: #EFA84C;
+  --chart-2: #8FB6E8;
+  --chart-3: #7ECBA1;
+  --chart-4: #C0A6E8;
+  --chart-5: #E9776E;
+  --chart-6: #D9C08A;
+
+  /* ---------- 圆角 ---------- */
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-full: 999px;
+
+  /* ---------- 阴影：多层、低透明度，模拟环境光 ---------- */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 10px 24px -12px rgba(0, 0, 0, 0.65);
+  --shadow-3: 0 28px 64px -24px rgba(0, 0, 0, 0.8);
+  --shadow-amber: 0 12px 30px -12px rgba(239, 168, 76, 0.35);
+  --hairline: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+
+  /* ---------- 字体 ---------- */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI',
+    'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', 'Helvetica Neue', sans-serif;
+  --font-mono: 'Cascadia Code', 'JetBrains Mono', 'SF Mono', Consolas, 'Courier New', monospace;
+
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-15: 15px;
+  --fs-17: 17px;
+  --fs-20: 20px;
+  --fs-24: 24px;
+  --fs-30: 30px;
+
+  /* ---------- 间距节奏（4 的倍数，避免随手值） ---------- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+
+  /* ---------- 动效 ---------- */
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 380ms;
+
+  /* ---------- 布局 ---------- */
+  --sidebar-w: 216px;
+  --content-max: 1180px;
+
+  /* ---------- 语义化快捷别名（视图里优先用这些） ---------- */
+  --bg-app: var(--ink-950);
+  --bg-panel: var(--ink-900);
+  --bg-card: var(--ink-850);
+  --bg-raised: var(--ink-750);
+  --bg-input: var(--ink-1000);
+  --border: var(--line-1);
+  --border-strong: var(--line-2);
+  --text: var(--text-2);
+  --text-strong: var(--text-1);
+  --text-dim: var(--text-3);
+  --accent: var(--amber-400);
+  --accent-soft: var(--amber-a12);
+}

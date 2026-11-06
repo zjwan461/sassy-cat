@@ -1,14 +1,20 @@
 <template>
   <div class="kb-detail">
     <!-- 顶栏 -->
-    <div class="detail-header">
-      <button class="btn-back" @click="goBack">← 返回</button>
+    <header class="detail-header">
+      <button class="btn-back" @click="goBack">
+        <AppIcon name="arrow-left" :size="15" />
+        <span>返回</span>
+      </button>
       <div class="header-info">
-        <h2 class="header-title">{{ kb?.name || '加载中…' }}</h2>
+        <div class="eyebrow">知识库 · 文档分块</div>
+        <h1 class="header-title" :title="kb?.name">{{ kb?.name || '加载中…' }}</h1>
         <p class="header-desc" v-if="kb?.description">{{ kb.description }}</p>
       </div>
-      <button class="btn-primary" :disabled="uploading" @click="triggerUpload">
-        {{ uploading ? '上传处理中…' : '⬆ 上传文档' }}
+      <button class="ui-btn ui-btn--primary" :disabled="uploading" @click="triggerUpload">
+        <span v-if="uploading" class="ui-spinner"></span>
+        <AppIcon v-else name="upload" :size="14" />
+        {{ uploading ? '上传处理中…' : '上传文档' }}
       </button>
       <input
         ref="fileInput"
@@ -18,17 +24,27 @@
         style="display: none"
         @change="onFilesSelected"
       />
-    </div>
+    </header>
 
-    <div v-if="pageError" class="page-error">{{ pageError }}</div>
+    <div v-if="pageError" class="page-error">
+      <AppIcon name="alert" :size="15" />
+      <span>{{ pageError }}</span>
+    </div>
 
     <div class="detail-body">
       <!-- 左侧：文档列表 -->
       <aside class="doc-panel">
-        <div class="panel-title">文档（{{ documents.length }}）</div>
-        <div v-if="docsLoading" class="panel-hint">加载中…</div>
-        <div v-else-if="documents.length === 0" class="panel-hint">
-          暂无文档，点击右上角上传
+        <div class="panel-title">
+          <span class="panel-title-icon"><AppIcon name="file" :size="13" /></span>
+          <span>文档（<span class="panel-count">{{ documents.length }}</span>）</span>
+        </div>
+        <div v-if="docsLoading" class="panel-hint">
+          <span class="ui-spinner"></span>
+          <span>加载中…</span>
+        </div>
+        <div v-else-if="documents.length === 0" class="panel-dropzone">
+          <span class="dropzone-icon"><AppIcon name="upload" :size="18" /></span>
+          <p class="dropzone-text">暂无文档，点击右上角上传</p>
         </div>
         <ul v-else class="doc-list">
           <li
@@ -40,7 +56,9 @@
           >
             <div class="doc-row">
               <span class="doc-name" :title="doc.fileName">{{ doc.fileName }}</span>
-              <button class="doc-del" title="删除文档" @click.stop="confirmDeleteDoc(doc)">✕</button>
+              <button class="doc-del" title="删除文档" @click.stop="confirmDeleteDoc(doc)">
+                <AppIcon name="x" :size="13" />
+              </button>
             </div>
             <div class="doc-meta">
               <span class="status-badge" :class="'st-' + doc.status">{{ statusText(doc.status) }}</span>
@@ -56,45 +74,62 @@
       <section class="chunk-panel">
         <div class="chunk-toolbar">
           <div class="panel-title">
-            文档分块
+            <span class="panel-title-icon"><AppIcon name="layers" :size="13" /></span>
+            <span>文档分块</span>
             <span class="chunk-filter" v-if="selectedDoc">
               / {{ selectedDoc.fileName }}
-              <button class="filter-clear" @click="selectDoc(null)">显示全部</button>
+              <button class="filter-clear" @click="selectDoc(null)">
+                <AppIcon name="x" :size="10" />
+                显示全部
+              </button>
             </span>
           </div>
           <div class="chunk-actions">
             <span class="stream-progress">
               {{ chunks.length }} / {{ chunkTotal }} 分块
             </span>
-            <button class="btn-primary btn-sm" :disabled="chunkLoading" @click="reloadChunks">
-              ↻ 刷新
+            <button class="ui-btn ui-btn--sm" :disabled="chunkLoading" @click="reloadChunks">
+              <AppIcon name="refresh" :size="13" :class="{ spinning: chunkLoading }" />
+              刷新
             </button>
           </div>
         </div>
 
-        <div v-if="chunkError" class="chunk-error">{{ chunkError }}</div>
+        <div v-if="chunkError" class="chunk-error">
+          <AppIcon name="alert" :size="14" />
+          <span>{{ chunkError }}</span>
+        </div>
 
-        <div v-if="!chunkLoading && !chunks.length && !chunkError" class="panel-hint chunk-hint">
-          暂无文档分块，请先上传文档
+        <div v-if="!chunkLoading && !chunks.length && !chunkError" class="chunk-empty">
+          <div class="chunk-empty-icon"><AppIcon name="layers" :size="22" /></div>
+          <div class="chunk-empty-title">暂无文档分块</div>
+          <p class="chunk-empty-text">请先上传文档</p>
         </div>
 
         <div ref="chunkListEl" class="chunk-list" @scroll="onChunkScroll">
           <div v-for="(c, i) in chunks" :key="c.id" class="chunk-card">
             <div class="chunk-head">
               <span class="chunk-index">#{{ i + 1 }}</span>
-              <span class="chunk-source">📄 {{ c.source || '未知来源' }}</span>
+              <span class="chunk-source">
+                <AppIcon name="file" :size="12" />
+                <span class="chunk-source-name">{{ c.source || '未知来源' }}</span>
+              </span>
               <span class="chunk-len">{{ c.content.length }} 字</span>
               <span class="chunk-actions">
-                <button v-if="editingChunkId !== c.id" class="chunk-btn" title="编辑分块" @click="startEdit(c)">✎</button>
-                <button class="chunk-btn danger" title="删除分块" @click="confirmDeleteChunk(c)">🗑</button>
+                <button v-if="editingChunkId !== c.id" class="chunk-btn" title="编辑分块" @click="startEdit(c)">
+                  <AppIcon name="edit" :size="13" />
+                </button>
+                <button class="chunk-btn danger" title="删除分块" @click="confirmDeleteChunk(c)">
+                  <AppIcon name="trash" :size="13" />
+                </button>
               </span>
             </div>
             <!-- 编辑态：文本域 + 保存/取消 -->
             <div v-if="editingChunkId === c.id" class="chunk-edit">
               <textarea v-model="editingContent" class="chunk-edit-textarea" rows="6"></textarea>
               <div class="chunk-edit-actions">
-                <button class="btn-ghost btn-sm" @click="cancelEdit">取消</button>
-                <button class="btn-primary btn-sm" :disabled="savingChunk" @click="saveEdit(c)">
+                <button class="ui-btn ui-btn--ghost ui-btn--sm" @click="cancelEdit">取消</button>
+                <button class="ui-btn ui-btn--primary ui-btn--sm" :disabled="savingChunk" @click="saveEdit(c)">
                   {{ savingChunk ? '保存中…' : '保存' }}
                 </button>
               </div>
@@ -105,10 +140,12 @@
             </div>
           </div>
           <div v-if="chunkLoading" class="chunk-loading">
-            <span class="dot-pulse"></span> 正在加载…
+            <span class="ui-spinner"></span>
+            <span>正在加载…</span>
           </div>
           <div v-else-if="chunks.length && chunkFinished" class="chunk-done">
-            ✓ 已加载全部分块（{{ chunks.length }}）
+            <AppIcon name="check" :size="13" />
+            <span>已加载全部分块（{{ chunks.length }}）</span>
           </div>
         </div>
       </section>
@@ -118,14 +155,14 @@
     <div v-if="uploading && maskVisible" class="upload-mask">
       <div class="upload-box">
         <div class="upload-spinner"></div>
-        <div class="upload-title">正在处理文档（{{ uploadDone }}/{{ uploadTotal }}）</div>
+        <div class="upload-title">正在处理文档（<span class="tabular">{{ uploadDone }}</span>/<span class="tabular">{{ uploadTotal }}</span>）</div>
         <div class="upload-file">{{ uploadCurrent }}</div>
         <div class="upload-progress">
           <div class="upload-progress-bar" :style="{ width: uploadPercent + '%' }"></div>
         </div>
         <div class="upload-hint">OCR 解析 → 分块 → Embedding 入库，请稍候…<span class="hint-dots"><i></i><i></i><i></i></span></div>
         <div class="upload-actions">
-          <button class="btn-ghost btn-sm" @click="maskVisible = false">后台处理</button>
+          <button class="ui-btn ui-btn--ghost ui-btn--sm" @click="maskVisible = false">后台处理</button>
         </div>
       </div>
     </div>
@@ -140,6 +177,7 @@ import {
 } from '../api/kb'
 import { useKbUploadState } from '../composables/useKbUploadState'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
+import AppIcon from '../components/AppIcon.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -354,10 +392,12 @@ onMounted(async () => {
 
 <style scoped>
 .kb-detail {
-  max-width: 1200px;
+  max-width: 1180px;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
   height: calc(100vh - 64px);
+  min-height: 480px;
 }
 
 /* ===== 顶栏 ===== */
@@ -365,137 +405,331 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 14px;
+  flex-wrap: wrap;
   margin-bottom: 18px;
 }
 
 .btn-back {
-  background: transparent;
-  border: 1px solid #334155;
-  color: #94a3b8;
-  border-radius: 8px;
-  padding: 8px 12px;
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 11px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
   cursor: pointer;
+  transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
 }
-.btn-back:hover { color: #e2e8f0; border-color: #475569; }
 
-.header-info { flex: 1; min-width: 0; }
-.header-title { margin: 0; font-size: 20px; color: #f1f5f9; }
+.btn-back:hover {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--line-3);
+}
+
+.header-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: var(--amber-500);
+  margin-bottom: 6px;
+}
+
+.header-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .header-desc {
-  margin: 2px 0 0;
-  font-size: 12px;
-  color: #64748b;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.btn-primary {
-  background: #4f46e5; color: #fff; border: none; border-radius: 8px;
-  padding: 9px 16px; font-size: 14px; cursor: pointer; white-space: nowrap;
+.detail-header .ui-btn {
+  height: 36px;
+  padding: 0 16px;
 }
-.btn-primary:hover:not(:disabled) { background: #6366f1; }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.btn-ghost {
-  background: transparent; color: #94a3b8; border: 1px solid #334155;
-  border-radius: 8px; padding: 9px 16px; font-size: 14px; cursor: pointer;
+.detail-header .ui-spinner {
+  width: 14px;
+  height: 14px;
 }
-.btn-ghost:hover { color: #e2e8f0; border-color: #475569; }
 
-.btn-sm { padding: 6px 12px; font-size: 13px; }
-
-.page-error { color: #f87171; font-size: 14px; margin-bottom: 12px; }
+.page-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border: 1px solid rgba(233, 119, 110, 0.24);
+  border-radius: var(--r-md);
+}
 
 /* ===== 主体布局 ===== */
 .detail-body {
   display: flex;
-  gap: 16px;
+  gap: 14px;
   flex: 1;
   min-height: 0;
 }
 
 .panel-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #cbd5e1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
 }
 
-.panel-hint { color: #64748b; font-size: 13px; padding: 20px 0; text-align: center; }
+.panel-title-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--amber-400);
+}
+
+.panel-count {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 18px 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+  text-align: center;
+}
 
 /* ---- 文档面板 ---- */
-.doc-panel {
-  width: 280px;
-  min-width: 280px;
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 12px;
+.doc-panel,
+.chunk-panel {
+  background: linear-gradient(180deg, var(--ink-850), var(--ink-800));
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1), var(--hairline);
   padding: 14px;
   display: flex;
   flex-direction: column;
+  min-height: 0;
   overflow: hidden;
+}
+
+.doc-panel {
+  width: 288px;
+  min-width: 288px;
+}
+
+/* 面板头做成通栏表头：极淡白底 + 发丝分割 */
+.doc-panel > .panel-title {
+  margin: -14px -14px 10px;
+  padding: 11px 14px;
+  background: rgba(255, 255, 255, 0.035);
+  border-bottom: 1px solid var(--line-1);
+}
+
+/* 空文档态：虚线投放区（复用既有上传入口，不新增行为） */
+.panel-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px 12px;
+  text-align: center;
+  border: 1px dashed var(--line-3);
+  border-radius: var(--r-md);
+  transition: border-color var(--dur), background var(--dur);
+}
+
+.panel-dropzone:hover {
+  border-color: var(--amber-a55);
+  background: var(--amber-a08);
+}
+
+.dropzone-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--r-md);
+  color: var(--amber-400);
+  background: var(--amber-a12);
+  border: 1px solid var(--amber-a20);
+}
+
+.dropzone-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-3);
 }
 
 .doc-list {
   list-style: none;
-  margin: 0; padding: 0;
+  margin: 0;
+  padding: 0 2px 0 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  min-height: 0;
 }
 
+/* 文档列表按「表格行」处理：发丝分隔线 + hover 行底色 */
 .doc-item {
-  background: #0f172a;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 10px;
+  padding: 9px 8px;
+  background: transparent;
+  border-bottom: 1px solid var(--line-1);
+  border-radius: 0;
   cursor: pointer;
-  transition: border-color 0.2s;
+  transition: background var(--dur-fast), box-shadow var(--dur-fast);
 }
-.doc-item:hover { border-color: #475569; }
-.doc-item.selected { border-color: #4f46e5; }
+
+.doc-item:first-child {
+  border-top: 1px solid var(--line-1);
+}
+
+.doc-item:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.doc-item.selected {
+  background: var(--amber-a08);
+  box-shadow: inset 2px 0 0 var(--amber-400);
+}
 
 .doc-row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
   gap: 6px;
 }
 
 .doc-name {
-  font-size: 13px;
-  color: #e2e8f0;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 12.5px;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .doc-del {
-  background: transparent; border: none; color: #475569;
-  cursor: pointer; font-size: 12px; padding: 2px 4px; border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  padding: 0;
+  color: var(--text-4);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
 }
-.doc-del:hover { color: #f87171; }
+
+.doc-del:hover {
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border-color: rgba(233, 119, 110, 0.3);
+}
 
 .doc-meta {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 6px;
+  min-width: 0;
 }
 
-.doc-meta-text { font-size: 11px; color: #64748b; }
+.doc-meta-text {
+  font-size: 10.5px;
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 .status-badge {
-  font-size: 11px;
-  padding: 1px 8px;
-  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  padding: 0 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: var(--r-full);
+  color: var(--text-3);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line-1);
+  white-space: nowrap;
 }
-.st-done { background: rgba(34, 197, 94, 0.15); color: #4ade80; }
-.st-processing, .st-pending { background: rgba(234, 179, 8, 0.15); color: #facc15; }
-.st-error { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+
+.status-badge::before {
+  content: '';
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.st-done {
+  color: var(--jade-400);
+  background: var(--jade-a12);
+  border-color: rgba(126, 203, 161, 0.24);
+}
+
+.st-processing,
+.st-pending {
+  color: var(--amber-300);
+  background: var(--amber-a12);
+  border-color: var(--amber-a20);
+}
+
+.st-error {
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border-color: rgba(233, 119, 110, 0.24);
+}
 
 .doc-error-msg {
-  margin-top: 4px;
+  margin-top: 5px;
   font-size: 11px;
-  color: #f87171;
+  line-height: 1.5;
+  color: var(--coral-400);
   word-break: break-all;
 }
 
@@ -503,50 +737,128 @@ onMounted(async () => {
 .chunk-panel {
   flex: 1;
   min-width: 0;
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 12px;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
 }
 
 .chunk-toolbar {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
+  margin: -14px -14px 0;
+  padding: 11px 14px;
+  background: rgba(255, 255, 255, 0.035);
+  border-bottom: 1px solid var(--line-1);
+}
+
+.chunk-toolbar .panel-title {
+  margin-bottom: 0;
+  min-width: 0;
 }
 
 .chunk-filter {
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+  font-size: 11.5px;
   font-weight: 400;
-  color: #94a3b8;
-  margin-left: 6px;
+  color: var(--text-3);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .filter-clear {
-  background: transparent;
-  border: none;
-  color: #818cf8;
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  margin-left: 2px;
+  padding: 2px 7px;
+  font-size: 11px;
+  color: var(--amber-300);
+  background: var(--amber-a08);
+  border: 1px solid var(--amber-a20);
+  border-radius: var(--r-full);
   cursor: pointer;
-  text-decoration: underline;
-  margin-left: 6px;
+  transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast);
+}
+
+.filter-clear:hover {
+  color: var(--amber-200);
+  background: var(--amber-a12);
+  border-color: var(--amber-a35);
 }
 
 .chunk-actions {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
 }
 
-.stream-progress { font-size: 12px; color: #facc15; }
+.stream-progress {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
 
-.chunk-error { color: #f87171; font-size: 13px; margin: 8px 0; }
+.chunk-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border: 1px solid rgba(233, 119, 110, 0.24);
+  border-radius: var(--r-sm);
+}
 
-.chunk-hint { flex: 1; display: flex; align-items: center; justify-content: center; }
+.chunk-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.chunk-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--r-lg);
+  color: var(--amber-400);
+  background: radial-gradient(circle at 50% 30%, var(--amber-a20), transparent 70%),
+    var(--ink-850);
+  border: 1px solid var(--line-2);
+}
+
+.chunk-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.chunk-empty-text {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* 空态占据全部高度时，让空的滚动容器不再瓜分空间 */
+.chunk-empty + .chunk-list {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
 
 .chunk-list {
   flex: 1;
@@ -554,214 +866,363 @@ onMounted(async () => {
   margin-top: 10px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   padding-right: 4px;
+  min-height: 0;
 }
 
-.chunk-list::-webkit-scrollbar { width: 6px; }
-.chunk-list::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+.chunk-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chunk-list::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: var(--r-full);
+}
 
 .chunk-card {
-  background: #0f172a;
-  border: 1px solid #334155;
-  border-radius: 8px;
   padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.018);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  transition: border-color var(--dur-fast), background var(--dur-fast);
 }
+
+.chunk-card:hover {
+  border-color: var(--line-2);
+  background: rgba(255, 255, 255, 0.032);
+}
+
 .chunk-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
+  min-width: 0;
+  margin-bottom: 7px;
   font-size: 11px;
-  color: #64748b;
-  margin-bottom: 6px;
+  color: var(--text-4);
 }
 
-.chunk-actions { display: inline-flex; align-items: center; gap: 6px; }
+.chunk-index {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--amber-400);
+  font-variant-numeric: tabular-nums;
+}
+
+.chunk-source {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 62%;
+  color: var(--text-3);
+}
+
+.chunk-source-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chunk-head .chunk-actions {
+  gap: 6px;
+}
+
+.chunk-len {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+}
 
 .chunk-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--text-4);
   background: transparent;
-  border: 1px solid #334155;
-  border-radius: 6px;
-  color: #94a3b8;
-  font-size: 12px;
-  line-height: 1;
-  padding: 4px 6px;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-xs);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
 }
-.chunk-btn:hover { color: #e2e8f0; border-color: #818cf8; background: rgba(129, 140, 248, 0.08); }
-.chunk-btn.danger:hover { color: #f87171; border-color: #f87171; background: rgba(248, 113, 113, 0.08); }
 
-
-.chunk-index { color: #818cf8; font-weight: 600; }
-.chunk-source {
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  max-width: 60%;
+.chunk-btn:hover {
+  color: var(--text-1);
+  border-color: var(--line-3);
+  background: rgba(255, 255, 255, 0.05);
 }
-.chunk-len { margin-left: auto; }
+
+.chunk-btn.danger:hover {
+  color: var(--coral-400);
+  border-color: rgba(233, 119, 110, 0.4);
+  background: var(--coral-a12);
+}
 
 .chunk-content {
-  font-size: 13px;
-  color: #cbd5e1;
-  line-height: 1.6;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-2);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 200px;
   overflow: hidden;
 }
-.chunk-card:hover .chunk-content { max-height: none; }
+
+.chunk-card:hover .chunk-content {
+  max-height: none;
+}
 
 /* Markdown 渲染包装：让渲染器的排版与卡片一致 */
-.markdown-wrap { white-space: normal; }
-.markdown-wrap :deep(.markdown-body) {
-  font-size: 13px;
-  color: #cbd5e1;
+.markdown-wrap {
+  white-space: normal;
 }
-.markdown-wrap :deep(.markdown-body p) { margin: 0 0 8px; }
-.markdown-wrap :deep(.markdown-body p:last-child) { margin-bottom: 0; }
-.markdown-wrap :deep(.markdown-body pre) { margin: 8px 0; }
-.markdown-wrap :deep(.markdown-body code) { font-size: 12px; }
-.markdown-wrap :deep(.markdown-body img) { max-width: 100%; }
+
+.markdown-wrap :deep(.markdown-body) {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.markdown-wrap :deep(.markdown-body p) {
+  margin: 0 0 8px;
+}
+
+.markdown-wrap :deep(.markdown-body p:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-wrap :deep(.markdown-body pre) {
+  margin: 8px 0;
+}
+
+.markdown-wrap :deep(.markdown-body code) {
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.markdown-wrap :deep(.markdown-body img) {
+  max-width: 100%;
+}
 
 /* 分块编辑态 */
-.chunk-edit { display: flex; flex-direction: column; gap: 8px; }
+.chunk-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .chunk-edit-textarea {
   width: 100%;
   box-sizing: border-box;
-  background: #0f172a;
-  border: 1px solid #4f46e5;
-  border-radius: 8px;
-  color: #e2e8f0;
-  font-size: 13px;
-  font-family: Consolas, monospace;
-  line-height: 1.6;
   padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-1);
+  background: var(--bg-input);
+  border: 1px solid var(--amber-a35);
+  border-radius: var(--r-sm);
   resize: vertical;
   outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
 }
-.chunk-edit-textarea:focus { border-color: #818cf8; }
-.chunk-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.chunk-edit-textarea:focus {
+  border-color: var(--amber-a55);
+  box-shadow: 0 0 0 3px var(--amber-a12);
+}
+
+.chunk-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 
 .chunk-loading {
-  text-align: center;
-  color: #94a3b8;
-  font-size: 13px;
-  padding: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
+  padding: 10px;
+  font-size: 12.5px;
+  color: var(--text-3);
+  text-align: center;
 }
 
 .chunk-done {
-  text-align: center;
-  color: #4ade80;
-  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 10px;
+  font-size: 12.5px;
+  color: var(--jade-400);
+  text-align: center;
 }
 
-.dot-pulse {
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  background: #818cf8;
-  animation: pulse 1s infinite;
-}
-@keyframes pulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
+.spinning {
+  animation: spin 1s linear infinite;
 }
 
 /* ---- 上传遮罩 ---- */
 .upload-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.65);
+  z-index: 100;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 100;
+  padding: 24px;
+  background: rgba(6, 8, 11, 0.72);
+  backdrop-filter: blur(2px);
+  animation: fadeIn var(--dur) var(--ease-out);
 }
 
 .upload-box {
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 12px;
-  padding: 24px 32px;
+  width: min(420px, 100%);
+  padding: 26px 30px 22px;
   text-align: center;
-  max-width: 420px;
-  animation: box-in 0.25s ease;
-}
-@keyframes box-in {
-  from { opacity: 0; transform: translateY(10px) scale(0.97); }
-  to { opacity: 1; transform: none; }
+  background: rgba(16, 19, 26, 0.94);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3), var(--hairline);
+  backdrop-filter: blur(16px);
+  animation: box-in 0.25s var(--ease-out);
 }
 
-.upload-title { font-size: 16px; font-weight: 600; color: #f1f5f9; }
+@keyframes box-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.upload-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
+}
+
 .upload-file {
   margin-top: 10px;
-  font-size: 13px;
-  color: #818cf8;
+  font-size: 12.5px;
+  color: var(--azure-400);
   word-break: break-all;
 }
+
 .upload-hint {
-  margin-top: 8px;
-  font-size: 12px;
-  color: #64748b;
   display: inline-flex;
   align-items: center;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-4);
 }
 
-/* 旋转加载圈 */
+/* 旋转加载圈：2px 琥珀环 */
 .upload-spinner {
   width: 36px;
   height: 36px;
-  margin: 0 auto 12px;
-  border: 3px solid rgba(129, 140, 248, 0.25);
-  border-top-color: #818cf8;
+  margin: 0 auto 14px;
+  border: 2px solid var(--amber-a20);
+  border-top-color: var(--amber-400);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
 }
-.upload-spinner.sm {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  border-width: 2px;
-  flex-shrink: 0;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* 进度条 */
 .upload-progress {
   margin-top: 14px;
-  height: 6px;
-  border-radius: 3px;
-  background: #0f172a;
-  border: 1px solid #334155;
+  height: 5px;
+  border-radius: var(--r-full);
+  background: var(--ink-1000);
+  border: 1px solid var(--line-1);
   overflow: hidden;
 }
+
 .upload-progress-bar {
   height: 100%;
-  background: linear-gradient(90deg, #4f46e5, #818cf8);
-  border-radius: 3px;
-  transition: width 0.4s ease;
+  background: var(--amber-grad);
+  border-radius: var(--r-full);
+  box-shadow: 0 0 10px var(--amber-a35);
+  transition: width 0.4s var(--ease-out);
 }
 
 /* 「请稍候…」逐点跳动 */
-.hint-dots { display: inline-flex; margin-left: 2px; }
+.hint-dots {
+  display: inline-flex;
+  margin-left: 2px;
+}
+
 .hint-dots i {
   width: 3px;
   height: 3px;
   margin-left: 3px;
   border-radius: 50%;
-  background: #64748b;
+  background: var(--text-4);
   animation: dot-blink 1.2s infinite;
 }
-.hint-dots i:nth-child(2) { animation-delay: 0.2s; }
-.hint-dots i:nth-child(3) { animation-delay: 0.4s; }
-@keyframes dot-blink {
-  0%, 60%, 100% { opacity: 0.25; }
-  30% { opacity: 1; }
+
+.hint-dots i:nth-child(2) {
+  animation-delay: 0.2s;
 }
 
-.upload-actions { margin-top: 16px; }
+.hint-dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes dot-blink {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+.upload-actions {
+  margin-top: 16px;
+}
+
+@media (max-width: 980px) {
+  .doc-panel {
+    width: 250px;
+    min-width: 250px;
+  }
+
+  .header-title {
+    font-size: 23px;
+  }
+}
+
+@media (max-width: 760px) {
+  .kb-detail {
+    height: auto;
+    min-height: 0;
+  }
+
+  .detail-body {
+    flex-direction: column;
+  }
+
+  .doc-panel {
+    width: 100%;
+    min-width: 0;
+    max-height: 260px;
+  }
+
+  .chunk-panel {
+    min-height: 420px;
+  }
+}
 </style>

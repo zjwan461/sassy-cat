@@ -2,21 +2,38 @@
   <div class="sd-page">
     <!-- 顶部信息栏 -->
     <header class="sd-header">
-      <button class="btn-back" @click="goBack">← 返回</button>
+      <button class="btn-back" @click="goBack">
+        <AppIcon name="arrow-left" :size="14" />
+        返回
+      </button>
       <div class="sd-title-block">
-        <h2 class="sd-title">🛠️ {{ skill?.displayName || routeName }}</h2>
+        <div class="eyebrow">SKILL · 技能详情</div>
+        <h2 class="sd-title">{{ skill?.displayName || routeName }}</h2>
         <p class="sd-subtitle" :title="skill?.description">{{ skill?.description || '暂无描述' }}</p>
       </div>
       <div class="sd-stats" v-if="skill">
-        <span>📄 {{ skill.fileCount }} 文件</span>
-        <span>📖 {{ skill.referenceCount }} 参考</span>
-        <span>📜 {{ skill.scriptCount }} 脚本</span>
+        <div class="sd-stat">
+          <span class="stat-value">{{ skill.fileCount }}</span>
+          <span class="stat-label">文件</span>
+        </div>
+        <div class="sd-stat">
+          <span class="stat-value">{{ skill.referenceCount }}</span>
+          <span class="stat-label">参考</span>
+        </div>
+        <div class="sd-stat">
+          <span class="stat-value">{{ skill.scriptCount }}</span>
+          <span class="stat-label">脚本</span>
+        </div>
       </div>
     </header>
 
-    <div v-if="loading" class="sd-empty">加载中…</div>
+    <div v-if="loading" class="state-block">
+      <span class="ui-spinner"></span>
+      <span>加载中…</span>
+    </div>
     <div v-else-if="error" class="sd-error">
-      {{ error }}
+      <AppIcon name="alert" :size="15" />
+      <span>{{ error }}</span>
       <button class="btn-retry" @click="load">重试</button>
     </div>
 
@@ -24,12 +41,16 @@
       <!-- 左侧目录树 -->
       <aside class="sd-tree">
         <div class="tree-head">
-          <span>目录结构</span>
-          <button class="btn-newfile" title="在技能内新增文件" @click="openCreate">＋ 新增文件</button>
+          <span class="tree-title">目录结构</span>
+          <button class="btn-newfile" title="在技能内新增文件" @click="openCreate">
+            <AppIcon name="plus" :size="12" />
+            新增文件
+          </button>
         </div>
         <div class="tree-scroll">
           <div class="tree-node root" :class="{ active: !currentPath }" @click="openSkillMd">
-            <span class="tree-icon">📦</span>
+            <span class="tree-caret"></span>
+            <span class="tree-icon"><AppIcon name="package" :size="14" /></span>
             <span class="tree-name">{{ routeName }}/</span>
           </div>
           <div
@@ -40,9 +61,11 @@
             :style="{ paddingLeft: 10 + node.depth * 16 + 'px' }"
             @click="onNodeClick(node)"
           >
-            <span v-if="node.type === 'dir'" class="tree-caret">{{ expanded.has(node.path) ? '▾' : '▸' }}</span>
+            <span v-if="node.type === 'dir'" class="tree-caret">
+              <AppIcon :name="expanded.has(node.path) ? 'chevron-down' : 'chevron-right'" :size="12" />
+            </span>
             <span v-else class="tree-caret"></span>
-            <span class="tree-icon">{{ nodeIcon(node) }}</span>
+            <span class="tree-icon"><AppIcon :name="nodeIcon(node)" :size="13" /></span>
             <span class="tree-name" :title="node.path">{{ node.name }}</span>
             <span class="tree-size" v-if="node.type === 'file'">{{ fmtSize(node.size) }}</span>
           </div>
@@ -55,27 +78,39 @@
           <div class="viewer-head">
             <span class="viewer-path" :title="currentPath">{{ routeName }}/{{ currentPath }}</span>
             <div class="viewer-actions">
-              <button
-                class="mode-btn"
-                :class="{ on: previewMode }"
-                @click="previewMode = true"
-              >预览</button>
-              <button
-                class="mode-btn"
-                :class="{ on: !previewMode }"
-                @click="previewMode = false"
-              >编辑</button>
+              <div class="mode-toggle">
+                <button
+                  class="mode-btn"
+                  :class="{ on: previewMode }"
+                  @click="previewMode = true"
+                >预览</button>
+                <button
+                  class="mode-btn"
+                  :class="{ on: !previewMode }"
+                  @click="previewMode = false"
+                >编辑</button>
+              </div>
               <button
                 class="btn-save"
                 :disabled="!dirty || saving"
                 @click="saveFile"
-              >{{ saving ? '保存中…' : '💾 保存' }}</button>
-              <button class="btn-del" title="删除该文件" @click="confirmDelete">🗑 删除</button>
+              >
+                <AppIcon name="check" :size="13" />
+                {{ saving ? '保存中…' : '保存' }}
+              </button>
+              <button class="btn-del" title="删除该文件" @click="confirmDelete">
+                <AppIcon name="trash" :size="13" />
+                删除
+              </button>
             </div>
           </div>
-          <div v-if="fileLoading" class="sd-empty">文件加载中…</div>
-          <div v-else-if="fileUnsupported" class="sd-empty">
-            ⚠️ {{ fileUnsupported }}
+          <div v-if="fileLoading" class="state-block">
+            <span class="ui-spinner"></span>
+            <span>文件加载中…</span>
+          </div>
+          <div v-else-if="fileUnsupported" class="state-block warn">
+            <AppIcon name="alert" :size="15" />
+            <span>{{ fileUnsupported }}</span>
           </div>
           <div v-else class="viewer-body">
             <div v-if="isMarkdown && previewMode" class="md-wrap">
@@ -97,13 +132,14 @@
             ></textarea>
           </div>
           <div class="viewer-foot" v-if="dirty && !previewMode">
-            ● 有未保存的修改（保存前自动备份为 {{ currentPath }}.bak，Ctrl+S 快捷保存）
+            <span class="foot-dot"></span>
+            有未保存的修改（保存前自动备份为 {{ currentPath }}.bak，Ctrl+S 快捷保存）
           </div>
         </template>
-        <div v-else class="viewer-placeholder">
-          <div class="ph-icon">🗂️</div>
-          <p>从左侧目录树选择一个文件查看 / 编辑</p>
-          <p class="ph-hint">技能下所有文本文件（含脚本）均可在线修改，保存后即刻生效</p>
+        <div v-else class="ui-empty viewer-placeholder">
+          <div class="ui-empty-icon"><AppIcon name="folder" :size="24" /></div>
+          <div class="ui-empty-title">从左侧目录树选择一个文件查看 / 编辑</div>
+          <p class="ui-empty-text">技能下所有文本文件（含脚本）均可在线修改，保存后即刻生效</p>
         </div>
       </section>
     </div>
@@ -111,7 +147,10 @@
     <!-- 新增文件弹窗 -->
     <div v-if="showCreate" class="modal-mask" @click.self="showCreate = false">
       <div class="modal">
-        <div class="modal-title">＋ 新增文件</div>
+        <div class="modal-title">
+          <AppIcon name="plus" :size="16" />
+          新增文件
+        </div>
         <input
           v-model="newPath"
           class="modal-input"
@@ -137,6 +176,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { createSkillFile, deleteSkillFile, getSkill, readSkillFile, writeSkillFile } from '../api/skills'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
+import AppIcon from '../components/AppIcon.vue'
 import hljs from 'highlight.js/lib/common'
 import 'highlight.js/styles/atom-one-dark.css'
 
@@ -175,14 +215,15 @@ const visibleNodes = computed(() => {
   return out
 })
 
+// 图标名（交给 AppIcon 渲染，避免各系统 emoji 字形不一致）
 function nodeIcon(node) {
-  if (node.type === 'dir') return '📁'
+  if (node.type === 'dir') return 'folder'
   const ext = node.name.slice(node.name.lastIndexOf('.')).toLowerCase()
-  if (ext === '.md') return '📝'
-  if (ext === '.py') return '🐍'
-  if (['.js', '.ts', '.json'].includes(ext)) return '📜'
-  if (['.sh', '.bat', '.ps1'].includes(ext)) return '⚙️'
-  return '📄'
+  if (ext === '.md') return 'file'
+  if (ext === '.py') return 'terminal'
+  if (['.js', '.ts', '.json'].includes(ext)) return 'file'
+  if (['.sh', '.bat', '.ps1'].includes(ext)) return 'terminal'
+  return 'file'
 }
 
 function fmtSize(n) {
@@ -399,76 +440,156 @@ onMounted(load)
 .sd-page {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  padding: 18px 24px 24px;
-  color: #e2e8f0;
-  overflow: hidden;
+  height: calc(100vh - 56px);
+  min-height: 420px;
+  color: var(--text-2);
+  animation: fadeIn var(--dur-slow) var(--ease-out) both;
 }
 
 /* ===== 头部 ===== */
 .sd-header {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-bottom: 14px;
+  gap: 16px;
+  flex-wrap: wrap;
   flex-shrink: 0;
+  margin-bottom: 20px;
 }
 
 .btn-back {
-  background: #1e293b;
-  color: #cbd5e1;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 7px 14px;
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  flex-shrink: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
 }
-.btn-back:hover { border-color: #475569; }
 
-.sd-title-block { flex: 1; min-width: 0; }
-.sd-title { font-size: 19px; font-weight: 700; margin: 0; }
-.sd-subtitle {
-  font-size: 12px;
-  color: #94a3b8;
-  margin: 2px 0 0;
+.btn-back:hover {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--line-3);
+}
+
+.sd-title-block {
+  flex: 1;
+  min-width: 0;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--amber-500);
+  margin-bottom: 5px;
+}
+
+.sd-title {
+  margin: 0;
+  font-size: 23px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  color: var(--text-1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sd-stats {
-  display: flex;
-  gap: 14px;
-  font-size: 12px;
-  color: #64748b;
-  flex-shrink: 0;
+.sd-subtitle {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.sd-empty {
-  padding: 50px 0;
-  text-align: center;
-  color: #64748b;
-  font-size: 14px;
+/* 元信息：横向统计组（值强、标签弱，靠左发丝线分隔） */
+.sd-stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  flex-shrink: 0;
+  margin: 0 0 0 auto;
+  padding-left: 18px;
+  border-left: 1px solid var(--line-1);
+}
+
+.sd-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.stat-value {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-4);
+}
+
+/* ===== 状态 ===== */
+.state-block {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 48px 16px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.state-block.warn {
+  color: var(--warn-400);
 }
 
 .sd-error {
-  padding: 16px;
-  background: rgba(251, 113, 133, 0.1);
-  border: 1px solid rgba(251, 113, 133, 0.35);
-  color: #fb7185;
-  border-radius: 8px;
-  font-size: 14px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border: 1px solid rgba(233, 119, 110, 0.3);
+  border-radius: var(--r-md);
 }
+
 .btn-retry {
-  margin-left: 10px;
+  margin-left: auto;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--coral-400);
   background: transparent;
-  border: 1px solid #fb7185;
-  color: #fb7185;
-  border-radius: 6px;
-  padding: 4px 12px;
+  border: 1px solid rgba(233, 119, 110, 0.4);
+  border-radius: var(--r-xs);
   cursor: pointer;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+
+.btn-retry:hover {
+  background: rgba(233, 119, 110, 0.18);
+  border-color: rgba(233, 119, 110, 0.6);
 }
 
 /* ===== 主体两栏 ===== */
@@ -481,13 +602,15 @@ onMounted(load)
 
 /* 左：目录树 */
 .sd-tree {
-  width: 270px;
-  min-width: 220px;
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 10px;
   display: flex;
   flex-direction: column;
+  width: 262px;
+  min-width: 200px;
+  min-height: 0;
+  background: linear-gradient(180deg, var(--ink-850), var(--ink-800));
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1), var(--hairline);
   overflow: hidden;
 }
 
@@ -496,145 +619,122 @@ onMounted(load)
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 10px 8px 14px;
+  flex-shrink: 0;
+  padding: 10px 10px 10px 14px;
+  border-bottom: 1px solid var(--line-1);
+}
+
+.tree-title {
   font-size: 12px;
   font-weight: 600;
-  color: #94a3b8;
-  border-bottom: 1px solid #293548;
-  flex-shrink: 0;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
 }
 
 .btn-newfile {
-  background: rgba(56, 189, 248, 0.12);
-  border: 1px solid rgba(56, 189, 248, 0.4);
-  color: #38bdf8;
-  border-radius: 6px;
-  padding: 3px 8px;
-  font-size: 11px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.2s;
-}
-.btn-newfile:hover { background: rgba(56, 189, 248, 0.25); }
-
-/* ===== 新增文件弹窗 ===== */
-.modal-mask {
-  position: fixed;
-  inset: 0;
-  background: rgba(2, 6, 23, 0.7);
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-.modal {
-  width: 420px;
-  max-width: calc(100vw - 48px);
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 12px;
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.modal-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #f1f5f9;
-}
-.modal-input {
-  background: #0f172a;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  color: #e2e8f0;
-  padding: 9px 12px;
-  font-size: 13px;
-  outline: none;
-  font-family: Consolas, 'Courier New', monospace;
-}
-.modal-input:focus { border-color: #38bdf8; }
-.modal-hint {
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
   font-size: 11px;
-  color: #64748b;
-}
-.modal-error {
-  font-size: 12px;
-  color: #fb7185;
-}
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
-.btn-ghost {
-  background: transparent;
-  border: 1px solid #334155;
-  color: #94a3b8;
-  border-radius: 8px;
-  padding: 7px 16px;
-  font-size: 13px;
+  color: var(--amber-300);
+  background: var(--amber-a12);
+  border: 1px solid var(--amber-a20);
+  border-radius: var(--r-xs);
+  white-space: nowrap;
   cursor: pointer;
+  transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast);
 }
-.btn-ghost:hover { border-color: #475569; color: #cbd5e1; }
-.btn-primary {
-  background: #0ea5e9;
-  border: none;
-  color: #fff;
-  border-radius: 8px;
-  padding: 7px 16px;
-  font-size: 13px;
-  cursor: pointer;
+
+.btn-newfile:hover {
+  color: var(--amber-200);
+  background: var(--amber-a20);
+  border-color: var(--amber-a35);
 }
-.btn-primary:hover:not(:disabled) { background: #38bdf8; }
-.btn-primary:disabled { opacity: 0.5; cursor: default; }
 
 .tree-scroll {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
   padding: 6px 0;
+  overflow-y: auto;
 }
 
 .tree-node {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 10px;
-  font-size: 13px;
-  color: #cbd5e1;
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  color: var(--text-2);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
+  transition: background var(--dur-fast), color var(--dur-fast);
 }
-.tree-node:hover { background: #263449; }
-.tree-node.active { background: rgba(56, 189, 248, 0.14); color: #38bdf8; }
-.tree-node.root { font-weight: 600; padding-left: 10px; }
+
+.tree-node:hover {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.tree-node.active {
+  color: var(--amber-200);
+  background: linear-gradient(90deg, rgba(239, 168, 76, 0.14), rgba(239, 168, 76, 0.02));
+  box-shadow: inset 2px 0 0 var(--amber-400);
+}
+
+.tree-node.root {
+  font-weight: 600;
+  padding-left: 10px;
+}
 
 .tree-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 12px;
-  font-size: 10px;
-  color: #64748b;
   flex-shrink: 0;
+  color: var(--text-4);
 }
-.tree-icon { flex-shrink: 0; }
-.tree-name { overflow: hidden; text-overflow: ellipsis; }
+
+.tree-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-4);
+}
+
+.tree-node.active .tree-icon {
+  color: var(--amber-300);
+}
+
+.tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .tree-size {
   margin-left: auto;
-  font-size: 10px;
-  color: #475569;
-  padding-right: 6px;
   flex-shrink: 0;
+  padding-right: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-4);
 }
 
 /* 右：查看器 */
 .sd-viewer {
-  flex: 1;
-  min-width: 0;
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 10px;
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  background: linear-gradient(180deg, var(--ink-850), var(--ink-800));
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1), var(--hairline);
   overflow: hidden;
 }
 
@@ -643,15 +743,17 @@ onMounted(load)
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px 14px;
-  border-bottom: 1px solid #293548;
   flex-shrink: 0;
+  padding: 8px 12px 8px 16px;
+  background: rgba(255, 255, 255, 0.015);
+  border-bottom: 1px solid var(--line-1);
 }
 
 .viewer-path {
-  font-size: 13px;
-  font-family: Consolas, 'Courier New', monospace;
-  color: #7dd3fc;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -664,116 +766,384 @@ onMounted(load)
   flex-shrink: 0;
 }
 
-.mode-btn {
-  background: transparent;
-  border: 1px solid #334155;
-  color: #94a3b8;
-  border-radius: 6px;
-  padding: 3px 12px;
-  font-size: 12px;
-  cursor: pointer;
+.mode-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--ink-1000);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
 }
+
+.mode-btn {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition: color var(--dur-fast), background var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+.mode-btn:hover {
+  color: var(--text-1);
+}
+
 .mode-btn.on {
-  background: rgba(56, 189, 248, 0.15);
-  border-color: #38bdf8;
-  color: #38bdf8;
+  color: var(--amber-200);
+  background: var(--amber-a12);
+  box-shadow: inset 0 0 0 1px var(--amber-a20);
 }
 
 .btn-save {
-  background: #0ea5e9;
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  padding: 5px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 12px;
   font-size: 12px;
+  font-weight: 650;
+  color: var(--amber-ink);
+  background: var(--amber-grad);
+  border: none;
+  border-radius: var(--r-xs);
   cursor: pointer;
-  transition: all 0.2s;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  transition: filter var(--dur-fast), box-shadow var(--dur-fast);
 }
-.btn-save:hover:not(:disabled) { background: #38bdf8; }
-.btn-save:disabled { opacity: 0.4; cursor: default; }
+
+.btn-save:hover:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow: var(--shadow-amber), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.btn-save:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 
 .btn-del {
-  background: transparent;
-  border: 1px solid rgba(251, 113, 133, 0.5);
-  color: #fb7185;
-  border-radius: 6px;
-  padding: 4px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
   font-size: 12px;
+  color: var(--coral-400);
+  background: transparent;
+  border: 1px solid rgba(233, 119, 110, 0.3);
+  border-radius: var(--r-xs);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
 }
-.btn-del:hover { background: rgba(251, 113, 133, 0.15); border-color: #fb7185; }
+
+.btn-del:hover {
+  background: var(--coral-a12);
+  border-color: rgba(233, 119, 110, 0.55);
+}
 
 .viewer-body {
+  display: flex;
   flex: 1;
   min-height: 0;
   overflow: auto;
-  display: flex;
 }
 
+/* 长文阅读：正文 14px/1.75，代码块已是 ink-1000 + 发丝线 */
 .md-wrap {
   flex: 1;
   min-width: 0;
-  padding: 24px 44px 32px;
+  padding: 28px 40px 40px;
   box-sizing: border-box;
 }
+
 .md-wrap :deep(.markdown-body) {
-  max-width: 860px;
+  max-width: 820px;
+  margin: 0 auto;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--text-2);
 }
 
 /* 脚本/代码高亮预览 */
 .code-wrap {
   flex: 1;
   min-width: 0;
+  padding: 16px;
   overflow: auto;
-  background: #0f172a;
+  background: transparent;
 }
+
 .code-pre {
   margin: 0;
-  padding: 18px 24px;
+  padding: 16px 18px;
   min-height: 100%;
+  background: var(--ink-1000);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
 }
+
 .code-pre code {
   display: block;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-2);
   background: transparent;
-  font-family: Consolas, 'Courier New', monospace;
-  font-size: 13px;
-  line-height: 1.65;
   white-space: pre;
 }
 
 .code-editor {
   flex: 1;
-  background: #0f172a;
-  color: #e2e8f0;
+  width: 100%;
+  min-width: 0;
+  padding: 16px 18px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-1);
+  background: var(--ink-1000);
   border: none;
   outline: none;
   resize: none;
-  padding: 16px 18px;
-  font-family: Consolas, 'Courier New', monospace;
-  font-size: 13px;
-  line-height: 1.6;
+  caret-color: var(--amber-400);
   tab-size: 4;
   white-space: pre;
 }
 
 .viewer-foot {
-  padding: 6px 14px;
-  font-size: 12px;
-  color: #fbbf24;
-  border-top: 1px solid #293548;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   flex-shrink: 0;
+  padding: 7px 16px;
+  font-size: 11.5px;
+  color: var(--amber-300);
+  background: var(--amber-a08);
+  border-top: 1px solid var(--line-1);
+}
+
+.foot-dot {
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--amber-400);
+  box-shadow: 0 0 0 3px var(--amber-a12);
 }
 
 .viewer-placeholder {
   flex: 1;
+  min-width: 0;
+}
+
+/* ===== 新增文件弹窗 ===== */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: #64748b;
-  font-size: 14px;
+  padding: 24px;
+  background: rgba(6, 8, 11, 0.68);
+  backdrop-filter: blur(8px);
+  animation: fadeIn var(--dur) var(--ease-out);
 }
-.ph-icon { font-size: 42px; margin-bottom: 10px; }
-.ph-hint { font-size: 12px; color: #475569; }
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 440px;
+  max-width: 100%;
+  max-height: 86vh;
+  padding: 22px;
+  overflow-y: auto;
+  background: rgba(16, 19, 26, 0.96);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  backdrop-filter: blur(18px);
+  animation: fadeUp var(--dur) var(--ease-out);
+}
+
+.modal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
+}
+
+.modal-input {
+  width: 100%;
+  padding: 9px 11px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-1);
+  background: var(--bg-input);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  outline: none;
+  transition: border-color var(--dur-fast), background var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+.modal-input::placeholder {
+  color: var(--text-4);
+}
+
+.modal-input:hover {
+  border-color: var(--line-3);
+}
+
+.modal-input:focus {
+  border-color: var(--amber-a55);
+  background: var(--ink-900);
+  box-shadow: 0 0 0 3px var(--amber-a12);
+}
+
+.modal-hint {
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-4);
+}
+
+.modal-error {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--coral-400);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.btn-ghost,
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--r-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast),
+    filter var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+.btn-ghost {
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.btn-ghost:hover {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.btn-primary {
+  color: var(--amber-ink);
+  background: var(--amber-grad);
+  border: 1px solid transparent;
+  font-weight: 650;
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow: var(--shadow-amber), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.btn-primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 1180px) {
+  .sd-tree {
+    width: 232px;
+    min-width: 188px;
+  }
+
+  .md-wrap {
+    padding: 24px 28px 32px;
+  }
+}
+
+@media (max-width: 980px) {
+  .sd-page {
+    height: calc(100vh - 44px);
+  }
+
+  .sd-title {
+    font-size: 20px;
+  }
+
+  .sd-tree {
+    width: 204px;
+    min-width: 168px;
+  }
+
+  .md-wrap {
+    padding: 20px 20px 28px;
+  }
+
+  .viewer-path {
+    max-width: 44%;
+  }
+}
+
+@media (max-width: 760px) {
+  .sd-page {
+    height: auto;
+    min-height: calc(100vh - 44px);
+  }
+
+  .sd-stats {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: none;
+  }
+
+  .sd-body {
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .sd-tree {
+    width: 100%;
+    min-width: 0;
+    max-height: 220px;
+  }
+
+  .sd-viewer {
+    min-height: 380px;
+  }
+
+  .viewer-head {
+    flex-wrap: wrap;
+  }
+
+  .viewer-path {
+    max-width: 100%;
+  }
+
+  .md-wrap {
+    padding: 18px 16px 24px;
+  }
+}
 </style>

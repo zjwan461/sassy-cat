@@ -1,8 +1,21 @@
 <template>
   <div class="setup-container">
-    <div class="setup-header">
-      <div class="icon">🐍</div>
-      <h1>环境检查与配置</h1>
+    <header class="setup-header">
+      <div class="setup-mark"><AppIcon name="shield" :size="22" /></div>
+      <div class="setup-head-text">
+        <div class="eyebrow">首次启动</div>
+        <h1>环境检查与配置</h1>
+      </div>
+    </header>
+
+    <div class="status-panel">
+      <span v-if="isChecking" class="status-spinner"></span>
+      <span v-else-if="error" class="status-icon status-icon--error">
+        <AppIcon name="alert" :size="13" />
+      </span>
+      <span v-else class="status-icon status-icon--done">
+        <AppIcon name="check" :size="13" />
+      </span>
       <div class="status-scroller">
         <div class="status-text" :class="{ active: isChecking }">
           {{ statusMessage }}
@@ -23,9 +36,9 @@
       >
         <div class="step-icon">
           <div v-if="step.status === 'active'" class="spinner"></div>
-          <span v-else-if="step.status === 'completed'">✓</span>
-          <span v-else-if="step.status === 'failed'">✗</span>
-          <span v-else>{{ index + 1 }}</span>
+          <AppIcon v-else-if="step.status === 'completed'" name="check" :size="13" />
+          <AppIcon v-else-if="step.status === 'failed'" name="x" :size="13" />
+          <span v-else class="step-num">{{ index + 1 }}</span>
         </div>
         <div class="step-content">
           <div class="step-title">{{ step.title }}</div>
@@ -41,9 +54,15 @@
     </div>
 
     <div v-if="error" class="error-footer">
-      <div class="error-msg">{{ error }}</div>
+      <div class="error-msg">
+        <AppIcon name="alert" :size="14" />
+        <span>{{ error }}</span>
+      </div>
       <div class="btn-row">
-        <button class="btn-retry" @click="retry">重试</button>
+        <button class="btn-retry" @click="retry">
+          <AppIcon name="refresh" :size="14" />
+          重试
+        </button>
         <button class="btn-quit" @click="quit">退出程序</button>
       </div>
     </div>
@@ -63,6 +82,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import AppIcon from '../components/AppIcon.vue'
 
 // 在 nodeIntegration 环境下，必须通过 window.require 获取 electron 模块
 // 直接使用 ESM import 会被 Vite 打包解析，导致运行时错误
@@ -189,143 +209,245 @@ const quit = () => {
 </script>
 
 <style scoped>
+/* 窗口本身是透明无边框的：这里只铺内容，不铺整窗背景，
+   避免把主进程那边的透明圆角外壳盖成一块实心矩形 */
 .setup-container {
-  width: 520px;
-  padding: 40px;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 560px;
+  min-height: 100vh;
   margin: 0 auto;
+  padding: 26px 30px 28px;
 }
 
+/* ===== 页头 ===== */
 .setup-header {
-  text-align: center;
-  margin-bottom: 32px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  /* 该窗口由主进程以无边框方式创建，页头承担"标题栏"职责：
+     可拖拽移动，按钮等交互元素在需要时再单独声明 no-drag */
+  -webkit-app-region: drag;
+  user-select: none;
 }
 
-.setup-header .icon {
-  font-size: 48px;
-  margin-bottom: 16px;
+.setup-header button,
+.setup-header a {
+  -webkit-app-region: no-drag;
+}
+
+.setup-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: var(--r-md);
+  color: var(--amber-300);
+  background: var(--amber-a12);
+  border: 1px solid var(--amber-a20);
+  box-shadow: var(--hairline);
+}
+
+.setup-head-text {
+  min-width: 0;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: var(--amber-500);
+  margin-bottom: 4px;
 }
 
 .setup-header h1 {
-  font-size: 22px;
-  font-weight: 600;
-  margin-bottom: 8px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--text-1);
+}
+
+/* ===== 状态条：内凹的深色面板 ===== */
+.status-panel {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  margin-bottom: 10px;
+  background: var(--ink-1000);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.status-spinner {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid var(--amber-a20);
+  border-top-color: var(--amber-400);
+  animation: spin 0.8s linear infinite;
+}
+
+.status-icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.status-icon--done {
+  color: var(--jade-400);
+}
+
+.status-icon--error {
+  color: var(--coral-400);
 }
 
 .status-scroller {
-  margin-top: 16px;
-  padding: 12px 16px;
-  background: linear-gradient(135deg, #1e293b, #334155);
-  border-radius: 8px;
-  border: 1px solid #475569;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
-  position: relative;
 }
 
 .status-text {
-  font-size: 13px;
-  color: #94a3b8;
+  font-size: 12.5px;
+  color: var(--text-3);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color var(--dur) var(--ease-out);
 }
 
 .status-text.active {
-  color: #60a5fa;
+  color: var(--amber-300);
 }
 
+/* ===== 进度条 ===== */
 .progress-bar-container {
   width: 100%;
-  height: 6px;
-  background: #334155;
-  border-radius: 3px;
-  margin-bottom: 20px;
+  height: 4px;
+  margin-bottom: 16px;
+  border-radius: var(--r-full);
+  background: var(--ink-700);
   overflow: hidden;
 }
 
 .progress-bar {
   height: 100%;
-  background: linear-gradient(90deg, #4f46e5, #7c3aed);
-  border-radius: 3px;
-  transition: width 0.3s ease;
+  width: 0;
+  border-radius: var(--r-full);
+  background: var(--amber-grad);
+  box-shadow: 0 0 12px var(--amber-a35);
+  transition: width var(--dur-slow) var(--ease-out);
 }
 
 .progress-bar.error {
-  background: linear-gradient(90deg, #ef4444, #dc2626);
+  background: var(--coral-400);
+  box-shadow: none;
 }
 
 .progress-bar.success {
-  background: linear-gradient(90deg, #10b981, #059669);
+  background: var(--jade-400);
+  box-shadow: 0 0 12px rgba(126, 203, 161, 0.35);
 }
 
+/* ===== 步骤卡片 ===== */
 .steps-list {
   list-style: none;
-  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
 }
 
 .step-item {
   display: flex;
   align-items: flex-start;
-  gap: 14px;
-  padding: 14px 16px;
-  border-radius: 10px;
-  margin-bottom: 8px;
-  background: #1e293b;
-  border: 1px solid #334155;
-  transition: all 0.3s ease;
+  gap: 12px;
+  padding: 11px 13px;
+  border-radius: var(--r-md);
+  background: linear-gradient(180deg, var(--ink-850), var(--ink-800));
+  border: 1px solid var(--line-1);
+  box-shadow: var(--shadow-1);
+  transition: border-color var(--dur) var(--ease-out), background var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out), opacity var(--dur) var(--ease-out);
 }
 
 .step-item.active {
-  border-color: #4f46e5;
-  box-shadow: 0 0 0 1px rgba(79, 70, 229, 0.3);
+  border-color: var(--amber-a35);
+  box-shadow: var(--shadow-2), inset 0 0 0 1px var(--amber-a12);
 }
 
 .step-item.completed {
-  border-color: #10b981;
-  opacity: 0.8;
+  border-color: rgba(126, 203, 161, 0.22);
 }
 
 .step-item.failed {
-  border-color: #ef4444;
-  background: rgba(239, 68, 68, 0.05);
+  border-color: rgba(233, 119, 110, 0.34);
+  background: var(--coral-a12);
 }
 
 .step-item.pending {
-  opacity: 0.5;
+  opacity: 0.72;
 }
 
+/* 编号圆点：激活 = 琥珀实心，完成 = 玉色勾，失败 = 珊瑚叉，待办 = 弱描边 */
 .step-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
-  background: #334155;
-  color: #94a3b8;
+  border-radius: 50%;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  background: var(--ink-700);
+  border: 1px solid var(--line-2);
+  transition: background var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out),
+    color var(--dur) var(--ease-out);
+}
+
+.step-num {
+  line-height: 1;
 }
 
 .step-item.active .step-icon {
-  background: #4f46e5;
-  color: white;
+  color: var(--amber-ink);
+  background: var(--amber-grad);
+  border-color: transparent;
+  box-shadow: 0 4px 14px -6px rgba(239, 168, 76, 0.6);
 }
 
 .step-item.completed .step-icon {
-  background: #10b981;
-  color: white;
+  color: var(--jade-400);
+  background: var(--jade-a12);
+  border-color: rgba(126, 203, 161, 0.4);
 }
 
 .step-item.failed .step-icon {
-  background: #ef4444;
-  color: white;
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border-color: rgba(233, 119, 110, 0.42);
 }
 
 .spinner {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(255,255,255,0.3);
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  border-top-color: white;
+  border: 2px solid color-mix(in srgb, var(--amber-ink) 28%, transparent);
+  border-top-color: var(--amber-ink);
   animation: spin 0.8s linear infinite;
 }
 
@@ -335,117 +457,159 @@ const quit = () => {
 
 .step-content {
   flex: 1;
+  min-width: 0;
 }
 
 .step-title {
-  font-size: 14px;
-  font-weight: 500;
-  margin-bottom: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text-1);
 }
 
 .step-desc {
-  font-size: 12px;
-  color: #94a3b8;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-4);
+  overflow-wrap: anywhere;
 }
 
 .step-item.failed .step-desc {
-  color: #fca5a5;
+  color: var(--coral-400);
 }
 
+/* ===== 日志区 ===== */
 .log-area {
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 10px;
-  padding: 16px;
-  max-height: 180px;
+  flex: 1 1 auto;
+  min-height: 82px;
+  max-height: 190px;
+  padding: 10px 12px;
   overflow-y: auto;
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  color: #94a3b8;
+  overflow-x: hidden;
+  background: var(--ink-1000);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-3);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    inset 0 12px 24px -20px rgba(0, 0, 0, 0.9);
+}
+
+.log-area::-webkit-scrollbar {
+  width: 8px;
+}
+
+.log-area::-webkit-scrollbar-thumb {
+  background: var(--ink-600);
+  border-radius: var(--r-full);
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 .log-line {
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .log-line.error {
-  color: #fca5a5;
+  color: var(--coral-400);
 }
 
 .log-line.success {
-  color: #6ee7b7;
+  color: var(--jade-400);
 }
 
+/* ===== 失败页脚 ===== */
 .error-footer {
-  margin-top: 20px;
+  margin-top: 14px;
   text-align: center;
 }
 
 .error-msg {
-  color: #fca5a5;
-  font-size: 13px;
-  margin-bottom: 16px;
-  padding: 12px;
-  background: rgba(239, 68, 68, 0.1);
-  border-radius: 8px;
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-align: left;
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border: 1px solid rgba(233, 119, 110, 0.3);
+  overflow-wrap: anywhere;
 }
 
 .btn-row {
   display: flex;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .btn-retry {
-  padding: 10px 24px;
-  background: #4f46e5;
-  color: white;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 20px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--amber-ink);
+  background: var(--amber-grad);
   border: none;
-  border-radius: 8px;
-  font-size: 14px;
+  border-radius: var(--r-sm);
   cursor: pointer;
-  transition: background 0.2s;
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  transition: filter var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .btn-retry:hover {
-  background: #4338ca;
+  filter: brightness(1.07);
+  box-shadow: var(--shadow-amber), inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 
 .btn-quit {
-  padding: 10px 24px;
+  height: 34px;
+  padding: 0 18px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
   background: transparent;
-  color: #94a3b8;
-  border: 1px solid #475569;
-  border-radius: 8px;
-  font-size: 14px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 
 .btn-quit:hover {
-  color: #f1f5f9;
-  border-color: #ef4444;
-  background: rgba(239, 68, 68, 0.1);
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border-color: rgba(233, 119, 110, 0.45);
 }
 
+/* ===== 完成遮罩 ===== */
 .success-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(15, 23, 42, 0.95);
+  inset: 0;
+  z-index: 100;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  padding: 40px;
+  text-align: center;
+  background: color-mix(in srgb, var(--ink-1000) 93%, transparent);
+  backdrop-filter: blur(10px);
   opacity: 0;
   visibility: hidden;
-  transition: opacity 0.4s ease, visibility 0.4s ease;
-  z-index: 100;
+  transition: opacity var(--dur-slow) var(--ease-out), visibility var(--dur-slow) var(--ease-out);
 }
 
 .success-overlay.visible {
@@ -454,17 +618,21 @@ const quit = () => {
 }
 
 .success-icon {
-  width: 100px;
-  height: 100px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #10b981, #059669);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 24px;
-  transform: scale(0);
-  transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
-  box-shadow: 0 0 40px rgba(16, 185, 129, 0.4);
+  width: 78px;
+  height: 78px;
+  margin-bottom: 18px;
+  border-radius: 50%;
+  color: var(--jade-400);
+  background: var(--jade-a12);
+  border: 1px solid rgba(126, 203, 161, 0.35);
+  box-shadow:
+    0 0 0 8px rgba(126, 203, 161, 0.05),
+    0 24px 50px -24px rgba(0, 0, 0, 0.9);
+  transform: scale(0.6);
+  transition: transform 0.5s var(--ease-spring);
 }
 
 .success-overlay.visible .success-icon {
@@ -472,14 +640,16 @@ const quit = () => {
 }
 
 .success-checkmark {
-  width: 40px;
-  height: 40px;
-  stroke: white;
-  stroke-width: 4;
+  width: 34px;
+  height: 34px;
   fill: none;
+  stroke: currentColor;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
   stroke-dasharray: 100;
   stroke-dashoffset: 100;
-  animation: drawCheck 0.6s ease 0.3s forwards;
+  animation: drawCheck 0.6s var(--ease-out) 0.25s forwards;
 }
 
 @keyframes drawCheck {
@@ -487,12 +657,14 @@ const quit = () => {
 }
 
 .success-title {
-  font-size: 24px;
-  font-weight: 600;
-  margin-bottom: 8px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
   opacity: 0;
-  transform: translateY(20px);
-  transition: opacity 0.4s ease 0.5s, transform 0.4s ease 0.5s;
+  transform: translateY(12px);
+  transition: opacity var(--dur-slow) var(--ease-out) 0.2s,
+    transform var(--dur-slow) var(--ease-out) 0.2s;
 }
 
 .success-overlay.visible .success-title {
@@ -501,15 +673,28 @@ const quit = () => {
 }
 
 .success-subtitle {
-  font-size: 14px;
-  color: #94a3b8;
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--text-3);
   opacity: 0;
-  transform: translateY(20px);
-  transition: opacity 0.4s ease 0.6s, transform 0.4s ease 0.6s;
+  transform: translateY(12px);
+  transition: opacity var(--dur-slow) var(--ease-out) 0.3s,
+    transform var(--dur-slow) var(--ease-out) 0.3s;
 }
 
 .success-overlay.visible .success-subtitle {
   opacity: 1;
   transform: translateY(0);
+}
+
+/* ===== 窗口偏窄时（580×680 固定窗）===== */
+@media (max-width: 540px) {
+  .setup-container {
+    padding: 22px 20px 24px;
+  }
+
+  .setup-header h1 {
+    font-size: 18px;
+  }
 }
 </style>

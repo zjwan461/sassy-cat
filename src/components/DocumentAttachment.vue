@@ -42,8 +42,8 @@
       <div class="doc-size">{{ formatSize(attachment.fileSize) }}</div>
     </div>
     
-    <div class="doc-expand-icon">
-      {{ expanded ? '▼' : '▶' }}
+    <div class="doc-expand-icon" :class="{ expanded }">
+      <AppIcon name="chevron-right" :size="12" />
     </div>
   </div>
   
@@ -58,6 +58,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
+import AppIcon from './AppIcon.vue'
 
 const props = defineProps({
   attachment: {
@@ -92,25 +93,28 @@ function formatSize(bytes) {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  background: #0f172a;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  padding: 9px 11px;
   min-width: 200px;
-  max-width: 300px;
+  max-width: 320px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
 }
 
 .doc-attachment:hover {
-  background: #1e293b;
-  border-color: #6366f1;
+  background: rgba(255, 255, 255, 0.045);
+  border-color: var(--amber-a35);
 }
 
 .doc-icon {
   flex-shrink: 0;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .doc-icon svg {
@@ -118,12 +122,13 @@ function formatSize(bytes) {
   height: 100%;
 }
 
-.icon-pdf { color: #ef4444; }
-.icon-word { color: #3b82f6; }
-.icon-excel { color: #10b981; }
-.icon-ppt { color: #f97316; }
-.icon-text { color: #64748b; }
-.icon-file { color: #94a3b8; }
+/* 文件类型色：压低饱和度，与整站的"低饱和 + 单一主色"保持一致 */
+.icon-pdf { color: var(--coral-400); }
+.icon-word { color: var(--azure-400); }
+.icon-excel { color: var(--jade-400); }
+.icon-ppt { color: var(--amber-400); }
+.icon-text { color: var(--text-3); }
+.icon-file { color: var(--text-3); }
 
 .doc-info {
   flex: 1;
@@ -131,36 +136,44 @@ function formatSize(bytes) {
 }
 
 .doc-name {
-  font-size: 13px;
-  color: #e2e8f0;
+  font-size: 12.5px;
+  color: var(--text-1);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .doc-size {
-  font-size: 11px;
-  color: #64748b;
   margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
 }
 
 .doc-expand-icon {
+  display: flex;
   flex-shrink: 0;
-  color: #64748b;
-  font-size: 12px;
+  color: var(--text-4);
+  transition: transform var(--dur) var(--ease-out);
 }
+
+.doc-expand-icon.expanded {
+  transform: rotate(90deg);
+  color: var(--amber-400);
+}
+
 .doc-content {
   margin-top: 8px;
-  padding: 12px;
-  background: #0f172a;
-  border: 1px solid #334155;
-  border-radius: 8px;
+  padding: 12px 14px;
   max-height: 400px;
   overflow-y: auto;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
 }
 
 .doc-empty {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-4);
 }
 </style>

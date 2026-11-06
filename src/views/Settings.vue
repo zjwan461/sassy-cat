@@ -1,24 +1,40 @@
 <template>
   <div class="page settings-page">
     <header class="page-header">
-      <h1 class="page-title">设置</h1>
-      <p class="page-subtitle">模型连接与人设配置，保存后热生效</p>
-    </header>
+      <div class="page-head-main">
+        <div class="eyebrow">
+          <AppIcon name="settings" :size="12" />
+          偏好设置
+        </div>
+        <h1 class="page-title">设置</h1>
+        <p class="page-subtitle">模型连接与人设配置，保存后热生效</p>
+      </div>
 
-    <!-- 全局操作 -->
-    <div class="global-actions">
-      <button class="btn primary" @click="saveAll">保存设置</button>
-      <button class="btn warn" @click="restartAgent" :disabled="restarting">
-        <span v-if="restarting" class="btn-spinner"></span>
-        <span v-else-if="restartDone" class="btn-check">✓</span>
-        <span v-else>重启服务进程</span>
-      </button>
-    </div>
+      <!-- 全局操作 -->
+      <div class="global-actions">
+        <button class="btn primary" @click="saveAll">
+          <AppIcon name="check" :size="14" />
+          保存设置
+        </button>
+        <button class="btn warn" :class="{ 'is-done': restartDone }" @click="restartAgent" :disabled="restarting">
+          <span v-if="restarting" class="btn-spinner"></span>
+          <AppIcon v-else-if="restartDone" name="check" :size="14" class="btn-check" />
+          <AppIcon v-else name="refresh" :size="14" />
+          <span v-if="!restarting && !restartDone">重启服务进程</span>
+        </button>
+      </div>
+    </header>
 
     <div class="settings-grid">
     <!-- 模型连接 -->
     <section class="card">
-      <div class="card-header">模型连接</div>
+      <div class="card-header">
+        <span class="card-icon"><AppIcon name="plug" :size="15" /></span>
+        <div class="card-head-main">
+          <div class="card-title">模型连接</div>
+          <div class="card-sub">主 Agent 的 LLM 连接、采样与上下文策略</div>
+        </div>
+      </div>
       <div class="card-body form">
         <div class="field">
           <label>配置档</label>
@@ -26,8 +42,8 @@
             <select :value="activeProfile" @change="switchProfile($event.target.value)">
               <option v-for="(p, name) in profiles" :key="name" :value="name">{{ p.label || name }}</option>
             </select>
-            <button class="btn" @click="showAddProfile = true" title="新增配置档">＋ 新增</button>
-            <button class="btn warn" @click="deleteProfile" :disabled="activeProfile === 'default'" title="删除当前配置档（default 不可删除）"> 删除</button>
+            <button class="btn" @click="showAddProfile = true" title="新增配置档"><AppIcon name="plus" :size="14" />新增</button>
+            <button class="btn warn" @click="deleteProfile" :disabled="activeProfile === 'default'" title="删除当前配置档（default 不可删除）"><AppIcon name="trash" :size="14" />删除</button>
           </div>
         </div>
         <div class="field">
@@ -61,10 +77,10 @@
         <div class="field">
           <label>上下文窗口（contextWindow）</label>
           <div class="stepper">
-            <button type="button" class="step-btn" @click="step('contextWindow', -8192, CONTEXT_WINDOW_MIN, CONTEXT_WINDOW_MAX)" :disabled="form.contextWindow <= CONTEXT_WINDOW_MIN">−</button>
+            <button type="button" class="step-btn" @click="step('contextWindow', -8192, CONTEXT_WINDOW_MIN, CONTEXT_WINDOW_MAX)" :disabled="form.contextWindow <= CONTEXT_WINDOW_MIN"><AppIcon name="minus" :size="14" /></button>
             <input type="number" v-model.number="form.contextWindow" :min="CONTEXT_WINDOW_MIN" :max="CONTEXT_WINDOW_MAX" class="step-input"
               @blur="clamp('contextWindow', CONTEXT_WINDOW_MIN, CONTEXT_WINDOW_MAX, DEFAULT_CONTEXT_WINDOW)" />
-            <button type="button" class="step-btn" @click="step('contextWindow', 8192, CONTEXT_WINDOW_MIN, CONTEXT_WINDOW_MAX)" :disabled="form.contextWindow >= CONTEXT_WINDOW_MAX">+</button>
+            <button type="button" class="step-btn" @click="step('contextWindow', 8192, CONTEXT_WINDOW_MIN, CONTEXT_WINDOW_MAX)" :disabled="form.contextWindow >= CONTEXT_WINDOW_MAX"><AppIcon name="plus" :size="14" /></button>
           </div>
           <span class="hint">模型单次可处理的最大 token 数（含输入+输出），用于上下文压缩的阈值判断；范围 8192~1048576，默认 262144</span>
         </div>
@@ -89,10 +105,10 @@
           <div class="field">
             <label>压缩后保留的最近消息（条）</label>
             <div class="stepper">
-              <button type="button" class="step-btn" @click="step('contextCompressionKeep', -1, CC_KEEP_MIN, CC_KEEP_MAX)" :disabled="form.contextCompressionKeep <= CC_KEEP_MIN">−</button>
+              <button type="button" class="step-btn" @click="step('contextCompressionKeep', -1, CC_KEEP_MIN, CC_KEEP_MAX)" :disabled="form.contextCompressionKeep <= CC_KEEP_MIN"><AppIcon name="minus" :size="14" /></button>
               <input type="number" v-model.number="form.contextCompressionKeep" :min="CC_KEEP_MIN" :max="CC_KEEP_MAX" class="step-input"
                 @blur="clamp('contextCompressionKeep', CC_KEEP_MIN, CC_KEEP_MAX, DEFAULT_CC_KEEP)" />
-              <button type="button" class="step-btn" @click="step('contextCompressionKeep', 1, CC_KEEP_MIN, CC_KEEP_MAX)" :disabled="form.contextCompressionKeep >= CC_KEEP_MAX">+</button>
+              <button type="button" class="step-btn" @click="step('contextCompressionKeep', 1, CC_KEEP_MIN, CC_KEEP_MAX)" :disabled="form.contextCompressionKeep >= CC_KEEP_MAX"><AppIcon name="plus" :size="14" /></button>
             </div>
             <span class="hint">压缩完成后保留的最近原始消息条数，范围 1~200（默认 10）</span>
           </div>
@@ -103,30 +119,30 @@
         <div class="field">
           <label>历史图片保留条数（每种来源）</label>
           <div class="stepper">
-            <button type="button" class="step-btn" @click="step('contextMediaKeep', -1, MEDIA_KEEP_MIN, MEDIA_KEEP_MAX)" :disabled="form.contextMediaKeep <= MEDIA_KEEP_MIN">−</button>
+            <button type="button" class="step-btn" @click="step('contextMediaKeep', -1, MEDIA_KEEP_MIN, MEDIA_KEEP_MAX)" :disabled="form.contextMediaKeep <= MEDIA_KEEP_MIN"><AppIcon name="minus" :size="14" /></button>
             <input type="number" v-model.number="form.contextMediaKeep" :min="MEDIA_KEEP_MIN" :max="MEDIA_KEEP_MAX" class="step-input"
               @blur="clamp('contextMediaKeep', MEDIA_KEEP_MIN, MEDIA_KEEP_MAX, DEFAULT_MEDIA_KEEP)" />
-            <button type="button" class="step-btn" @click="step('contextMediaKeep', 1, MEDIA_KEEP_MIN, MEDIA_KEEP_MAX)" :disabled="form.contextMediaKeep >= MEDIA_KEEP_MAX">+</button>
+            <button type="button" class="step-btn" @click="step('contextMediaKeep', 1, MEDIA_KEEP_MIN, MEDIA_KEEP_MAX)" :disabled="form.contextMediaKeep >= MEDIA_KEEP_MAX"><AppIcon name="plus" :size="14" /></button>
           </div>
           <span class="hint">read_file 读到的图与用户上传的图「各自」保留最近 N 条（0~20，默认 1）；更早的图片会被替换成带原始路径的文字占位，模型可按需用 read_file 重新读取 —— 于是上下文里的图片数不会随对话轮数增长；0 = 图片一律不保留（模型看不到任何历史图）</span>
         </div>
         <div class="field">
           <label>单条消息图片体积上限（KB）</label>
           <div class="stepper">
-            <button type="button" class="step-btn" @click="step('contextMediaMaxKB', -128, MEDIA_MAX_KB_MIN, MEDIA_MAX_KB_MAX)" :disabled="form.contextMediaMaxKB <= MEDIA_MAX_KB_MIN">−</button>
+            <button type="button" class="step-btn" @click="step('contextMediaMaxKB', -128, MEDIA_MAX_KB_MIN, MEDIA_MAX_KB_MAX)" :disabled="form.contextMediaMaxKB <= MEDIA_MAX_KB_MIN"><AppIcon name="minus" :size="14" /></button>
             <input type="number" v-model.number="form.contextMediaMaxKB" :min="MEDIA_MAX_KB_MIN" :max="MEDIA_MAX_KB_MAX" class="step-input"
               @blur="clamp('contextMediaMaxKB', MEDIA_MAX_KB_MIN, MEDIA_MAX_KB_MAX, DEFAULT_MEDIA_MAX_KB)" />
-            <button type="button" class="step-btn" @click="step('contextMediaMaxKB', 128, MEDIA_MAX_KB_MIN, MEDIA_MAX_KB_MAX)" :disabled="form.contextMediaMaxKB >= MEDIA_MAX_KB_MAX">+</button>
+            <button type="button" class="step-btn" @click="step('contextMediaMaxKB', 128, MEDIA_MAX_KB_MIN, MEDIA_MAX_KB_MAX)" :disabled="form.contextMediaMaxKB >= MEDIA_MAX_KB_MAX"><AppIcon name="plus" :size="14" /></button>
           </div>
           <span class="hint">单条消息内的图片合计超过该值即触发降采样（0~16384KB，默认 512）；0 = 不做体积限制（只靠上面的条数收敛）；把「条数」与「体积」同时设为 0 即等于关闭本机制</span>
         </div>
         <div class="field">
           <label>降采样后图片最长边（px）</label>
           <div class="stepper">
-            <button type="button" class="step-btn" @click="step('contextMediaMaxPx', -128, MEDIA_MAX_PX_MIN, MEDIA_MAX_PX_MAX)" :disabled="form.contextMediaMaxPx <= MEDIA_MAX_PX_MIN">−</button>
+            <button type="button" class="step-btn" @click="step('contextMediaMaxPx', -128, MEDIA_MAX_PX_MIN, MEDIA_MAX_PX_MAX)" :disabled="form.contextMediaMaxPx <= MEDIA_MAX_PX_MIN"><AppIcon name="minus" :size="14" /></button>
             <input type="number" v-model.number="form.contextMediaMaxPx" :min="MEDIA_MAX_PX_MIN" :max="MEDIA_MAX_PX_MAX" class="step-input"
               @blur="clamp('contextMediaMaxPx', MEDIA_MAX_PX_MIN, MEDIA_MAX_PX_MAX, DEFAULT_MEDIA_MAX_PX)" />
-            <button type="button" class="step-btn" @click="step('contextMediaMaxPx', 128, MEDIA_MAX_PX_MIN, MEDIA_MAX_PX_MAX)" :disabled="form.contextMediaMaxPx >= MEDIA_MAX_PX_MAX">+</button>
+            <button type="button" class="step-btn" @click="step('contextMediaMaxPx', 128, MEDIA_MAX_PX_MIN, MEDIA_MAX_PX_MAX)" :disabled="form.contextMediaMaxPx >= MEDIA_MAX_PX_MAX"><AppIcon name="plus" :size="14" /></button>
           </div>
           <span class="hint">超限图片重编码为 JPEG 时的最长边像素（128~4096，默认 1280）；越小越省上下文，但字迹与细节也越模糊</span>
         </div>
@@ -138,10 +154,10 @@
         <div class="field">
           <label>最大输出 token（maxTokens）</label>
           <div class="stepper">
-            <button type="button" class="step-btn" @click="step('maxTokens', -1024, MAX_TOKENS_MIN, MAX_TOKENS_MAX)" :disabled="form.maxTokens <= MAX_TOKENS_MIN">−</button>
+            <button type="button" class="step-btn" @click="step('maxTokens', -1024, MAX_TOKENS_MIN, MAX_TOKENS_MAX)" :disabled="form.maxTokens <= MAX_TOKENS_MIN"><AppIcon name="minus" :size="14" /></button>
             <input type="number" v-model.number="form.maxTokens" :min="MAX_TOKENS_MIN" :max="MAX_TOKENS_MAX" class="step-input"
               @blur="clamp('maxTokens', MAX_TOKENS_MIN, MAX_TOKENS_MAX, DEFAULT_MAX_TOKENS)" />
-            <button type="button" class="step-btn" @click="step('maxTokens', 1024, MAX_TOKENS_MIN, MAX_TOKENS_MAX)" :disabled="form.maxTokens >= MAX_TOKENS_MAX">+</button>
+            <button type="button" class="step-btn" @click="step('maxTokens', 1024, MAX_TOKENS_MIN, MAX_TOKENS_MAX)" :disabled="form.maxTokens >= MAX_TOKENS_MAX"><AppIcon name="plus" :size="14" /></button>
           </div>
           <span class="hint">模型单次回复允许生成的最大 token 数；范围 256~1048576，默认 8192</span>
         </div>
@@ -159,7 +175,13 @@
 
     <!-- Agent 配置 -->
     <section class="card">
-      <div class="card-header">Agent 配置</div>
+      <div class="card-header">
+        <span class="card-icon"><AppIcon name="brain" :size="15" /></span>
+        <div class="card-head-main">
+          <div class="card-title">Agent 配置</div>
+          <div class="card-sub">人设提示词、记忆窗口与高危操作确认</div>
+        </div>
+      </div>
       <div class="card-body form">
         <div class="field">
           <label>配置档</label>
@@ -167,8 +189,8 @@
             <select :value="activeAgentProfile" @change="switchAgentProfile($event.target.value)">
               <option v-for="(p, name) in agentProfiles" :key="name" :value="name">{{ p.label || name }}</option>
             </select>
-            <button class="btn" @click="showAddAgentProfile = true" title="新增 Agent 配置档">＋ 新增</button>
-            <button class="btn warn" @click="deleteAgentProfile" :disabled="activeAgentProfile === 'default'" title="删除当前 Agent 配置档（default 不可删除）"> 删除</button>
+            <button class="btn" @click="showAddAgentProfile = true" title="新增 Agent 配置档"><AppIcon name="plus" :size="14" />新增</button>
+            <button class="btn warn" @click="deleteAgentProfile" :disabled="activeAgentProfile === 'default'" title="删除当前 Agent 配置档（default 不可删除）"><AppIcon name="trash" :size="14" />删除</button>
           </div>
         </div>
         <div class="field">
@@ -180,20 +202,20 @@
         <div class="field">
           <label>记忆窗口（条）</label>
           <div class="stepper">
-            <button type="button" class="step-btn" @click="step('memoryWindow', -1, 2, 500)" :disabled="form.memoryWindow <= 2">−</button>
+            <button type="button" class="step-btn" @click="step('memoryWindow', -1, 2, 500)" :disabled="form.memoryWindow <= 2"><AppIcon name="minus" :size="14" /></button>
             <input type="number" v-model.number="form.memoryWindow" min="2" max="500" class="step-input"
               @blur="clamp('memoryWindow', 2, 500, 50)" />
-            <button type="button" class="step-btn" @click="step('memoryWindow', 1, 2, 500)" :disabled="form.memoryWindow >= 500">+</button>
+            <button type="button" class="step-btn" @click="step('memoryWindow', 1, 2, 500)" :disabled="form.memoryWindow >= 500"><AppIcon name="plus" :size="14" /></button>
           </div>
           <span class="hint">对话上下文保留的最近消息条数，超出后自动裁剪（默认 50）</span>
         </div>
         <div class="field">
           <label>递归上限（步）</label>
           <div class="stepper">
-            <button type="button" class="step-btn" @click="step('recursionLimit', -1, 1, 9999)" :disabled="form.recursionLimit <= 1">−</button>
+            <button type="button" class="step-btn" @click="step('recursionLimit', -1, 1, 9999)" :disabled="form.recursionLimit <= 1"><AppIcon name="minus" :size="14" /></button>
             <input type="number" v-model.number="form.recursionLimit" min="1" max="9999" class="step-input"
               @blur="clamp('recursionLimit', 1, 9999, 100)" />
-            <button type="button" class="step-btn" @click="step('recursionLimit', 1, 1, 9999)" :disabled="form.recursionLimit >= 9999">+</button>
+            <button type="button" class="step-btn" @click="step('recursionLimit', 1, 1, 9999)" :disabled="form.recursionLimit >= 9999"><AppIcon name="plus" :size="14" /></button>
           </div>
           <span class="hint">单轮对话 Agent 可执行的最大步数（含工具调用），范围 1~9999，过小会提前中断（默认 100）</span>
         </div>
@@ -240,7 +262,13 @@
 
     <!-- dsh 子代理（DeepSeek Harness） -->
     <section class="card wide">
-      <div class="card-header">dsh 子代理（DeepSeek Harness）</div>
+      <div class="card-header">
+        <span class="card-icon"><AppIcon name="layers" :size="15" /></span>
+        <div class="card-head-main">
+          <div class="card-title">dsh 子代理（DeepSeek Harness）</div>
+          <div class="card-sub">子代理的连接方式、输出上限与系统提示词</div>
+        </div>
+      </div>
       <div class="card-body form">
         <div class="field">
           <span class="hint">dsh 会自动带上主 Agent 的 skills：委托执行时会挂载「技能管理」里的同一套技能，按需加载，无需重复配置。</span>
@@ -279,10 +307,10 @@
         <div class="field">
           <label>最大输出 tokens</label>
           <div class="stepper">
-            <button type="button" class="step-btn" @click="step('dshMaxTokens', -1024, 1, DSH_MAX_TOKENS_LIMIT)" :disabled="form.dshMaxTokens <= 1">−</button>
+            <button type="button" class="step-btn" @click="step('dshMaxTokens', -1024, 1, DSH_MAX_TOKENS_LIMIT)" :disabled="form.dshMaxTokens <= 1"><AppIcon name="minus" :size="14" /></button>
             <input type="number" v-model.number="form.dshMaxTokens" min="1" :max="DSH_MAX_TOKENS_LIMIT" class="step-input"
               @blur="clamp('dshMaxTokens', 1, DSH_MAX_TOKENS_LIMIT, DSH_MAX_TOKENS_LIMIT)" />
-            <button type="button" class="step-btn" @click="step('dshMaxTokens', 1024, 1, DSH_MAX_TOKENS_LIMIT)" :disabled="form.dshMaxTokens >= DSH_MAX_TOKENS_LIMIT">+</button>
+            <button type="button" class="step-btn" @click="step('dshMaxTokens', 1024, 1, DSH_MAX_TOKENS_LIMIT)" :disabled="form.dshMaxTokens >= DSH_MAX_TOKENS_LIMIT"><AppIcon name="plus" :size="14" /></button>
           </div>
           <span class="hint">dsh 单次响应的输出上限，范围 1~131072（DashScope qwen 系只接受该区间，默认 131072）</span>
         </div>
@@ -301,7 +329,13 @@
 
     <!-- 知识库（RAG） -->
     <section class="card">
-      <div class="card-header">知识库（RAG）</div>
+      <div class="card-header">
+        <span class="card-icon"><AppIcon name="database" :size="15" /></span>
+        <div class="card-head-main">
+          <div class="card-title">知识库（RAG）</div>
+          <div class="card-sub">上传自动入库与向量模型配置</div>
+        </div>
+      </div>
       <div class="card-body form">
         <div class="field">
           <label class="check"><input type="checkbox" v-model="form.ragAutoEmbedding" /> 聊天上传文件自动入库</label>
@@ -346,7 +380,7 @@
           <div class="actions">
             <button class="btn primary" @click="downloadModel" :disabled="downloading">
               <span v-if="downloading" class="btn-spinner"></span>
-              <span v-else>⬇ 下载模型</span>
+              <span v-else class="btn-label"><AppIcon name="download" :size="14" />下载模型</span>
               <span v-if="downloading">下载中…</span>
             </button>
             <span v-if="downloadResult" :class="downloadResult.ok ? 'ok' : 'bad-text'">{{ downloadResult.text }}</span>
@@ -356,7 +390,7 @@
         <div v-else-if="form.ragEmbedType === 'local'" id="rag-model" class="field">
           <label>本地模型状态</label>
           <div class="actions">
-            <span class="ok">✓ 模型已下载{{ form.ragEmbedModel ? `：${form.ragEmbedModel}` : '' }}</span>
+            <span class="ok"><AppIcon name="check" :size="13" />模型已下载{{ form.ragEmbedModel ? `：${form.ragEmbedModel}` : '' }}</span>
             <button class="mini" @click="redownloadModel" :disabled="downloading" title="清除已下载状态并重新下载">重新下载</button>
             <span v-if="downloadResult" :class="downloadResult.ok ? 'ok' : 'bad-text'">{{ downloadResult.text }}</span>
           </div>
@@ -366,7 +400,13 @@
 
     <!-- 网络代理 -->
     <section class="card">
-      <div class="card-header">网络代理</div>
+      <div class="card-header">
+        <span class="card-icon"><AppIcon name="globe" :size="15" /></span>
+        <div class="card-head-main">
+          <div class="card-title">网络代理</div>
+          <div class="card-sub">HTTP / HTTPS 代理与直连白名单</div>
+        </div>
+      </div>
       <div class="card-body form">
         <div class="field">
           <label class="check"><input type="checkbox" v-model="form.proxyEnabled" /> 启用 HTTP / HTTPS 代理</label>
@@ -391,7 +431,13 @@
 
     <!-- 语音朗读（TTS） -->
     <section class="card">
-      <div class="card-header">语音朗读（TTS）</div>
+      <div class="card-header">
+        <span class="card-icon"><AppIcon name="volume" :size="15" /></span>
+        <div class="card-head-main">
+          <div class="card-title">语音朗读（TTS）</div>
+          <div class="card-sub">系统语音、语速与音调</div>
+        </div>
+      </div>
       <div class="card-body form">
         <div class="field">
           <label>语音方案</label>
@@ -436,7 +482,13 @@
 
     <!-- 闲置提醒 -->
     <section class="card">
-      <div class="card-header">闲置提醒</div>
+      <div class="card-header">
+        <span class="card-icon"><AppIcon name="clock" :size="15" /></span>
+        <div class="card-head-main">
+          <div class="card-title">闲置提醒</div>
+          <div class="card-sub">久未互动时让本喵叫你一声</div>
+        </div>
+      </div>
       <div class="card-body form inline">
         <label class="check"><input type="checkbox" v-model="form.idleEnabled" /> 启用</label>
         <label>闲置阈值（分钟）<input type="number" v-model.number="form.idleThreshold" min="1" class="num" /></label>
@@ -446,15 +498,21 @@
 
     <!-- 提醒事项 -->
     <section class="card">
-      <div class="card-header">提醒事项</div>
+      <div class="card-header">
+        <span class="card-icon"><AppIcon name="bell" :size="15" /></span>
+        <div class="card-head-main">
+          <div class="card-title">提醒事项</div>
+          <div class="card-sub">检查频率与气泡停留时长</div>
+        </div>
+      </div>
       <div class="card-body form">
         <div class="field">
           <label>检查间隔（秒）</label>
           <div class="stepper">
-            <button type="button" class="step-btn" @click="step('reminderPoll', -1, 3, 30)" :disabled="form.reminderPoll <= 3">−</button>
+            <button type="button" class="step-btn" @click="step('reminderPoll', -1, 3, 30)" :disabled="form.reminderPoll <= 3"><AppIcon name="minus" :size="14" /></button>
             <input type="number" v-model.number="form.reminderPoll" min="3" max="30" class="step-input"
               @blur="clamp('reminderPoll', 3, 30, 5)" />
-            <button type="button" class="step-btn" @click="step('reminderPoll', 1, 3, 30)" :disabled="form.reminderPoll >= 30">+</button>
+            <button type="button" class="step-btn" @click="step('reminderPoll', 1, 3, 30)" :disabled="form.reminderPoll >= 30"><AppIcon name="plus" :size="14" /></button>
           </div>
           <span class="hint">后台检查提醒是否到点的频率，范围 3~30 秒（默认 5 秒，越小触发越及时）</span>
         </div>
@@ -470,7 +528,13 @@
 
     <!-- 桌宠 -->
     <section class="card">
-      <div class="card-header">桌宠</div>
+      <div class="card-header">
+        <span class="card-icon"><AppIcon name="bot" :size="15" /></span>
+        <div class="card-head-main">
+          <div class="card-title">桌宠</div>
+          <div class="card-sub">显示开关与快速提问快捷键</div>
+        </div>
+      </div>
       <div class="card-body form">
         <div class="field">
           <label class="check"><input type="checkbox" v-model="form.petEnabled" /> 启用桌宠</label>
@@ -556,6 +620,7 @@ import { useRestartState } from '../composables/useRestartState'
 import { useModelDownloadState } from '../composables/useModelDownloadState'
 import { useTTS } from '../composables/useTTS'
 import { downloadEmbeddingModel } from '../api/embeddingModelDownload'
+import AppIcon from '../components/AppIcon.vue'
 
 const { connect, send, on } = useAgentSocket()
 const api = window.electronAPI
@@ -1314,13 +1379,18 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.settings-page { max-width: 1200px; }
+.settings-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  animation: fadeUp var(--dur-slow) var(--ease-out) backwards;
+}
+
 .settings-grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 18px;
+  gap: 16px;
 }
-@media (min-width: 960px) {
+@media (min-width: 1080px) {
   .settings-grid {
     grid-template-columns: 1fr 1fr;
   }
@@ -1334,120 +1404,785 @@ onMounted(() => {
 .settings-grid .card.wide {
   grid-column: 1 / -1;
 }
-.page-header { margin-bottom: 20px; }
-.page-title { font-size: 26px; font-weight: 700; color: #f1f5f9; margin-bottom: 6px; }
-.page-subtitle { font-size: 14px; color: #64748b; }
-.card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; overflow: hidden; }
-.card-header { padding: 14px 20px; font-weight: 600; color: #e2e8f0; border-bottom: 1px solid #334155; }
-.card-body { padding: 18px 20px; }
-.form .field { margin-bottom: 14px; display: flex; flex-direction: column; gap: 6px; }
-.form.inline { display: flex; gap: 26px; align-items: center; flex-wrap: wrap; }
-.interrupt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 18px; }
-.interrupt-grid .check { color: #cbd5e1; font-size: 14px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.interrupt-grid .check input { accent-color: #6366f1; width: 16px; height: 16px; }
-.form.inline label { color: #94a3b8; font-size: 14px; display: flex; align-items: center; gap: 8px; }
-label { color: #94a3b8; font-size: 13px; }
-input, select, textarea { background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #e2e8f0; padding: 9px 12px; font-size: 14px; font-family: inherit; }
-input:focus, textarea:focus, select:focus { outline: none; border-color: #6366f1; }
-.mono { font-family: Consolas, monospace; }
-.persona { line-height: 1.6; }
-.num { width: 80px; }
-.stepper { display: inline-flex; align-items: stretch; width: fit-content; border: 1px solid #334155; border-radius: 8px; overflow: hidden; background: #0f172a; }
-.stepper:focus-within { border-color: #6366f1; }
-.step-input { width: 72px; text-align: center; border: none; border-radius: 0; background: transparent; -moz-appearance: textfield; appearance: textfield; }
-.step-input::-webkit-outer-spin-button, .step-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.step-input:focus { outline: none; border: none; }
-.step-btn { background: #1e293b; border: none; border-left: 1px solid #334155; color: #94a3b8; width: 34px; font-size: 16px; line-height: 1; cursor: pointer; transition: background .15s, color .15s; }
-.step-btn:first-child { border-left: none; border-right: 1px solid #334155; }
-.step-btn:hover:not(:disabled) { background: #334155; color: #e2e8f0; }
-.step-btn:disabled { opacity: .35; cursor: not-allowed; }
-.hotkey-row { display: flex; gap: 8px; align-items: center; }
-.hotkey-box {
-  min-width: 180px; padding: 9px 12px; border-radius: 8px; cursor: pointer;
-  background: #0f172a; border: 1px solid #334155; color: #e2e8f0; font-size: 14px;
-  font-family: Consolas, monospace; user-select: none; text-align: center;
-}
-.hotkey-box.recording { border-color: #6366f1; color: #a5b4fc; animation: hotkey-pulse 1.2s ease-in-out infinite; }
-.hotkey-box.bad { border-color: #f87171; }
-@keyframes hotkey-pulse { 0%,100% { opacity: 1 } 50% { opacity: .55 } }
-.key-row { display: flex; gap: 8px; }
-.key-row input { flex: 1; }
-.mini { background: #334155; border: none; color: #cbd5e1; border-radius: 8px; padding: 0 14px; cursor: pointer; }
-.hint { font-size: 12px; color: #64748b; }
-.hint.bad { color: #f87171; }
-/* 语音朗读（TTS）：滑杆与数值样式 */
-input[type="range"] { border: none; padding: 0; background: transparent; width: 100%; accent-color: #6366f1; }
-.inline-val { color: #a5b4fc; font-family: Consolas, monospace; font-size: 12px; margin-left: 6px; }
-/* 语音下拉：压缩宽度（min-width:0 允许 flex 收缩），防止长语音名把「试听」按钮挤出可视区 */
-.profile-row .voice-select { min-width: 0; flex: 1 1 150px; }
-/* 试听按钮：播放中「均衡器」动画 */
-.voice-preview-btn { display: inline-flex; align-items: center; gap: 6px; }
-.eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
-.eq i { width: 3px; border-radius: 1px; background: #34d399; animation: eq-bounce 0.9s ease-in-out infinite; }
-.eq i:nth-child(2) { animation-delay: 0.15s; }
-.eq i:nth-child(3) { animation-delay: 0.3s; }
-@keyframes eq-bounce { 0%, 100% { height: 4px; } 50% { height: 12px; } }
-/* 悬浮操作条：sticky 相对 .content 滚动容器；top 负值抵消其 32px 上内边距，滚动时真正贴住画面最顶端 */
-.global-actions {
+/* ===== 页头 ===== */
+/* 设置页很长：页头（含保存 / 重启）吸顶，滚到任何位置都能一键保存。
+   半透明 + 模糊，避免破坏整页的「墨面」质感 */
+.page-header {
   position: sticky;
-  top: -32px;
-  z-index: 40;
+  top: -26px;
+  z-index: 20;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin: 0 -32px 22px;
+  padding: 20px 32px 16px;
+  background: rgba(9, 12, 17, 0.82);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line-1);
+}
+
+.page-head-main {
+  min-width: 0;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: var(--amber-500);
+  margin-bottom: 8px;
+}
+
+.page-title {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-1);
+  line-height: 1.25;
+}
+
+.page-subtitle {
+  margin-top: 7px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.global-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* ===== 按钮 ===== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
+  background: var(--ink-750);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast),
+    color var(--dur-fast), transform var(--dur-fast), box-shadow var(--dur-fast),
+    filter var(--dur-fast);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--ink-700);
+  border-color: var(--line-3);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  background: var(--amber-grad);
+  border-color: transparent;
+  color: var(--amber-ink);
+  font-weight: 650;
+  box-shadow: var(--shadow-1), inset 0 1px 0 color-mix(in srgb, var(--amber-100) 30%, transparent);
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: var(--amber-grad);
+  filter: brightness(1.06);
+  box-shadow: var(--shadow-amber), inset 0 1px 0 color-mix(in srgb, var(--amber-100) 34%, transparent);
+}
+
+.btn.warn {
+  background: var(--coral-a12);
+  border-color: color-mix(in srgb, var(--coral-400) 32%, transparent);
+  color: var(--coral-400);
+}
+
+.btn.warn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--coral-400) 18%, transparent);
+  border-color: color-mix(in srgb, var(--coral-400) 52%, transparent);
+}
+
+/* 重启完成：同一颗按钮转为「安静的绿灯」，避免珊瑚色里跳出一枚绿勾 */
+.btn.warn.is-done {
+  background: var(--jade-a12);
+  border-color: color-mix(in srgb, var(--jade-400) 32%, transparent);
+  color: var(--jade-400);
+}
+
+.btn-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-check {
+  color: var(--jade-400);
+}
+
+.btn-spinner {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+
+/* ===== 卡片 ===== */
+.card {
+  position: relative;
+  background: linear-gradient(180deg, var(--ink-850), var(--ink-800));
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1), var(--hairline);
+  overflow: hidden;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line-1);
+}
+
+.card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  color: var(--amber-300);
+  background: var(--amber-a08);
+  border: 1px solid var(--amber-a20);
+}
+
+.card-head-main {
+  min-width: 0;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
+}
+
+.card-sub {
+  margin-top: 1px;
+  font-size: 11.5px;
+  color: var(--text-4);
+}
+
+.card-body {
+  padding: 20px;
+}
+
+/* ===== 字段节奏：统一 20px 分组间距 ===== */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.form.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 22px;
+  flex-wrap: wrap;
+}
+.interrupt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px 14px;
+  padding: 12px 14px;
+  background: var(--ink-1000);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.form.inline label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.form.inline label.check {
+  color: var(--text-2);
+}
+
+.form.inline input.num {
+  width: 84px;
+}
+
+label {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* ===== 输入控件：36px 高，深墨底，琥珀焦点环 ===== */
+input:not([type]),
+input[type='text'],
+input[type='password'],
+input[type='number'],
+input[type='search'],
+select,
+textarea {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--ink-1000);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  transition: border-color var(--dur-fast), background var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+textarea {
+  height: auto;
+  min-height: 88px;
+  padding: 10px 12px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-4);
+}
+
+input:not([type]):hover:not(:disabled),
+input[type='text']:hover:not(:disabled),
+input[type='password']:hover:not(:disabled),
+input[type='number']:hover:not(:disabled),
+input[type='search']:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+  border-color: var(--line-3);
+}
+
+input:not([type]):focus,
+input[type='text']:focus,
+input[type='password']:focus,
+input[type='number']:focus,
+input[type='search']:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--amber-a55);
+  background-color: var(--ink-900);
+  box-shadow: 0 0 0 3px var(--amber-a12);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 下拉：去掉原生箭头，改为发丝线三角 */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 32px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 15px, calc(100% - 11px) 15px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+select:disabled {
+  cursor: not-allowed;
+}
+
+select option {
+  background: var(--ink-800);
+  color: var(--text-1);
+}
+
+/* 复选框：琥珀实心块 + 墨色对勾 */
+input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin: 0;
+  border: 1px solid var(--line-4);
+  border-radius: 5px;
+  background: var(--ink-1000);
+  cursor: pointer;
+  transition: background var(--dur-fast), border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+input[type='checkbox']:hover:not(:disabled) {
+  border-color: var(--amber-a55);
+}
+
+input[type='checkbox']:checked {
+  background: var(--amber-grad);
+  border-color: transparent;
+}
+
+input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--amber-ink);
+  border-width: 0 2px 2px 0;
+  transform: rotate(43deg);
+}
+
+input[type='checkbox']:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 滑杆：轨道与滑块由全局主题提供，这里只控宽度 */
+input[type='range'] {
+  width: 100%;
+}
+
+input[type='range']:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.mono {
+  font-family: var(--font-mono);
+}
+
+.persona {
+  line-height: 1.6;
+}
+
+.num {
+  width: 84px;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.num::-webkit-outer-spin-button,
+.num::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* ===== 步进器 ===== */
+.stepper {
+  display: inline-flex;
+  align-items: stretch;
+  width: fit-content;
+  height: 36px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: var(--ink-1000);
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+.stepper:focus-within {
+  border-color: var(--amber-a55);
+  box-shadow: 0 0 0 3px var(--amber-a12);
+}
+
+.stepper .step-input {
+  width: 76px;
+  height: 100%;
+  padding: 0 4px;
+  text-align: center;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.stepper .step-input:focus {
+  outline: none;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+.stepper .step-input::-webkit-outer-spin-button,
+.stepper .step-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.step-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+
+.step-btn:first-child {
+  border-right: 1px solid var(--line-1);
+}
+
+.step-btn:last-child {
+  border-left: 1px solid var(--line-1);
+}
+
+.step-btn:hover:not(:disabled) {
+  background: var(--ink-750);
+  color: var(--amber-300);
+}
+
+.step-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.hotkey-row {
   display: flex;
   gap: 10px;
   align-items: center;
-  margin-bottom: 18px;
   flex-wrap: wrap;
-  padding: 10px 16px;
-  background: rgba(15, 23, 42, 0.92);
-  backdrop-filter: blur(8px);
-  border: 1px solid #334155;
-  border-radius: 12px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
-.actions { display: flex; gap: 10px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
-.btn { background: #334155; border: none; color: #e2e8f0; border-radius: 9px; padding: 9px 18px; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
-.btn-check { color: #34d399; font-weight: 700; font-size: 16px; }
-.btn-spinner {
-  width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.25);
-  border-top-color: #fff; border-radius: 50%;
-  animation: spin .7s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg) } }
-.btn.primary { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; }
-.btn.warn { background: #7f1d1d; color: #fca5a5; }
-.btn:disabled { opacity: 0.5; }
-.ok { color: #34d399; font-size: 13px; }
-.bad-text { color: #f87171; font-size: 13px; }
-.preview-box { margin-top: 14px; background: #0f172a; border: 1px dashed #475569; border-radius: 10px; padding: 14px; color: #a5b4fc; font-size: 12px; white-space: pre-wrap; max-height: 320px; overflow: auto; }
-.profile-row { display: flex; gap: 8px; align-items: center; }
-.profile-row select { flex: 1; }
-.mini.danger { background: #7f1d1d; color: #fca5a5; }
-.mini.danger:hover:not(:disabled) { background: #991b1b; }
-.mini.danger:disabled { opacity: .35; cursor: not-allowed; }
 
-/* 弹窗 */
+.hotkey-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 180px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--r-sm);
+  background: var(--ink-1000);
+  border: 1px solid var(--line-2);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  user-select: none;
+  text-align: center;
+  transition: border-color var(--dur-fast), color var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+.hotkey-box:hover {
+  border-color: var(--line-3);
+}
+
+.hotkey-box.recording {
+  border-color: var(--amber-a55);
+  color: var(--amber-300);
+  box-shadow: 0 0 0 3px var(--amber-a12);
+  animation: hotkey-pulse 1.4s ease-in-out infinite;
+}
+
+.hotkey-box.bad {
+  border-color: color-mix(in srgb, var(--coral-400) 55%, transparent);
+  color: var(--coral-400);
+}
+
+@keyframes hotkey-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.key-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.key-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.mini {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--ink-750);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast);
+}
+
+.mini:hover:not(:disabled) {
+  background: var(--ink-700);
+  border-color: var(--line-3);
+  color: var(--text-1);
+}
+
+.mini:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.hint {
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-4);
+}
+
+.hint.bad {
+  color: var(--coral-400);
+}
+
+/* 语音朗读（TTS）：滑杆与数值样式 */
+.inline-val {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--amber-300);
+  font-variant-numeric: tabular-nums;
+}
+/* 语音下拉：压缩宽度（min-width:0 允许 flex 收缩），防止长语音名把「试听」按钮挤出可视区 */
+.profile-row .voice-select { min-width: 0; flex: 1 1 150px; }
+
+/* 试听按钮：播放中「均衡器」动画 */
+.voice-preview-btn { gap: 6px; }
+.eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
+.eq i { width: 3px; border-radius: 1px; background: var(--amber-300); animation: eq-bounce 0.9s ease-in-out infinite; }
+.eq i:nth-child(2) { animation-delay: 0.15s; }
+.eq i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes eq-bounce { 0%, 100% { height: 4px; } 50% { height: 12px; } }
+
+/* ===== 行内操作区 ===== */
+.actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+/* 状态提示：胶囊徽章 */
+.ok,
+.bad-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 20px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border-radius: var(--r-full);
+  border: 1px solid transparent;
+}
+
+.ok {
+  color: var(--jade-400);
+  background: var(--jade-a12);
+  border-color: color-mix(in srgb, var(--jade-400) 24%, transparent);
+}
+
+.bad-text {
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border-color: color-mix(in srgb, var(--coral-400) 24%, transparent);
+}
+
+.preview-box {
+  margin-top: 0;
+  max-height: 320px;
+  padding: 14px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--ink-1000);
+  border: 1px dashed var(--line-3);
+  border-radius: var(--r-md);
+}
+
+.profile-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.profile-row select {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+/* 与同排 36px 的下拉框对齐 */
+.profile-row .btn {
+  height: 36px;
+}
+
+.mini.danger {
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border-color: color-mix(in srgb, var(--coral-400) 32%, transparent);
+}
+
+.mini.danger:hover:not(:disabled) {
+  color: var(--coral-400);
+  background: color-mix(in srgb, var(--coral-400) 18%, transparent);
+  border-color: color-mix(in srgb, var(--coral-400) 52%, transparent);
+}
+
+.mini.danger:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ===== 弹窗 ===== */
 .modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,.55);
-  display: flex; align-items: center; justify-content: center; z-index: 100;
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--ink-1000) 72%, transparent);
+  backdrop-filter: blur(4px);
+  animation: fadeIn var(--dur) var(--ease-out);
 }
-.modal {
-  background: #1e293b; border: 1px solid #334155; border-radius: 14px;
-  padding: 24px; width: 380px; max-width: 90vw; box-shadow: 0 16px 48px rgba(0,0,0,.5);
-}
-.modal h3 { margin: 0 0 16px; color: #f1f5f9; font-size: 18px; }
-.modal .field { margin-bottom: 14px; }
-.modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
 
-/* Toast 提示 - 顶部居中醒目显示 */
+.modal {
+  width: 400px;
+  max-width: 100%;
+  padding: 22px;
+  background: linear-gradient(180deg, var(--ink-850), var(--ink-800));
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3), var(--hairline);
+  animation: modal-in var(--dur) var(--ease-spring);
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+.modal h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
+}
+
+.modal .field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 14px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+/* Toast 提示 - 顶部居中 */
 .toast {
-  position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
-  background: #065f46; color: #a7f3d0; padding: 14px 32px; border-radius: 12px;
-  font-size: 15px; font-weight: 600; box-shadow: 0 8px 32px rgba(0,0,0,.5);
-  z-index: 9999; animation: toast-in .3s ease;
-  border: 1px solid #34d399;
+  position: fixed;
+  top: 22px;
+  left: 50%;
+  z-index: 9999;
+  max-width: calc(100vw - 40px);
+  padding: 10px 18px;
+  transform: translateX(-50%);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--amber-100);
+  background: color-mix(in srgb, var(--ink-900) 92%, transparent);
+  border: 1px solid var(--amber-a35);
+  border-radius: var(--r-full);
+  box-shadow: var(--shadow-3), var(--hairline);
+  backdrop-filter: blur(12px);
+  animation: toast-in var(--dur) var(--ease-spring);
 }
+
 @keyframes toast-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(-16px) }
-  to { opacity: 1; transform: translateX(-50%) translateY(0) }
+  from { opacity: 0; transform: translateX(-50%) translateY(-12px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
+
+/* ===== 窄屏兜底：任何卡片都不横向溢出 ===== */
+@media (max-width: 720px) {
+  .page-header { align-items: flex-start; }
+  .global-actions { width: 100%; }
+  .card-header { padding: 13px 16px; }
+  .card-body { padding: 16px; }
+}
+
 </style>

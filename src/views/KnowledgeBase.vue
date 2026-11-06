@@ -1,21 +1,44 @@
 <template>
   <div class="kb-page">
-    <div class="kb-header">
-      <div>
-        <h2 class="kb-title">藏书阁</h2>
+    <header class="kb-header">
+      <div class="header-main">
+        <div class="eyebrow">
+          <AppIcon name="database" :size="12" />
+          知识库
+        </div>
+        <h1 class="kb-title">藏书阁</h1>
         <p class="kb-subtitle">创建知识库并上传文档，自动分块与向量化入库</p>
       </div>
-      <button class="btn-primary" @click="openCreate">＋ 新建知识库</button>
-    </div>
+      <div class="header-actions">
+        <button class="ui-btn ui-btn--primary" @click="openCreate">
+          <AppIcon name="plus" :size="14" />
+          新建知识库
+        </button>
+      </div>
+    </header>
 
-    <div v-if="loading" class="kb-empty">加载中…</div>
-    <div v-else-if="error" class="kb-error">{{ error }}</div>
-    <div v-else-if="kbs.length === 0" class="kb-empty">
-      还没有知识库，点击右上角「新建知识库」开始
+    <div v-if="loading" class="kb-state">
+      <span class="ui-spinner"></span>
+      <span>加载中…</span>
+    </div>
+    <div v-else-if="error" class="kb-error">
+      <span class="kb-error-icon"><AppIcon name="alert" :size="15" /></span>
+      <span>{{ error }}</span>
+    </div>
+    <div v-else-if="kbs.length === 0" class="ui-card kb-empty">
+      <div class="ui-empty">
+        <div class="ui-empty-icon"><AppIcon name="book" :size="24" /></div>
+        <div class="ui-empty-title">还没有知识库</div>
+        <p class="ui-empty-text">点击右上角「新建知识库」开始</p>
+        <button class="ui-btn ui-btn--primary kb-empty-cta" @click="openCreate">
+          <AppIcon name="plus" :size="14" />
+          新建知识库
+        </button>
+      </div>
     </div>
 
     <div v-else class="kb-grid">
-      <div
+      <article
         v-for="kb in kbs"
         :key="kb.id"
         class="kb-card"
@@ -23,64 +46,88 @@
       >
         <div class="card-top">
           <div class="card-top-left">
-            <span class="card-icon">📚</span>
+            <span class="card-icon"><AppIcon name="book" :size="15" /></span>
             <!-- 默认知识库不可修改、不可删除，仅显示标记 -->
             <span v-if="kb.id === DEFAULT_KB_ID" class="card-badge" title="默认知识库，存放聊天上传文件，不可修改、不可删除">
               默认
             </span>
           </div>
           <div v-if="kb.id !== DEFAULT_KB_ID" class="card-top-actions">
-            <button class="card-edit" title="编辑名称与描述" @click.stop="openEdit(kb)">✎</button>
-            <button class="card-del" title="删除知识库" @click.stop="confirmDelete(kb)">✕</button>
+            <button class="card-action" title="编辑名称与描述" @click.stop="openEdit(kb)">
+              <AppIcon name="edit" :size="14" />
+            </button>
+            <button class="card-action danger" title="删除知识库" @click.stop="confirmDelete(kb)">
+              <AppIcon name="x" :size="14" />
+            </button>
           </div>
         </div>
         <div class="card-name" :title="kb.name">{{ kb.name }}</div>
         <div class="card-desc">{{ kb.description || '暂无描述' }}</div>
         <div class="card-meta">
-          <span class="meta-item">📄 {{ kb.docCount }} 文档</span>
-          <span class="meta-item">🧩 {{ kb.chunkCount }} 分块</span>
+          <span class="meta-item">
+            <AppIcon name="file" :size="12" />
+            <span class="meta-num">{{ kb.docCount }}</span>
+            <span>文档</span>
+          </span>
+          <span class="meta-item">
+            <AppIcon name="layers" :size="12" />
+            <span class="meta-num">{{ kb.chunkCount }}</span>
+            <span>分块</span>
+          </span>
         </div>
-        <div class="card-time">{{ formatTime(kb.updatedAt) }}</div>
-      </div>
+        <div class="card-time">
+          <AppIcon name="clock" :size="12" />
+          <span>{{ formatTime(kb.updatedAt) }}</span>
+        </div>
+      </article>
     </div>
 
     <!-- 本地模型未下载：强制阻断弹窗（本地模式必须先下载模型，无「稍后再说」） -->
     <div v-if="showModelWarn" class="modal-mask block-mask">
-      <div class="modal">
-        <div class="modal-title">⚠️ 尚未下载 Embedding 模型</div>
+      <div class="modal modal--warn" role="dialog" aria-modal="true">
+        <div class="modal-head">
+          <span class="modal-icon"><AppIcon name="alert" :size="16" /></span>
+          <div class="modal-title">尚未下载 Embedding 模型</div>
+        </div>
         <p class="modal-notice">
           当前知识库使用本地 Embedding 模型，但检测到模型尚未下载，
           文档入库与语义检索无法工作。必须先完成模型下载才能使用知识库
           （自动按显卡和网络选择最优方案）。
         </p>
         <div class="modal-actions">
-          <button class="btn-primary" @click="goModelDownload">前往下载模型</button>
+          <button class="ui-btn ui-btn--primary" @click="goModelDownload">前往下载模型</button>
         </div>
       </div>
     </div>
 
     <!-- 新建知识库弹窗 -->
     <div v-if="showCreate" class="modal-mask" @click.self="showCreate = false">
-      <div class="modal">
-        <div class="modal-title">新建知识库</div>
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-head">
+          <span class="modal-icon"><AppIcon name="plus" :size="15" /></span>
+          <div class="modal-title">新建知识库</div>
+        </div>
         <input
           v-model="formName"
-          class="modal-input"
+          class="ui-input"
           placeholder="知识库名称（必填）"
           maxlength="50"
           @keyup.enter="submitCreate"
         />
         <textarea
           v-model="formDesc"
-          class="modal-textarea"
+          class="ui-textarea"
           placeholder="描述（可选）"
           rows="3"
           maxlength="200"
         ></textarea>
-        <div v-if="createError" class="modal-error">{{ createError }}</div>
+        <div v-if="createError" class="modal-error">
+          <AppIcon name="alert" :size="13" />
+          <span>{{ createError }}</span>
+        </div>
         <div class="modal-actions">
-          <button class="btn-ghost" @click="showCreate = false">取消</button>
-          <button class="btn-primary" :disabled="creating || !formName.trim()" @click="submitCreate">
+          <button class="ui-btn ui-btn--ghost" @click="showCreate = false">取消</button>
+          <button class="ui-btn ui-btn--primary" :disabled="creating || !formName.trim()" @click="submitCreate">
             {{ creating ? '创建中…' : '创建' }}
           </button>
         </div>
@@ -89,26 +136,32 @@
 
     <!-- 编辑知识库弹窗（仅修改名称/描述，默认知识库不可编辑） -->
     <div v-if="showEdit" class="modal-mask" @click.self="showEdit = false">
-      <div class="modal">
-        <div class="modal-title">编辑知识库</div>
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-head">
+          <span class="modal-icon"><AppIcon name="edit" :size="15" /></span>
+          <div class="modal-title">编辑知识库</div>
+        </div>
         <input
           v-model="editName"
-          class="modal-input"
+          class="ui-input"
           placeholder="知识库名称（必填）"
           maxlength="50"
           @keyup.enter="submitEdit"
         />
         <textarea
           v-model="editDesc"
-          class="modal-textarea"
+          class="ui-textarea"
           placeholder="描述（可选）"
           rows="3"
           maxlength="200"
         ></textarea>
-        <div v-if="editError" class="modal-error">{{ editError }}</div>
+        <div v-if="editError" class="modal-error">
+          <AppIcon name="alert" :size="13" />
+          <span>{{ editError }}</span>
+        </div>
         <div class="modal-actions">
-          <button class="btn-ghost" @click="showEdit = false">取消</button>
-          <button class="btn-primary" :disabled="editing || !editName.trim()" @click="submitEdit">
+          <button class="ui-btn ui-btn--ghost" @click="showEdit = false">取消</button>
+          <button class="ui-btn ui-btn--primary" :disabled="editing || !editName.trim()" @click="submitEdit">
             {{ editing ? '保存中…' : '保存' }}
           </button>
         </div>
@@ -121,6 +174,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { listKbs, createKb, updateKb, deleteKb } from '../api/kb'
+import AppIcon from '../components/AppIcon.vue'
 
 const router = useRouter()
 const api = window.electronAPI
@@ -262,146 +316,228 @@ onMounted(() => {
 
 <style scoped>
 .kb-page {
-  max-width: 1100px;
+  max-width: 1180px;
+  margin: 0 auto;
 }
 
+/* ===== 页头 ===== */
 .kb-header {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   justify-content: space-between;
-  margin-bottom: 24px;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+
+.header-main {
+  min-width: 0;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: var(--amber-500);
+  margin-bottom: 8px;
 }
 
 .kb-title {
   margin: 0;
-  font-size: 22px;
-  color: #f1f5f9;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--text-1);
 }
 
 .kb-subtitle {
-  margin: 6px 0 0;
+  margin: 7px 0 0;
   font-size: 13px;
-  color: #64748b;
+  color: var(--text-3);
 }
 
-.btn-primary {
-  background: #4f46e5;
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  padding: 9px 16px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: background 0.2s;
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
-.btn-primary:hover:not(:disabled) { background: #6366f1; }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.btn-ghost {
-  background: transparent;
-  color: #94a3b8;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 9px 16px;
-  font-size: 14px;
-  cursor: pointer;
+.header-actions .ui-btn {
+  height: 36px;
+  padding: 0 16px;
 }
-.btn-ghost:hover { color: #e2e8f0; border-color: #475569; }
 
-.kb-empty {
-  padding: 80px 0;
-  text-align: center;
-  color: #64748b;
-  font-size: 14px;
+/* ===== 加载 / 错误 ===== */
+.kb-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 72px 0;
+  font-size: 13px;
+  color: var(--text-3);
 }
 
 .kb-error {
-  padding: 20px;
-  color: #f87171;
-  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 15px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border: 1px solid rgba(233, 119, 110, 0.24);
+  border-radius: var(--r-md);
+}
+
+.kb-error-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+/* ===== 空状态 ===== */
+.kb-empty {
+  padding: 0;
+}
+
+.kb-empty .ui-empty {
+  padding: 64px 24px;
+}
+
+.kb-empty-cta {
+  margin-top: 4px;
+  height: 34px;
 }
 
 /* ===== 卡片网格 ===== */
 .kb-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
+  gap: 14px;
 }
 
 .kb-card {
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 12px;
-  padding: 16px;
-  cursor: pointer;
-  transition: all 0.2s;
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 15px 16px 13px;
+  background: linear-gradient(180deg, var(--ink-850), var(--ink-800));
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1), var(--hairline);
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out);
 }
+
 .kb-card:hover {
-  border-color: #4f46e5;
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  border-color: var(--line-2);
+  box-shadow: var(--shadow-2), var(--hairline);
+}
+
+.kb-card:focus-visible {
+  outline: 2px solid var(--amber-a55);
+  outline-offset: 2px;
 }
 
 .card-top {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-}
-
-.card-icon { font-size: 24px; }
-
-/* 默认知识库标记 */
-.card-badge {
-  background: rgba(79, 70, 229, 0.15);
-  color: #818cf8;
-  border: 1px solid rgba(79, 70, 229, 0.4);
-  border-radius: 6px;
-  font-size: 11px;
-  padding: 2px 8px;
-  cursor: default;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
 }
 
 .card-top-left {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  color: var(--amber-400);
+  background: var(--amber-a12);
+  border: 1px solid var(--amber-a20);
+}
+
+/* 默认知识库标记 */
+.card-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-full);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--amber-300);
+  background: var(--amber-a12);
+  border: 1px solid var(--amber-a20);
+  cursor: default;
+  white-space: nowrap;
 }
 
 .card-top-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+  opacity: 0.5;
+  transition: opacity var(--dur);
 }
 
-.card-edit {
-  background: transparent;
-  border: none;
-  color: #475569;
-  font-size: 14px;
-  cursor: pointer;
-  padding: 4px 6px;
-  border-radius: 6px;
+.kb-card:hover .card-top-actions,
+.card-top-actions:focus-within {
+  opacity: 1;
 }
-.card-edit:hover { color: #818cf8; background: rgba(79, 70, 229, 0.1); }
 
-.card-del {
+.card-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-4);
   background: transparent;
-  border: none;
-  color: #475569;
-  font-size: 14px;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
   cursor: pointer;
-  padding: 4px 6px;
-  border-radius: 6px;
+  transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
 }
-.card-del:hover { color: #f87171; background: rgba(248, 113, 113, 0.1); }
+
+.card-action:hover {
+  color: var(--amber-300);
+  background: var(--amber-a08);
+  border-color: var(--amber-a20);
+}
+
+.card-action.danger:hover {
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border-color: rgba(233, 119, 110, 0.3);
+}
 
 .card-name {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
-  color: #e2e8f0;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -409,8 +545,9 @@ onMounted(() => {
 
 .card-desc {
   font-size: 12px;
-  color: #64748b;
-  min-height: 32px;
+  line-height: 1.6;
+  color: var(--text-3);
+  min-height: 38px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -419,81 +556,159 @@ onMounted(() => {
 
 .card-meta {
   display: flex;
-  gap: 12px;
-  font-size: 12px;
-  color: #94a3b8;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-full);
+  font-variant-numeric: tabular-nums;
+}
+
+.meta-item .app-icon {
+  color: var(--text-4);
+}
+
+.meta-num {
+  font-weight: 600;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
 }
 
 .card-time {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 6px;
   font-size: 11px;
-  color: #475569;
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ===== 弹窗 ===== */
 .modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  z-index: 100;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 100;
+  padding: 24px;
+  background: rgba(6, 8, 11, 0.68);
+  backdrop-filter: blur(2px);
+  animation: fadeIn var(--dur) var(--ease-out);
 }
 
 /* 强制阻断层：更高透明度与层级，遮住「新建知识库」等全部操作 */
 .block-mask {
-  background: rgba(0, 0, 0, 0.75);
+  background: rgba(6, 8, 11, 0.82);
   z-index: 200;
 }
 
 .modal {
-  width: 400px;
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 12px;
-  padding: 20px;
+  width: min(420px, 100%);
   display: flex;
   flex-direction: column;
   gap: 12px;
+  padding: 22px;
+  background: rgba(16, 19, 26, 0.94);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3), var(--hairline);
+  backdrop-filter: blur(16px);
+  animation: fadeUp var(--dur) var(--ease-out);
+}
+
+.modal--warn {
+  width: min(440px, 100%);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.modal-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  color: var(--amber-400);
+  background: var(--amber-a12);
+  border: 1px solid var(--amber-a20);
 }
 
 .modal-title {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
-  color: #f1f5f9;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
 }
-
-.modal-input,
-.modal-textarea {
-  background: #0f172a;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 10px 12px;
-  color: #e2e8f0;
-  font-size: 14px;
-  outline: none;
-  font-family: inherit;
-  resize: vertical;
-}
-.modal-input:focus,
-.modal-textarea:focus { border-color: #4f46e5; }
 
 .modal-error {
-  color: #f87171;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
+  line-height: 1.5;
+  color: var(--coral-400);
 }
 
 .modal-notice {
   margin: 0;
   font-size: 13px;
-  line-height: 1.7;
-  color: #94a3b8;
+  line-height: 1.75;
+  color: var(--text-3);
 }
 
 .modal-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
   margin-top: 4px;
+}
+
+@media (max-width: 980px) {
+  .kb-grid {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .kb-header {
+    align-items: flex-start;
+  }
+
+  .kb-title {
+    font-size: 23px;
+  }
+
+  .header-actions,
+  .header-actions .ui-btn {
+    width: 100%;
+  }
+
+  .kb-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .card-desc {
+    min-height: 0;
+  }
 }
 </style>

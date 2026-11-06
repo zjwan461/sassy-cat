@@ -1,34 +1,57 @@
 <template>
   <div class="mcp-page">
-    <div class="mcp-header">
-      <div>
+    <header class="mcp-header">
+      <div class="head-main">
+        <div class="eyebrow">MCP · 服务注册</div>
         <h2 class="mcp-title">MCP</h2>
-        <p class="mcp-subtitle">MCP 服务的注册与发现 🔌 已启用的 Server 工具将自动装配给本喵</p>
+        <p class="mcp-subtitle">MCP 服务的注册与发现 · 已启用的 Server 工具将自动装配给本喵</p>
       </div>
       <div class="header-actions">
-        <button class="btn-primary" @click="openCreate">＋ 注册</button>
-        <button class="btn-secondary" @click="openImport">⇪ 导入</button>
-        <button class="btn-secondary" :disabled="!servers.length" @click="doExport">⤓ 导出</button>
+        <button class="btn-primary" @click="openCreate">
+          <AppIcon name="plus" :size="14" />
+          注册
+        </button>
+        <button class="btn-secondary" @click="openImport">
+          <AppIcon name="upload" :size="14" />
+          导入
+        </button>
+        <button class="btn-secondary" :disabled="!servers.length" @click="doExport">
+          <AppIcon name="download" :size="14" />
+          导出
+        </button>
         <button class="btn-refresh" :disabled="loading" @click="load">
-          <span :class="{ spinning: loading }">⟳</span> 刷新
+          <AppIcon name="refresh" :size="14" :class="{ spinning: loading }" />
+          刷新
         </button>
       </div>
-    </div>
+    </header>
 
-    <div v-if="loading" class="mcp-empty">加载中…</div>
-    <div v-else-if="error" class="mcp-error">{{ error }}</div>
-    <div v-else-if="servers.length === 0" class="mcp-empty">
-      还没有注册任何 MCP Server，点击右上角「＋ 注册」添加第一个吧
+    <div v-if="loading" class="state-block">
+      <span class="ui-spinner"></span>
+      <span>加载中…</span>
+    </div>
+    <div v-else-if="error" class="mcp-error">
+      <AppIcon name="alert" :size="15" />
+      <span>{{ error }}</span>
+    </div>
+    <div v-else-if="servers.length === 0" class="ui-empty">
+      <div class="ui-empty-icon"><AppIcon name="plug" :size="24" /></div>
+      <div class="ui-empty-title">还没有注册任何 MCP Server</div>
+      <p class="ui-empty-text">点击右上角「注册」添加第一个吧</p>
     </div>
 
     <div v-else class="mcp-grid">
       <div v-for="server in servers" :key="server.name" class="mcp-card" :class="{ disabled: !server.enabled }">
         <div class="card-top">
-          <span class="card-icon">🔌</span>
+          <span class="card-icon"><AppIcon name="plug" :size="17" /></span>
           <div class="card-top-right">
-            <span class="card-badge" :class="{ off: !server.enabled }">{{ server.enabled ? '已启用' : '已停用' }}</span>
+            <span class="card-badge" :class="{ off: !server.enabled }">
+              <span class="badge-dot"></span>{{ server.enabled ? '已启用' : '已停用' }}
+            </span>
             <span class="transport-tag" :title="transportTitle(server.transport)">{{ transportLabel(server.transport) }}</span>
-            <button class="card-delete" title="删除该注册" @click="askDelete(server)">✕</button>
+            <button class="card-delete" title="删除该注册" @click="askDelete(server)">
+              <AppIcon name="trash" :size="14" />
+            </button>
           </div>
         </div>
         <div class="card-name" :title="server.name">{{ server.displayName || server.name }}</div>
@@ -36,7 +59,7 @@
         <div class="card-target" :title="server.target">{{ server.target || '—' }}</div>
         <div class="card-test" v-if="server.lastTest">
           <template v-if="server.lastTest.ok">
-            <span class="test-ok">✓ 连通</span>
+            <span class="test-ok"><AppIcon name="check" :size="12" />连通</span>
             <span class="test-meta">
               {{ server.lastTest.toolCount }} 个工具 · {{ server.lastTest.latencyMs }}ms
               <span v-if="server.lastTest.mismatch" class="test-mismatch" :title="`注册为 ${server.transport}，实际以 ${server.lastTest.usedTransport} 连通，建议编辑改为该传输`">
@@ -45,7 +68,7 @@
             </span>
           </template>
           <template v-else>
-            <span class="test-fail">✗ 不可达</span>
+            <span class="test-fail"><AppIcon name="alert" :size="12" />不可达</span>
             <span class="test-meta" :title="server.lastTest.error">{{ server.lastTest.error }}</span>
           </template>
           <span class="test-time">{{ formatTime(server.lastTest.at) }}</span>
@@ -53,16 +76,26 @@
         <div class="card-time" v-else>尚未测试连接</div>
         <div class="card-actions">
           <button class="btn-tiny" :disabled="testing === server.name" @click="doTest(server)">
-            {{ testing === server.name ? '测试中…' : '⚡ 测试' }}
+            <AppIcon name="zap" :size="13" />
+            {{ testing === server.name ? '测试中…' : '测试' }}
           </button>
           <button
             class="btn-tiny"
             :disabled="!(server.tools && server.tools.length)"
             :title="server.tools && server.tools.length ? `查看已发现的 ${server.tools.length} 个工具` : '尚未测试发现工具'"
             @click="openTools(server)"
-          >🔧 工具{{ server.tools && server.tools.length ? ` (${server.tools.length})` : '' }}</button>
-          <button class="btn-tiny" @click="openEdit(server)">✎ 编辑</button>
-          <button class="btn-tiny" @click="toggleEnabled(server)">{{ server.enabled ? '⏸ 停用' : '▶ 启用' }}</button>
+          >
+            <AppIcon name="wrench" :size="13" />
+            工具{{ server.tools && server.tools.length ? ` (${server.tools.length})` : '' }}
+          </button>
+          <button class="btn-tiny" @click="openEdit(server)">
+            <AppIcon name="edit" :size="13" />
+            编辑
+          </button>
+          <button class="btn-tiny" @click="toggleEnabled(server)">
+            <AppIcon :name="server.enabled ? 'stop' : 'play'" :size="13" />
+            {{ server.enabled ? '停用' : '启用' }}
+          </button>
         </div>
       </div>
     </div>
@@ -70,7 +103,10 @@
     <!-- 注册/编辑弹窗 -->
     <div v-if="showForm" class="modal-mask" @click.self="closeForm">
       <div class="modal modal-wide">
-        <div class="modal-title">{{ editingName ? '✎ 编辑 MCP Server' : '＋ 注册 MCP Server' }}</div>
+        <div class="modal-title">
+          <AppIcon :name="editingName ? 'edit' : 'plus'" :size="16" />
+          {{ editingName ? '编辑 MCP Server' : '注册 MCP Server' }}
+        </div>
         <div class="form-grid">
           <div class="form-row">
             <label class="form-label">标识名 *</label>
@@ -141,7 +177,10 @@
     <!-- 导入弹窗 -->
     <div v-if="showImport" class="modal-mask" @click.self="showImport = false">
       <div class="modal modal-wide">
-        <div class="modal-title">⇪ 导入 MCP 配置</div>
+        <div class="modal-title">
+          <AppIcon name="upload" :size="16" />
+          导入 MCP 配置
+        </div>
         <textarea
           v-model="importText"
           class="modal-input form-area"
@@ -166,7 +205,10 @@
     <!-- 删除确认弹窗 -->
     <div v-if="deleteTarget" class="modal-mask" @click.self="deleteTarget = null">
       <div class="modal">
-        <div class="modal-title danger-title">⚠️ 删除 MCP Server</div>
+        <div class="modal-title danger-title">
+          <AppIcon name="alert" :size="16" />
+          删除 MCP Server
+        </div>
         <p class="modal-notice">
           确定要删除「{{ deleteTarget.displayName || deleteTarget.name }}」的注册信息吗？仅移除登记配置，不会删除任何本地程序。
         </p>
@@ -183,7 +225,10 @@
     <!-- 已发现工具列表弹窗（来自注册表持久化数据，无需重新建联） -->
     <div v-if="toolsViewer" class="modal-mask" @click.self="toolsViewer = null">
       <div class="modal modal-wide">
-        <div class="modal-title">🔧 工具列表 — {{ toolsViewer.displayName || toolsViewer.name }}</div>
+        <div class="modal-title">
+          <AppIcon name="wrench" :size="16" />
+          工具列表 — {{ toolsViewer.displayName || toolsViewer.name }}
+        </div>
         <div class="tools-viewer-meta">
           发现于 {{ formatTime(toolsViewer.toolsDiscoveredAt) }}（来自最近一次连接测试的缓存结果）
         </div>
@@ -196,7 +241,8 @@
         <div class="modal-actions">
           <button class="btn-ghost" @click="toolsViewer = null">关闭</button>
           <button class="btn-primary" :disabled="testing === toolsViewer.name" @click="refreshTools">
-            {{ testing === toolsViewer.name ? '发现中…' : '⚡ 重新发现' }}
+            <AppIcon name="refresh" :size="14" />
+            {{ testing === toolsViewer.name ? '发现中…' : '重新发现' }}
           </button>
         </div>
       </div>
@@ -206,7 +252,8 @@
     <div v-if="testResult" class="modal-mask" @click.self="testResult = null">
       <div class="modal modal-wide">
         <div class="modal-title" :class="{ 'danger-title': !testResult.ok }">
-          {{ testResult.ok ? '✓ 连接成功' : '✗ 连接失败' }} — {{ testTargetName }}
+          <AppIcon :name="testResult.ok ? 'check' : 'x'" :size="16" />
+          {{ testResult.ok ? '连接成功' : '连接失败' }} — {{ testTargetName }}
         </div>
         <template v-if="testResult.ok">
           <div class="test-summary">
@@ -240,6 +287,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { listServers, createServer, updateServer, deleteServer, importServers, testServer, exportServers } from '../api/mcp'
+import AppIcon from '../components/AppIcon.vue'
 
 const TRANSPORTS = [
   { value: 'stdio', label: 'stdio（本地进程）' },
@@ -519,230 +567,359 @@ onMounted(load)
 
 <style scoped>
 .mcp-page {
-  padding: 24px;
-  height: 100%;
-  overflow-y: auto;
-  color: #e2e8f0;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  color: var(--text-2);
+  animation: fadeIn var(--dur-slow) var(--ease-out) both;
 }
 
+/* ===== 页头 ===== */
 .mcp-header {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   justify-content: space-between;
-  margin-bottom: 20px;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+
+.head-main {
+  min-width: 0;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: var(--amber-500);
+  margin-bottom: 8px;
 }
 
 .mcp-title {
-  font-size: 22px;
+  margin: 0;
+  font-size: 26px;
   font-weight: 700;
-  margin: 0 0 4px;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  color: var(--text-1);
 }
 
 .mcp-subtitle {
+  margin: 7px 0 0;
   font-size: 13px;
-  color: #94a3b8;
-  margin: 0;
+  color: var(--text-3);
 }
 
 .header-actions {
   display: flex;
+  align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* ===== 按钮 ===== */
+.btn-primary,
+.btn-secondary,
+.btn-refresh,
+.btn-ghost,
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-2);
+  background: var(--ink-750);
+  color: var(--text-1);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast),
+    color var(--dur-fast), box-shadow var(--dur-fast), filter var(--dur-fast),
+    transform var(--dur-fast);
+}
+
+.btn-primary {
+  background: var(--amber-grad);
+  border-color: transparent;
+  color: var(--amber-ink);
+  font-weight: 650;
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow: var(--shadow-amber), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--line-2);
+  color: var(--text-2);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--line-3);
+  color: var(--text-1);
 }
 
 .btn-refresh {
-  background: #1e293b;
-  color: #cbd5e1;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 7px 14px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
+  background: transparent;
+  border-color: var(--line-2);
+  color: var(--text-3);
 }
-.btn-refresh:hover { border-color: #475569; background: #263449; }
-.btn-refresh:disabled { opacity: 0.6; cursor: default; }
-.spinning { display: inline-block; animation: spin 1s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
-.btn-primary {
-  background: #4f46e5;
-  color: #fff;
-  border: 1px solid #4f46e5;
-  border-radius: 8px;
-  padding: 7px 14px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
+.btn-refresh:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--line-3);
+  color: var(--text-1);
 }
-.btn-primary:hover { background: #6366f1; border-color: #6366f1; }
-.btn-primary:disabled { opacity: 0.6; cursor: default; }
-
-.btn-secondary {
-  background: #1e293b;
-  color: #cbd5e1;
-  border: 1px solid #475569;
-  border-radius: 8px;
-  padding: 7px 14px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.btn-secondary:hover { border-color: #64748b; background: #263449; }
-.btn-secondary:disabled { opacity: 0.6; cursor: default; }
 
 .btn-ghost {
   background: transparent;
-  color: #94a3b8;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 7px 14px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
+  border-color: transparent;
+  color: var(--text-2);
 }
-.btn-ghost:hover { border-color: #475569; color: #cbd5e1; }
+
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-1);
+}
 
 .btn-danger {
-  background: rgba(239, 68, 68, 0.15);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  border-radius: 8px;
-  padding: 7px 14px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
+  background: var(--coral-a12);
+  border-color: rgba(233, 119, 110, 0.32);
+  color: var(--coral-400);
+  font-weight: 600;
 }
-.btn-danger:hover { background: rgba(239, 68, 68, 0.3); }
-.btn-danger:disabled { opacity: 0.6; cursor: default; }
 
-.mcp-empty {
-  padding: 60px 0;
-  text-align: center;
-  color: #64748b;
-  font-size: 14px;
+.btn-danger:hover:not(:disabled) {
+  background: rgba(233, 119, 110, 0.2);
+  border-color: rgba(233, 119, 110, 0.55);
+}
+
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.btn-refresh:disabled,
+.btn-ghost:disabled,
+.btn-danger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary:active:not(:disabled),
+.btn-secondary:active:not(:disabled),
+.btn-refresh:active:not(:disabled),
+.btn-ghost:active:not(:disabled),
+.btn-danger:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+/* ===== 状态 ===== */
+.state-block {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 56px 0;
+  font-size: 13px;
+  color: var(--text-3);
 }
 
 .mcp-error {
-  padding: 16px;
-  background: rgba(251, 113, 133, 0.1);
-  border: 1px solid rgba(251, 113, 133, 0.35);
-  color: #fb7185;
-  border-radius: 8px;
-  font-size: 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px 14px;
   margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border: 1px solid rgba(233, 119, 110, 0.3);
+  border-radius: var(--r-md);
+}
+
+.mcp-error :deep(.app-icon) {
+  margin-top: 2px;
 }
 
 /* ===== 卡片网格 ===== */
 .mcp-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
 }
 
 .mcp-card {
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 12px;
-  padding: 16px;
-  transition: all 0.2s;
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
+  padding: 16px 18px 14px;
+  background: linear-gradient(180deg, var(--ink-850), var(--ink-800));
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1), var(--hairline);
+  transition: border-color var(--dur) var(--ease-out), transform var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out), opacity var(--dur);
 }
+
 .mcp-card:hover {
-  border-color: #38bdf8;
-  box-shadow: 0 6px 18px rgba(56, 189, 248, 0.12);
+  border-color: var(--line-2);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-2), var(--hairline);
 }
-.mcp-card.disabled { opacity: 0.6; }
+
+.mcp-card.disabled {
+  opacity: 0.62;
+}
+
+.mcp-card.disabled:hover {
+  opacity: 0.85;
+}
 
 .card-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
 }
 
 .card-top-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
 }
 
 .card-icon {
-  font-size: 26px;
-  width: 44px;
-  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(56, 189, 248, 0.12);
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
   border-radius: 10px;
+  color: var(--amber-400);
+  background: var(--amber-a12);
+  border: 1px solid var(--amber-a20);
 }
 
 .card-delete {
-  width: 24px;
-  height: 24px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  padding: 0;
+  color: var(--text-4);
   background: transparent;
   border: none;
-  border-radius: 6px;
-  color: #475569;
-  font-size: 14px;
+  border-radius: var(--r-xs);
   cursor: pointer;
   opacity: 0;
-  transition: all 0.2s;
+  transition: opacity var(--dur-fast), background var(--dur-fast), color var(--dur-fast);
 }
-.mcp-card:hover .card-delete { opacity: 1; }
-.card-delete:hover { background: rgba(239, 68, 68, 0.18); color: #f87171; }
+
+.mcp-card:hover .card-delete,
+.mcp-card:focus-within .card-delete {
+  opacity: 1;
+}
+
+.card-delete:hover {
+  background: var(--coral-a12);
+  color: var(--coral-400);
+}
 
 .card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
   font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(52, 211, 153, 0.15);
-  color: #34d399;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: var(--jade-400);
+  background: var(--jade-a12);
+  border: 1px solid rgba(126, 203, 161, 0.24);
+  border-radius: var(--r-full);
 }
+
 .card-badge.off {
-  background: rgba(100, 116, 139, 0.2);
-  color: #94a3b8;
+  color: var(--text-3);
+  background: rgba(255, 255, 255, 0.045);
+  border-color: var(--line-1);
+}
+
+.badge-dot {
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .transport-tag {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(56, 189, 248, 0.12);
-  color: #38bdf8;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: var(--azure-400);
+  background: var(--azure-a12);
+  border: 1px solid rgba(143, 182, 232, 0.24);
+  border-radius: var(--r-full);
 }
 
 .card-name {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
-  color: #f1f5f9;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .card-desc {
-  font-size: 12px;
-  color: #94a3b8;
-  line-height: 1.5;
-  height: 36px;
-  overflow: hidden;
   display: -webkit-box;
+  min-height: 38px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-3);
+  overflow: hidden;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
 
 .card-target {
-  font-size: 11px;
-  color: #64748b;
-  font-family: Consolas, Menlo, monospace;
-  background: #0f172a;
-  border-radius: 6px;
-  padding: 6px 8px;
+  padding: 5px 8px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+  background: var(--ink-1000);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -751,100 +928,192 @@ onMounted(load)
 .card-test {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
   font-size: 12px;
-  overflow: hidden;
 }
-.test-ok { color: #34d399; flex-shrink: 0; }
-.test-mismatch { color: #fbbf24; }
-.test-fail { color: #f87171; flex-shrink: 0; }
+
+.test-ok,
+.test-fail {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: var(--r-full);
+}
+
+.test-ok {
+  color: var(--jade-400);
+  background: var(--jade-a12);
+  border: 1px solid rgba(126, 203, 161, 0.24);
+}
+
+.test-fail {
+  color: var(--coral-400);
+  background: var(--coral-a12);
+  border: 1px solid rgba(233, 119, 110, 0.24);
+}
+
+.test-mismatch {
+  color: var(--warn-400);
+}
+
 .test-meta {
-  color: #94a3b8;
+  flex: 1;
+  min-width: 0;
+  color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
 }
-.test-time { color: #475569; font-size: 11px; flex-shrink: 0; }
+
+/* 失败信息通常很长：让它独占一行（时间靠右留在首行），
+   不再把「不可达 + 错误 + 时间」挤成一条 */
+.test-fail + .test-meta {
+  flex: 1 1 100%;
+  order: 3;
+}
+
+.test-time {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+}
 
 .card-time {
-  font-size: 11px;
-  color: #475569;
+  font-size: 11.5px;
+  color: var(--text-4);
 }
 
 .card-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  border-top: 1px solid #293548;
+  margin-top: 2px;
   padding-top: 10px;
+  border-top: 1px solid var(--line-1);
 }
+
 .btn-tiny {
-  background: transparent;
-  border: 1px solid #334155;
-  color: #cbd5e1;
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   flex: 0 0 auto;
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast);
 }
-.btn-tiny:hover { border-color: #4f46e5; color: #a5b4fc; }
-.btn-tiny:disabled { opacity: 0.5; cursor: default; }
+
+.btn-tiny:hover:not(:disabled) {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--line-3);
+}
+
+.btn-tiny:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 
 /* ===== 弹窗 ===== */
 .modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  z-index: 50;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  padding: 24px;
+  background: rgba(6, 8, 11, 0.68);
+  backdrop-filter: blur(8px);
+  animation: fadeIn var(--dur) var(--ease-out);
 }
 
 .modal {
-  width: 420px;
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 14px;
-  padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  width: 420px;
+  max-width: 100%;
   max-height: 86vh;
+  padding: 22px;
   overflow-y: auto;
+  background: rgba(16, 19, 26, 0.96);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  backdrop-filter: blur(18px);
+  animation: fadeUp var(--dur) var(--ease-out);
 }
-.modal-wide { width: 560px; }
+
+.modal-wide {
+  width: 600px;
+}
 
 .modal-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #f1f5f9;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
 }
-.danger-title { color: #f87171; }
+
+.danger-title {
+  color: var(--coral-400);
+}
 
 .modal-input {
-  background: #0f172a;
-  color: #e2e8f0;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 9px 12px;
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.2s;
   width: 100%;
-  box-sizing: border-box;
+  padding: 9px 11px;
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--bg-input);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  outline: none;
+  transition: border-color var(--dur-fast), background var(--dur-fast), box-shadow var(--dur-fast);
 }
-.modal-input:focus { border-color: #4f46e5; }
-.modal-input:disabled { opacity: 0.6; }
+
+.modal-input::placeholder {
+  color: var(--text-4);
+}
+
+.modal-input:hover:not(:disabled) {
+  border-color: var(--line-3);
+}
+
+.modal-input:focus {
+  border-color: var(--amber-a55);
+  background: var(--ink-900);
+  box-shadow: 0 0 0 3px var(--amber-a12);
+}
+
+.modal-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .form-area {
-  font-family: Consolas, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
+  line-height: 1.65;
   resize: vertical;
-  line-height: 1.6;
 }
 
 .form-grid {
@@ -852,50 +1121,85 @@ onMounted(load)
   grid-template-columns: 1fr 1fr;
   gap: 10px 14px;
 }
-.form-row { display: flex; flex-direction: column; gap: 4px; }
-.form-row.full { grid-column: 1 / -1; }
-.form-label { font-size: 12px; color: #94a3b8; }
 
-.transport-picker { display: flex; gap: 8px; }
-.transport-opt {
-  background: #0f172a;
-  border: 1px solid #334155;
-  color: #94a3b8;
-  border-radius: 8px;
-  padding: 7px 12px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
 }
-.transport-opt:hover { border-color: #475569; color: #cbd5e1; }
-.transport-opt.picked { border-color: #4f46e5; color: #a5b4fc; background: rgba(79, 70, 229, 0.12); }
+
+.form-row.full {
+  grid-column: 1 / -1;
+}
+
+.form-label {
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+}
+
+.transport-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.transport-opt {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--text-3);
+  background: var(--ink-1000);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: border-color var(--dur-fast), color var(--dur-fast), background var(--dur-fast);
+}
+
+.transport-opt:hover {
+  color: var(--text-2);
+  border-color: var(--line-3);
+}
+
+.transport-opt.picked {
+  color: var(--amber-200);
+  background: var(--amber-a12);
+  border-color: var(--amber-a55);
+}
 
 .modal-hint {
-  font-size: 11px;
-  color: #64748b;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-4);
 }
 
 .modal-notice {
   margin: 0;
   font-size: 13px;
-  color: #cbd5e1;
-  line-height: 1.6;
+  line-height: 1.75;
+  color: var(--text-2);
 }
 
 .modal-error {
   font-size: 12px;
-  color: #f87171;
+  line-height: 1.6;
+  color: var(--coral-400);
 }
 
 .import-overwrite {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: #cbd5e1;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-2);
   cursor: pointer;
 }
-.import-overwrite input { accent-color: #4f46e5; }
+
+.import-overwrite input {
+  accent-color: var(--amber-400);
+}
 
 .modal-actions {
   display: flex;
@@ -910,43 +1214,95 @@ onMounted(load)
   flex-wrap: wrap;
   gap: 6px 18px;
   font-size: 12px;
-  color: #94a3b8;
+  line-height: 1.6;
+  color: var(--text-3);
 }
+
 .tool-list {
-  border-top: 1px solid #293548;
-  padding-top: 10px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
   max-height: 320px;
+  padding-top: 6px;
   overflow-y: auto;
+  border-top: 1px solid var(--line-1);
 }
+
 .tool-list-title {
-  font-size: 13px;
-  color: #cbd5e1;
+  padding: 5px 2px 6px;
+  font-size: 12.5px;
   font-weight: 600;
+  color: var(--text-2);
 }
+
 .tool-item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  background: #0f172a;
-  border-radius: 8px;
-  padding: 8px 10px;
+  gap: 3px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--line-1);
 }
+
+.tool-item:last-child {
+  border-bottom: none;
+}
+
 .tool-name {
+  font-family: var(--font-mono);
   font-size: 12px;
-  font-family: Consolas, Menlo, monospace;
-  color: #38bdf8;
+  color: var(--text-1);
+  word-break: break-all;
 }
+
 .tool-desc {
-  font-size: 11px;
-  color: #94a3b8;
-  line-height: 1.5;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-3);
 }
-.test-error-text { color: #f87171; }
+
+.test-error-text {
+  color: var(--coral-400);
+}
+
 .tools-viewer-meta {
-  font-size: 12px;
-  color: #64748b;
+  font-size: 11.5px;
+  color: var(--text-4);
+}
+
+.mcp-empty {
+  padding: 20px 0;
+  font-size: 12.5px;
+  color: var(--text-4);
+  text-align: center;
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 980px) {
+  .mcp-header {
+    align-items: flex-start;
+  }
+
+  .mcp-title {
+    font-size: 23px;
+  }
+}
+
+@media (max-width: 720px) {
+  .mcp-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .header-actions {
+    width: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .modal {
+    padding: 18px;
+  }
 }
 </style>

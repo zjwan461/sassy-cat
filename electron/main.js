@@ -158,7 +158,8 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     // 窗口底色与界面一致，避免页面渲染前的白色闪屏（渲染层有全屏 loading 兜底）
-    backgroundColor: '#0f172a',
+    // 与 styles/tokens.css 的 --ink-950 保持一致
+    backgroundColor: '#090C11',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

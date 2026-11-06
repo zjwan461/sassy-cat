@@ -16,7 +16,7 @@
     <template v-else>
       <div class="conv-item-main">
         <div class="conv-title-row">
-          <span v-if="item.pinned" class="conv-pin-mark" title="已置顶">📌</span>
+          <span v-if="item.pinned" class="conv-pin-mark" title="已置顶"></span>
           <div class="conv-title">{{ item.title || '新对话' }}</div>
         </div>
         <div class="conv-time">{{ relTime(item.updatedAt) }}</div>
@@ -27,9 +27,15 @@
           :class="{ pinned: item.pinned }"
           :title="item.pinned ? '取消置顶' : '置顶'"
           @click.stop="$emit('pin-toggle')"
-        >📌</button>
-        <button class="conv-action-btn" title="重命名" @click.stop="$emit('rename-start')">✎</button>
-        <button class="conv-action-btn del" title="删除" @click.stop="$emit('delete')">🗑</button>
+        >
+          <AppIcon name="pin" :size="12" />
+        </button>
+        <button class="conv-action-btn" title="重命名" @click.stop="$emit('rename-start')">
+          <AppIcon name="edit" :size="12" />
+        </button>
+        <button class="conv-action-btn del" title="删除" @click.stop="$emit('delete')">
+          <AppIcon name="trash" :size="12" />
+        </button>
       </div>
     </template>
   </div>
@@ -37,6 +43,7 @@
 
 <script setup>
 import { nextTick, ref, watch } from 'vue'
+import AppIcon from './AppIcon.vue'
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -72,30 +79,171 @@ function relTime(ts) {
 </script>
 
 <style scoped>
-.conv-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s; }
-.conv-item:hover { background: #273449; }
-.conv-item.active { background: #4f46e533; outline: 1px solid #6366f1; }
-.conv-item-main { flex: 1; min-width: 0; }
-.conv-title-row { display: flex; align-items: center; gap: 3px; min-width: 0; }
-.conv-pin-mark { flex-shrink: 0; font-size: 10px; line-height: 1; }
-.conv-title { font-size: 12.5px; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.conv-time { font-size: 10px; color: #64748b; margin-top: 1px; }
-.conv-actions { display: none; flex-shrink: 0; gap: 2px; }
-.conv-item:hover .conv-actions { display: flex; }
-/* 置顶项常驻操作区：📌 高亮，"取消置顶"无需先 hover 才能发现 */
-.conv-item.pinned .conv-actions { display: flex; }
-.conv-action-btn { border: none; background: transparent; color: #94a3b8; cursor: pointer; font-size: 12px; padding: 4px; border-radius: 4px; }
-.conv-action-btn:hover { background: #334155; color: #e2e8f0; }
-.conv-action-btn.pin { font-size: 11px; filter: grayscale(1); opacity: 0.75; }
-.conv-action-btn.pin:hover { filter: none; opacity: 1; }
-.conv-action-btn.pin.pinned { filter: none; opacity: 1; }
-.conv-action-btn.del:hover { color: #f87171; }
-.conv-rename-input { flex: 1; min-width: 0; background: #0f172a; border: 1px solid #6366f1; border-radius: 6px; color: #e2e8f0; padding: 4px 8px; font-size: 13px; font-family: inherit; }
-.conv-rename-input:focus { outline: none; }
-/* 窄屏折叠侧栏：只留图标 */
+.conv-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.conv-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.conv-item.active {
+  background: linear-gradient(90deg, rgba(239, 168, 76, 0.14), rgba(239, 168, 76, 0.02));
+  box-shadow: inset 0 0 0 1px rgba(239, 168, 76, 0.13);
+}
+
+.conv-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 2px;
+  height: 14px;
+  border-radius: 0 2px 2px 0;
+  background: var(--amber-grad);
+  transform: translateY(-50%);
+  box-shadow: 0 0 8px rgba(239, 168, 76, 0.6);
+}
+
+.conv-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.conv-title-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+/* 置顶用一个小圆点标记，比 📌 安静得多 */
+.conv-pin-mark {
+  width: 4px;
+  height: 4px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--amber-400);
+  box-shadow: 0 0 0 2px var(--amber-a12);
+}
+
+.conv-title {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color var(--dur-fast);
+}
+
+.conv-item:hover .conv-title {
+  color: var(--text-1);
+}
+
+.conv-item.active .conv-title {
+  color: var(--amber-200);
+  font-weight: 500;
+}
+
+.conv-time {
+  margin-top: 1px;
+  font-size: 10px;
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+}
+
+.conv-actions {
+  display: none;
+  flex-shrink: 0;
+  gap: 1px;
+}
+
+.conv-item:hover .conv-actions {
+  display: flex;
+}
+
+/* 置顶项常驻操作区：无需先 hover 才能发现 */
+.conv-item.pinned .conv-actions {
+  display: flex;
+}
+
+.conv-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-4);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+
+.conv-action-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-1);
+}
+
+.conv-action-btn.pin.pinned {
+  color: var(--amber-400);
+}
+
+.conv-action-btn.del:hover {
+  color: var(--coral-400);
+}
+
+.conv-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12.5px;
+  color: var(--text-1);
+  background: var(--ink-1000);
+  border: 1px solid var(--amber-a55);
+  border-radius: var(--r-xs);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--amber-a12);
+}
+
+/* 窄屏折叠侧栏：只留一个占位方块 */
 @media (max-width: 900px) {
-  .conv-item-main, .conv-actions { display: none !important; }
-  .conv-item::before { content: '💬'; font-size: 14px; }
-  .conv-item.pinned::before { content: '📌'; }
+  .conv-item-main,
+  .conv-actions {
+    display: none !important;
+  }
+  .conv-item {
+    justify-content: center;
+    padding: 8px 0;
+  }
+  .conv-item::before {
+    content: '';
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    background: var(--line-3);
+  }
+  .conv-item.active {
+    box-shadow: none;
+  }
+  .conv-item.active::before {
+    position: static;
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    background: var(--amber-grad);
+    transform: none;
+    box-shadow: none;
+  }
 }
 </style>
