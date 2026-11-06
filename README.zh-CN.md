@@ -1,361 +1,269 @@
-<p align="center">
-  <img src="assets/icon.png" alt="优墨" width="120" />
-</p>
+<div align="center">
 
-<h1 align="center">🐱 优墨 · Sassy Cat</h1>
+<img src="assets/icon.png" width="112" alt="优墨 Sassy Cat" />
 
-<p align="center">
-  <strong>会傲娇但可靠的 AI 桌面猫咪助手</strong> — Electron + Vue 3 + Python
-</p>
+# 优墨 · Sassy Cat
 
-<p align="center">
-  <a href="#-特性总览">特性</a> ·
-  <a href="#-界面一览">界面</a> ·
-  <a href="#-技术栈">技术栈</a> ·
-  <a href="#-架构设计">架构</a> ·
-  <a href="#-项目结构">结构</a> ·
-  <a href="#-快速开始">快速开始</a> ·
-  <a href="#-使用指南">使用指南</a> ·
-  <a href="#-开发指南">开发指南</a> ·
-  <a href="#-配置说明">配置</a> ·
-  <a href="#-常见问题">FAQ</a>
-</p>
+**一只有点拽但靠谱的桌宠：会聊天、记事、提醒你，还真能把活儿干完。**
 
-<p align="center">
-  <a href="README.md">English</a> | <strong>简体中文</strong>
-</p>
+<sub>Electron + Vue 3 桌面外壳 · Python AI Agent 后端 · 会动的桌面宠物</sub>
+
+<br />
+
+<img src="https://img.shields.io/badge/Electron-28-2B2E3A?logo=electron&logoColor=9FEAF9" alt="Electron 28" />
+<img src="https://img.shields.io/badge/Vue-3.4-42B883?logo=vuedotjs&logoColor=white" alt="Vue 3" />
+<img src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11" />
+<img src="https://img.shields.io/badge/License-Apache--2.0-E8A33D" alt="Apache-2.0" />
+<img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-8AB4F8" alt="Platform" />
+
+<br /><br />
+
+[English](README.md) · [简体中文](README.zh-CN.md)
+
+[截图](#-截图) · [亮点](#-亮点) · [技术栈](#-技术栈) · [架构](#-架构) · [快速开始](#-快速开始) · [使用指南](#-使用指南) · [开发](#-开发) · [配置](#-配置) · [常见问题](#-常见问题)
+
+</div>
 
 ---
 
-一只傲娇但可靠的桌面猫咪助手 —— 基于 **Electron + Vue 3 + Python** 构建的 AI 桌宠应用。它把 **AI Agent**（LangChain / LangGraph / DeepAgents）与透明置顶的**桌面宠物**相结合：能陪你聊天、帮你盯系统状态、主动提醒你休息，甚至能解析文档、基于你自己的知识库回答问题、动手执行任务。
+**优墨** 是一只住在你桌面上的黑猫。它把 **Electron + Vue 3 桌面外壳**、**Python AI Agent 后端** 和一只**会动的桌面宠物**缝在了一起：
 
-## ✨ 特性总览
+- 用大白话吩咐就行 —— 它会执行命令、读写文件、写代码，还能翻你自己的知识库。
+- 有风险的操作会先停下来问你，绝不会背着你把东西删了。
+- 长任务交给独立的子代理去做，主对话永远不卡。
+- 闲着的时候它窝在角落打盹，偶尔探个头问问你在忙什么。
 
-### 🤖 AI 智能对话
-- 基于 LangChain / LangGraph / DeepAgents 构建的智能体，支持**流式回复**、**工具调用**、**多轮记忆**（可配置记忆窗口）
-- **人设（系统提示词）可自定义**，随时调教你家猫咪的性格
-- 多 LLM 供应商配置：OpenAI 兼容接口、DeepSeek 等，可视化切换
-- 支持 **MCP 适配器**，接入外部 MCP 工具服务
-- 联网搜索（Tavily）、定时/主动提醒等内置工具集
+> 界面为中文。截图里的所有对话与数据均为演示内容。
+
+## 📸 截图
+
+![仪表盘](docs/screenshots/dashboard.jpg)
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/chat.jpg" alt="聊天" /></td>
+    <td width="50%"><img src="docs/screenshots/skills.jpg" alt="技能" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>聊天</b> · 流式回复、推理过程、工具调用、Token 用量</sub></td>
+    <td align="center"><sub><b>技能</b> · 插件库、应用内文件树、导入 / 导出</sub></td>
+  </tr>
+</table>
+
+![知识库](docs/screenshots/knowledge-base.jpg)
+
+## ✨ 亮点
+
+| | |
+| :-- | :-- |
+| **🐾 它真的住在你桌面上**<br>一只透明、置顶、可拖拽的桌宠，idle / walk / talk / think / sleep / remind 全套动作和心情都有。回答越长，气泡越大。 | **🧠 它会想，也会动手**<br>LangGraph 驱动的 Agent，支持流式输出、工具调用和多轮记忆。shell、Python、文件读写一应俱全，任何危险操作都要过 human-in-the-loop 确认。 |
+| **📚 本地优先的 RAG**<br>支持多个知识库，自动分块并建立向量索引（ChromaDB）。本地 `bge-small-zh` 嵌入模型开箱即用；PDF、Office 文件和图片走 OCR。 | **🛠 一个能长大的工具箱**<br>直接挂 MCP 服务器。把技能目录丢进 `runtime/skills/`，它就变成一项新能力 —— 在应用里就能浏览、创建、编辑。 |
+| **⏰ 它会先开口**<br>冷落它太久，它会跳出来问你怎么回事。说一句“20 分钟后提醒我”，它就真会提醒。回复还能念出来。 | **🎨 认真设计过的界面**<br>流式 Markdown、代码高亮、LaTeX 和 Mermaid；还有用量分析、知识库统计和后端实时日志。 |
 
 ### 🐾 桌面宠物
-- 透明、无边框、置顶窗口，精灵帧动画（idle / walk / talk / think / sleep / react 等多种姿态）
-- 支持拖拽移动、点击互动、鼠标穿透模式
-- 气泡对话：Agent 的回复与提醒会以气泡形式出现在猫咪头顶
-- 快捷提问：全局快捷键 `Alt+Shift+Q` 直接在桌宠上快速提问，会话与主窗口实时同步
 
-### 🧠 知识库（RAG）
-- 构建本地私有知识库：文档自动分块、向量化入库（ChromaDB）
-- 本地嵌入模型 `BAAI/bge-small-zh-v1.5`（缺失时可自动下载），也支持远程嵌入 API
-- 知识库管理页支持多库管理、文档上传、详情查看与删除
-- Agent 通过检索工具引用知识库内容回答问题
+<p align="center">
+  <img src="docs/screenshots/desktop-pet.jpg" width="560" alt="桌面宠物" />
+</p>
 
-### 📄 文档解析与 OCR
-- 支持 PDF / Word / Excel / PPT / 图片 / 文本等多种格式
-- 多引擎解析：MarkItDown、Docling、RapidOCR、Unstructured（引擎可在配置中切换）
-- 解析结果可直接喂给 Agent 对话，或写入知识库长期沉淀
+桌宠是一个独立的置顶窗口，和主窗口共用同一个 Agent 会话：
 
-### ⏰ 主动式交互
-- 闲置检测 + 问候调度：长时间不理猫，它会主动冒泡撒娇（"为什么不理本喵😾"）
-- 定时提醒工具：让 Agent 帮你设喝水、休息、待办提醒
-- 语气（TTS）朗读：支持将回复朗读出来（Web Speech API，可配置音色/语速/音调）
-
-### 🪄 Agent 行动能力
-- Agent 可执行 shell 命令、运行 Python、读写/编辑文件；危险操作（execute / write_file / edit_file / delete）默认**需用户确认**（human-in-the-loop 中断）
-- **DSH 动手子代理**（DeepSeek Harness）：把多步骤的"体力活"委托给独立工作进程，自动建 todo 清单、逐步执行并汇报，主猫不再被长任务阻塞
-- 技能插件体系：`runtime/skills/` 下按约定放置技能目录（含 `SKILL.md`），即装即用，如内置的 `html-ppt` 幻灯片技能
-
-### 📊 系统监控
-- 仪表盘实时展示 CPU、GPU（NVIDIA）、内存、磁盘、进程等指标（psutil + pynvml）
-- ECharts 图表可视化，支持静态硬件信息展示
-
-### 💬 富文本聊天
-- Markdown 渲染 + 代码高亮（highlight.js）+ LaTeX 公式（KaTeX）+ Mermaid 图表
-- 流式渲染优化：分块增量渲染，长回复不卡顿
-- 会话历史持久化（SQLite），支持多会话、置顶、删除
-
-### 🛠️ 工程能力
-- 可视化设置页：LLM 配置、人设、RAG、代理（HTTP/HTTPS）、桌宠偏好、语音等
-- **双层配置**：模板默认值（`config.json`）+ 用户覆盖（`config.user.json`），应用升级不丢个人配置
-- 数据库迁移：Alembic 管理表结构，启动时自动升级（详见 [MIGRATION.md](MIGRATION.md)）
-- 日志页：Python 后端日志实时推送到前端查看
-- Python 环境自动检测：缺失时自动下载嵌入式 Python，依赖自动安装
-- 一键打包：electron-builder 支持 Windows（NSIS）/ macOS（DMG）/ Linux（AppImage）
-
-## 🖼️ 界面一览
-
-| 页面 | 路由 | 说明 |
-|---|---|---|
-| 仪表盘 | `#/` | 系统监控图表（CPU / GPU / 内存 / 磁盘） |
-| AI 聊天 | `#/chat` | 流式对话、工具调用状态、会话历史、文件附件 |
-| 知识库 | `#/kb` | 多知识库管理、文档上传与检索配置 |
-| MCP 服务 | `#/mcp` | MCP 服务器配置与管理 |
-| 技能管理 | `#/skills` | 技能插件浏览、详情、创建 |
-| 设置 | `#/settings` | LLM / 人设 / RAG / 语音 / 代理 / 桌宠 |
-| 日志 | `#/logs` | 后端运行日志实时查看 |
-| 关于 | `#/about` | 版本与项目链接 |
-
-桌宠窗口为独立页面（`pet/pet.html`），透明置顶，与主窗口通过 IPC/WebSocket 同步状态。
-
-## 🛠️ 技术栈
-
-| 层 | 技术 |
-|---|---|
-| 桌面框架 | Electron 28 |
-| 前端 | Vue 3 (Composition API) + Vue Router + Vite 5 + ECharts |
-| 聊天渲染 | markdown-it + highlight.js + KaTeX + Mermaid |
-| 后端 | Python 3.11 + FastAPI + uvicorn + asyncio（单进程模型） |
-| AI Agent | LangChain + LangGraph + DeepAgents（+ langchain-mcp-adapters） |
-| 动手子代理 | deepseek-harness-sdk（DSH 工作进程） |
-| 知识库 | ChromaDB + sentence-transformers + langchain-huggingface |
-| 文档解析 | MarkItDown + Docling + RapidOCR + Unstructured |
-| 持久化 | SQLAlchemy (asyncio) + SQLite (aiosqlite) + Alembic 迁移 |
-| 监控采集 | psutil + pynvml + wmi/pywin32 |
-| 通信 | WebSocket（聊天/事件）+ IPC（窗口/配置）+ stdio 协议行（监控/日志/就绪信号） |
-| 打包 | electron-builder（NSIS / DMG / AppImage） |
-
-## 🏗️ 架构设计
-
-```
-┌───────────────────────────── Electron 主进程 (electron/main.js) ─────────────────────────────┐
-│  主窗口 (BrowserWindow, src/index.html)      桌宠窗口 (透明置顶, pet/pet.html)      托盘/快捷键  │
-│        │ IPC (preload.js)                        │ IPC (pet-preload.js)                       │
-│        │                                         │                                            │
-│  config-store.js 双层配置读写 ──► config.user.json                                            │
-│  python-env-checker.js 检测/下载 Python ──► 启动并监管 python/main.py（stdio [READY]/协议行）   │
-└──────────────────────────────────────────────┬────────────────────────────────────────────────┘
-                                               │
-                    ┌──────────────────────────┴──────────────────────────┐
-                    │        Python 后端 (FastAPI, 单进程 asyncio)         │
-                    │  /ws/agent   WebSocket：流式对话/工具事件/主动提醒     │
-                    │  REST：/api/kb /api/conversations /api/stats         │
-                    │       /api/skills /api/mcp                           │
-                    │  ┌────────────┐ ┌──────────┐ ┌────────┐ ┌─────────┐  │
-                    │  │ Agent 引擎  │ │ RAG 检索  │ │ 监控采集 │ │ 主动调度 │  │
-                    │  │ LangGraph  │ │ ChromaDB │ │ psutil  │ │ 闲置问候  │  │
-                    │  │ + 工具集    │ │ + OCR    │ │ pynvml  │ │ 定时提醒  │  │
-                    │  │ + DSH 子代理│ └──────────┘ └────────┘ └─────────┘  │
-                    │  └─────┬──────┘                                       │
-                    │        │ SQLite (messages.sqlite) + Alembic 自动迁移   │
-                    └────────┴─────────── WebSocket ◄──── 渲染进程直连 ──────┘
-```
-
-关键设计点：
-
-- **渲染进程直连 Python WebSocket**：聊天 token 流、工具调用状态、主动提醒事件绕过主进程，低延迟；窗口控制与配置持久化仍走 IPC。
-- **单进程 asyncio 后端**：FastAPI 服务、监控采集（`to_thread` 包装阻塞调用）、主动调度、Agent 引擎共存于一个 Python 进程，由 Electron 主进程监管生命周期。
-- **stdio 协议行**：Python 通过 stdout 输出 `__PROTOCOL__` 行与 `[READY] {"port":...}` 就绪信号，兼容旧解析逻辑并把日志转发到前端日志页。
-- **端口占用回退**：首选端口被占用时自动回退到临时可用端口，主进程据 `[READY]` 广播 `agent-ready`。
-- **双层配置**：`config.json`（模板，随应用更新）+ `userData/config.user.json`（用户覆盖，深度合并），升级不丢配置。
-- **子代理隔离**：DSH 动手子代理跑在独立工作进程，只拿到被委托的任务描述，多步任务强制先建 todo 清单再执行。
-
-## 📁 项目结构
-
-```
-sassy-cat/
-├── electron/                      # Electron 主进程
-│   ├── main.js                    # 入口（主窗口 + 桌宠窗口 + 托盘 + Python 生命周期）
-│   ├── preload.js                 # 主窗口预加载脚本
-│   ├── pet-preload.js             # 桌宠窗口预加载脚本
-│   ├── config-store.js            # 双层配置读写（深度合并 + 原子写）
-│   └── python-env-checker.js      # Python 环境检查/嵌入式 Python 下载
-├── src/                           # 主窗口 Vue3 前端
-│   ├── views/
-│   │   ├── Dashboard.vue          # 系统监控仪表盘
-│   │   ├── ChatView.vue           # AI 聊天页（流式 + 工具状态 + 会话历史）
-│   │   ├── KnowledgeBase.vue      # 知识库管理
-│   │   ├── KnowledgeBaseDetail.vue# 知识库详情（文档列表/上传）
-│   │   ├── SkillManager.vue / SkillDetail.vue  # 技能插件管理
-│   │   ├── McpManager.vue         # MCP 服务管理
-│   │   ├── Settings.vue           # 设置（LLM + 人设 + RAG + 语音 + 代理）
-│   │   └── Logs.vue / About.vue / Setup.vue
-│   ├── composables/
-│   │   ├── useAgentSocket.js      # WebSocket 客户端（单例 + 自动重连）
-│   │   ├── useChatStore.js        # 聊天状态管理
-│   │   ├── useFileUpload.js       # 文件上传（OCR / RAG）
-│   │   ├── useTTS.js              # 语音朗读（Web Speech）
-│   │   └── useKbUploadState.js / useModelDownloadState.js / useRestartState.js
-│   ├── components/
-│   │   ├── MarkdownRenderer.vue   # Markdown/LaTeX/Mermaid 渲染（增量分块）
-│   │   ├── ConversationItem.vue / DocumentAttachment.vue / FilePreview.vue
-│   ├── utils/streamSplitter.js    # 流式文本分块工具
-│   └── api/                       # REST 客户端（kb / messages / stats / skills / mcp）
-├── pet/                           # 桌宠窗口（Vite 多页入口）
-│   ├── pet.html / pet-main.js
-│   ├── assets/sprites/cat/        # 精灵帧图片 + config.json（动作/帧率配置）
-│   └── components/
-│       ├── PetApp.vue             # 气泡 + 交互 + 状态编排
-│       └── sprite/                # 精灵渲染体系（PetSprite / Svg & Spritesheet 渲染器 / 预加载）
-├── python/                        # Python 后端（单进程 asyncio）
-│   ├── main.py                    # 服务入口（[READY] 就绪信号 + 端口回退）
-│   ├── config_loader.py / paths.py / utils.py
-│   ├── server/
-│   │   ├── app.py                 # FastAPI 实例 + 路由 + lifespan
-│   │   ├── ws_agent.py            # /ws/agent 端点 + 会话管理
-│   │   ├── bus.py                 # 进程内事件总线
-│   │   ├── conversations.py / kb_api.py / stats_api.py / skills_api.py / mcp_api.py
-│   │   └── db/                    # SQLAlchemy 模型 + 仓储 + Alembic 迁移 + seed
-│   ├── agent/
-│   │   ├── engine.py              # Agent 构建（配置注入）
-│   │   ├── runner.py / main_agent.py  # 流式对话桥接
-│   │   ├── llms.py                # LLM 工厂
-│   │   ├── prompts.py             # 人设模板 + 运行时提示词组装
-│   │   ├── middlewares.py         # Agent 中间件
-│   │   ├── reminders.py           # 提醒上下文注入
-│   │   ├── virtual_shell.py       # 沙箱化 shell 执行
-│   │   ├── tools/                 # builtin / rag / reminder / mcp / subagent(dsh)
-│   │   └── rag/                   # rag_service / document_retriever / model_download
-│   ├── monitor/                   # 系统监控采集（cpu / gpu / memory / disks / protocol）
-│   ├── ocr/                       # 文档解析（markitdown / docling / rapidocr / xls ...）
-│   └── proactive/                 # 闲置检测 + 问候 + 提醒调度
-├── runtime/
-│   └── skills/                    # 技能插件目录（如内置 html-ppt 幻灯片技能）
-├── tests/                         # 临时验证/探针脚本（迁移、流式渲染、提醒等）
-├── plans/                         # 设计与迁移方案文档
-├── assets/                        # 应用图标
-├── config.json                    # 应用配置模板
-├── requirements.txt               # Python 依赖
-├── vite.config.js                 # Vite 多页配置（index / setup / pet）
-├── start.bat                      # Windows 一键开发启动脚本
-├── MIGRATION.md                   # 数据库迁移指南
-└── package.json                   # Node 依赖与 electron-builder 配置
-```
+- 按 `Alt + Shift + Q` 直接问猫，回答会同步回主窗口。
+- 点它、拖它、摸它，它都有反应。可选鼠标穿透，让它不挡你的事。
+- 气泡会实时显示 Agent 的回复和提醒，长回答在原地展开。
 
 ## 🚀 快速开始
 
-### 环境要求
-
-- **Node.js**: 18+
-- **npm**: 9+
-- **Python**: 3.10+（程序会自动检测；系统没有可用 Python 时会自动下载嵌入式 Python 到 `python_env/`）
-
-### 安装依赖
+**环境要求：** Node.js 18+、npm 9+。Python 3.10+ 是可选的 —— 系统里找不到的话，首次启动会自动下载一个嵌入式 Python。
 
 ```bash
+git clone https://github.com/zjwan461/sassy-cat.git
+cd sassy-cat
 npm install
 ```
 
-### 开发模式
+**Windows（一键启动）：**
 
-**Windows（推荐，一键脚本）：**
 ```bash
 start.bat
 ```
-脚本会检查 Node/npm、首次运行自动 `npm install`，然后启动开发环境。
 
 **macOS / Linux：**
+
 ```bash
 npm run electron:dev
 ```
 
-开发模式通过 `concurrently` 同时启动 Vite 开发服务器（`http://localhost:5173`）和 Electron，前端改动热重载；Python 后端由 Electron 主进程拉起，`requirements.txt` 中的依赖在启动时自动安装。
+首次启动会跑一遍环境检查、安装 `requirements.txt`，然后拉起 Python 后端（FastAPI + asyncio）。等猫咪出现在桌面上，打开 **设置** 配一个 LLM（Base URL / API Key / 模型名 —— OpenAI 兼容接口和 DeepSeek 都能用），保存即可。
 
-### 生产构建
+> 打包：当前平台用 `npm run electron:build`，也可以 `electron:build:win` / `:mac` / `:linux`。产物落在 `dist_electron/`。
 
-```bash
-# 构建当前平台
-npm run electron:build
+## 🛠 技术栈
 
-# 构建指定平台
-npm run electron:build:win     # Windows NSIS 安装包
-npm run electron:build:mac     # macOS DMG
-npm run electron:build:linux   # Linux AppImage
+| 层 | 技术 |
+| :-- | :-- |
+| 桌面外壳 | Electron 28 + electron-builder |
+| 前端 | Vue 3 (Composition API) + Vue Router + Vite 5 + ECharts |
+| 聊天渲染 | markdown-it + highlight.js + KaTeX + Mermaid |
+| 后端 | Python 3.11 + FastAPI + uvicorn + asyncio（单进程） |
+| AI Agent | LangChain + LangGraph + DeepAgents + langchain-mcp-adapters |
+| 动手子代理 | deepseek-harness-sdk（独立 worker 进程） |
+| 知识库 | ChromaDB + sentence-transformers + langchain-huggingface |
+| 文档解析 | MarkItDown + Docling + RapidOCR + Unstructured |
+| 持久化 | SQLAlchemy (async) + SQLite (aiosqlite) + Alembic |
+| 通信 | WebSocket（聊天/事件）+ IPC（窗口/配置）+ stdio 协议行（日志/就绪） |
 
-# 仅构建前端资源并本地预览 Electron
-npm run electron:preview
+## 🏗 架构
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Main window (src/index.html)          Pet window (transparent, pet/pet.html) │
+│      │ IPC (preload.js)                    │ IPC (pet-preload.js)             │
+│  config-store.js two-layer config ──► config.user.json                        │
+│  python-env-checker.js ──► spawn & supervise python/main.py                  │
+└──────────────────────────────────────────┬───────────────────────────────────┘
+                                           │
+                 ┌─────────────────────────┴─────────────────────────┐
+                 │       Python backend (FastAPI, single-process)     │
+                 │  /ws/agent  WebSocket: streaming chat / tools /    │
+                 │             proactive reminders                    │
+                 │  REST: /api/kb /api/conversations /api/stats       │
+                 │        /api/skills /api/mcp                        │
+                 │  ┌───────────┐ ┌─────────┐ ┌────────┐ ┌────────┐   │
+                 │  │   Agent   │ │  RAG    │ │ Monitor│ │Proactive│  │
+                 │  │ LangGraph │ │ ChromaDB│ │ psutil │ │ idle & │   │
+                 │  │ + tools   │ │ + OCR   │ │ pynvml │ │greeting│   │
+                 │  │ + DSH sub.│ └─────────┘ └────────┘ └────────┘   │
+                 │  └────┬──────┘                                     │
+                 │       │ SQLite (messages.sqlite) + Alembic          │
+                 └───────┴──── WebSocket ◄── renderer direct ──────────┘
 ```
 
-构建产物位于 `dist_electron/` 目录。
+几个值得知道的设计点：
+
+- **渲染进程直接连 Python 的 WebSocket** —— 聊天 token、工具状态和主动事件都绕过主进程，延迟更低；窗口控制和配置持久化仍然走 IPC。
+- **单进程 asyncio 后端** —— FastAPI、指标采集、主动调度和 Agent 引擎共用一个进程，由 Electron 监管；阻塞调用统一用 `to_thread` 包起来。
+- **stdio 协议行** —— Python 会输出 `__PROTOCOL__` 日志行和 `[READY] {"port":…}` 就绪信号；首选端口被占用时会自动回退。
+- **双层配置** —— `config.json`（模板，随应用更新）与 `userData/config.user.json`（用户覆盖）深度合并，升级永远不丢设置。
+- **子代理隔离** —— 动手的 DSH 子代理跑在自己的 worker 进程里，只拿到被委托的那件事；多步骤任务必须先建好 todo 清单。
+
+## 📁 项目结构
+
+<details>
+<summary>展开目录树</summary>
+
+```text
+sassy-cat/
+├── electron/                      # Main process
+│   ├── main.js                    # Entry (main + pet window + tray + Python lifecycle)
+│   ├── preload.js / pet-preload.js
+│   ├── config-store.js            # Two-layer config (deep merge + atomic write)
+│   └── python-env-checker.js      # Python env check / embedded Python download
+├── src/                           # Main-window Vue 3 frontend
+│   ├── styles/                    # Design tokens + base layer ("ink night · amber")
+│   ├── views/                     # Dashboard / Chat / KB / Skills / MCP / Settings / Logs …
+│   ├── components/                # AppIcon / MarkdownRenderer / conversation item / previews
+│   ├── composables/               # WS client / chat store / upload / TTS / state
+│   ├── utils/streamSplitter.js    # Streaming chunk splitter
+│   └── api/                       # REST clients
+├── pet/                           # Pet window (separate Vite entry)
+│   ├── pet.html / pet-main.js
+│   ├── assets/sprites/cat/        # Sprite frames + action config
+│   └── components/                # Bubbles / interaction / sprite renderers
+├── python/                        # Backend (single-process asyncio)
+│   ├── main.py                    # [READY] signal + port fallback
+│   ├── server/                    # FastAPI routes, WS, event bus, DB/Alembic
+│   ├── agent/                     # Engine, streaming bridge, prompts, tools, RAG
+│   ├── monitor/                   # System metric collection
+│   ├── ocr/                       # Document parsing engines
+│   └── proactive/                 # Idle detection / greetings / reminders
+├── runtime/skills/                # Skill plugin directory
+├── docs/screenshots/              # README images
+├── plans/                         # Design & migration docs
+├── tests/                         # Verification / probe scripts
+├── config.json                    # App config template
+├── requirements.txt
+└── vite.config.js                 # Multi-page entries (index / setup / pet)
+```
+</details>
 
 ## 📖 使用指南
 
 ### 首次启动
 
-1. 应用启动后会进行环境自检（Python / 依赖安装），`Setup` 页面展示进度。
-2. 进入 **设置页** 配置至少一个 LLM：填写 Base URL、API Key、模型名（支持 OpenAI 兼容接口与 DeepSeek 等），保存并切换为当前激活配置。
-3. 打开聊天页或直接戳桌宠开始对话；按 `Alt+Shift+Q` 可在桌宠旁快速提问。
+1. 会自动跑一遍环境检查（Python / 依赖安装），引导窗口（Setup）会显示进度。
+2. 打开 **设置**，至少配好一个 LLM —— Base URL、API Key、模型名 —— 保存并启用它。
+3. 打开 **聊天**，或者戳一戳桌宠开始说话。`Alt + Shift + Q` 可以直接问猫。
 
 ### 知识库
 
-1. **知识库页** → 新建知识库。
-2. 上传 PDF / Word / Excel / 图片等文档，系统自动解析（OCR/文档引擎）、分块、向量化。
-3. 对话时 Agent 会按需检索知识库内容回答（可用 `rag` 工具，也可显式要求"根据知识库回答"）。
-4. 嵌入模型默认使用本地 `BAAI/bge-small-zh-v1.5`，首次使用时若缺失会自动下载；也可在设置中改为远程嵌入 API。
+1. **知识库** → 新建一个知识库。
+2. 上传 PDF、Word、Excel、图片等等 —— 文档会自动解析（OCR / 文档引擎）、分块、向量化。
+3. 聊天时让 Agent“根据我的知识库”来回答，或者干脆直接问相关问题。
+4. 默认的本地嵌入模型是 `BAAI/bge-small-zh-v1.5`，首次使用时下载；也可以改成远程 embedding API。
 
 ### 技能与 MCP
 
-- **技能**：将符合约定的技能目录放入 `runtime/skills/`（包含 `SKILL.md` 描述文件），在技能管理页即可查看/创建/使用。
-- **MCP**：在 MCP 管理页添加服务器配置（命令/参数/环境变量），Agent 即可调用其暴露的工具。
+- **技能**：把一个含 `SKILL.md` 的目录丢进 `runtime/skills/`，就能在技能页浏览、编辑、启用它。内置了一个 `html-ppt` 技能作为示例。
+- **MCP**：在 MCP 页添加服务器配置（command / args / env），Agent 就能调用它们暴露出来的工具。
 
 ### 危险操作确认
 
-Agent 默认在执行 shell 命令、写文件、改文件、删除时**中断等待确认**（可在 `config.json` 的 `agent.interruptOn` 中调整）。
+默认情况下，Agent 在执行 shell 命令、写文件、改文件、删文件之前会**中断并等你确认**。可以在 `config.json` 的 `agent.interruptOn` 里按工具单独调整。
 
 ### 主动提醒
 
-桌宠会基于闲置检测主动打招呼；也可以直接让猫"提醒我 10 分钟后喝水"，它会用提醒工具定时冒泡。
+你太久不理它，它会主动凑过来打个招呼；也可以说“10 分钟后提醒我喝水”，它会准时冒泡。回复还可以念出来（Web Speech）。
 
-## 🔧 开发指南
+## 🔧 开发
+
+<details>
+<summary>前端 / 桌宠 / 后端 / 迁移 / 测试</summary>
 
 ### 前端（主窗口）
 
-前端使用 Vue 3 + Vite，代码位于 `src/`（别名 `@` 指向该目录）：
+Vue 3 + Vite，别名 `@` → `src/`：
 
-- [`ChatView.vue`](src/views/ChatView.vue) — AI 聊天页（流式对话 + 工具调用展示 + 会话历史）
-- [`Dashboard.vue`](src/views/Dashboard.vue) — 系统监控仪表盘（ECharts）
-- [`KnowledgeBase.vue`](src/views/KnowledgeBase.vue) / [`KnowledgeBaseDetail.vue`](src/views/KnowledgeBaseDetail.vue) — 知识库管理
-- [`SkillManager.vue`](src/views/SkillManager.vue) / [`McpManager.vue`](src/views/McpManager.vue) — 扩展管理
-- [`Settings.vue`](src/views/Settings.vue) — LLM / 人设 / RAG / 语音 / 代理设置
-- [`useAgentSocket.js`](src/composables/useAgentSocket.js) — WebSocket 客户端封装（单例 + 自动重连）
-- [`MarkdownRenderer.vue`](src/components/MarkdownRenderer.vue) — 富文本渲染（配合 [`streamSplitter.js`](src/utils/streamSplitter.js) 做增量分块）
+- [`ChatView.vue`](src/views/ChatView.vue) —— 聊天页（流式 + 工具状态 + 历史）
+- [`Dashboard.vue`](src/views/Dashboard.vue) —— 用量仪表盘（ECharts）
+- [`KnowledgeBase.vue`](src/views/KnowledgeBase.vue) / [`KnowledgeBaseDetail.vue`](src/views/KnowledgeBaseDetail.vue) —— 知识库管理
+- [`useAgentSocket.js`](src/composables/useAgentSocket.js) —— WebSocket 客户端（单例 + 自动重连）
+- [`MarkdownRenderer.vue`](src/components/MarkdownRenderer.vue) —— 富文本渲染 + 增量分块
 
-Vite 为多页入口：`index.html`（主窗口）、`setup.html`（引导页）、[`pet/pet.html`](pet/pet.html)（桌宠），见 [`vite.config.js`](vite.config.js)。修改前端代码自动热重载。
+设计系统记录在 [`plans/ui-design-system.md`](plans/ui-design-system.md)；颜色、圆角和阴影全部来自 [`src/styles/tokens.css`](src/styles/tokens.css)，基础组件层在 [`src/styles/base.css`](src/styles/base.css)。
 
 ### 桌宠窗口
 
-桌宠位于 `pet/` 目录，独立 Vite 入口：
-
-- [`PetApp.vue`](pet/components/PetApp.vue) — 气泡、拖拽、点击互动与状态编排
-- [`pet/components/sprite/`](pet/components/sprite/) — 精灵渲染体系：[`PetSprite.vue`](pet/components/sprite/PetSprite.vue) 为入口，[`SpritesheetRenderer.vue`](pet/components/sprite/SpritesheetRenderer.vue) / [`SvgSpriteRenderer.vue`](pet/components/sprite/SvgSpriteRenderer.vue) 两种渲染后端，[`useSpritePreload.js`](pet/components/sprite/useSpritePreload.js) 负责帧预加载
-- [`pet/assets/sprites/cat/config.json`](pet/assets/sprites/cat/config.json) — 动作/帧动画配置（idle、walk、talk、think、sleep、react、remind 等）
-- [`pet-preload.js`](electron/pet-preload.js) — 桌宠专用预加载脚本（窗口穿透、拖动等）
+- [`PetApp.vue`](pet/components/PetApp.vue) —— 气泡、拖拽、点击交互、状态编排
+- [`pet/components/sprite/`](pet/components/sprite/) —— 精灵渲染（SVG / 雪碧图两套后端，含预加载）
+- [`pet/assets/sprites/cat/config.json`](pet/assets/sprites/cat/config.json) —— 动作与帧率配置
 
 ### Python 后端
 
-后端位于 `python/`，FastAPI + 单进程 asyncio：
+- [`main.py`](python/main.py) —— 服务入口（端口回退 + `[READY]`）
+- [`server/ws_agent.py`](python/server/ws_agent.py) —— WebSocket 聊天与会话管理
+- [`agent/engine.py`](python/agent/engine.py) / [`agent/runner.py`](python/agent/runner.py) —— Agent 构建与流式桥接
+- [`agent/tools/`](python/agent/tools/) —— 内置 shell / 文件工具、RAG、提醒、MCP、DSH 子代理
+- [`proactive/scheduler.py`](python/proactive/scheduler.py) —— 闲置检测 / 问候 / 提醒调度
 
-- [`main.py`](python/main.py) — 服务入口（端口回退 + `[READY]` 就绪信号）
-- [`server/ws_agent.py`](python/server/ws_agent.py) — WebSocket 聊天端点与会话管理
-- [`agent/engine.py`](python/agent/engine.py) / [`agent/runner.py`](python/agent/runner.py) — Agent 构建与流式桥接
-- [`agent/prompts.py`](python/agent/prompts.py) — 人设模板与运行时提示词组装
-- [`agent/tools/`](python/agent/tools/) — 工具集：内置命令/文件工具、RAG 检索、提醒、MCP、DSH 子代理
-- [`monitor/service.py`](python/monitor/service.py) — 系统监控周期采集
-- [`proactive/scheduler.py`](python/proactive/scheduler.py) — 闲置检测/问候/提醒调度
-
-新增 Python 依赖请写入 [`requirements.txt`](requirements.txt)，应用启动时会自动安装。
+新的 Python 依赖加进 [`requirements.txt`](requirements.txt) 就行，启动时会自动安装。
 
 ### 数据库迁移
 
-表结构由 Alembic 管理（`python/server/db/migrations/`），应用启动自动升级，用户无感。开发中新增/修改表请参考 [MIGRATION.md](MIGRATION.md)（autogenerate + 人工审查 + 验证脚本三步走）。
+表结构由 Alembic 管理（`python/server/db/migrations/`），启动时自动升级。要改表请照 [MIGRATION.md](MIGRATION.md) 的流程走：autogenerate → 人工审查 → 验证。
 
 ### 测试
 
-`tests/` 目录包含若干临时验证/探针脚本（如 [`tmp_test_migration.py`](tests/tmp_test_migration.py)、[`stream_splitter.test.mjs`](tests/stream_splitter.test.mjs)、[`incremental_render_equivalence.test.mjs`](tests/incremental_render_equivalence.test.mjs)），可按需运行验证对应子系统。
+`tests/` 里放的是验证和探针脚本，比如 [`stream_splitter.test.mjs`](tests/stream_splitter.test.mjs) 和 [`incremental_render_equivalence.test.mjs`](tests/incremental_render_equivalence.test.mjs)。
 
-### 通信架构
+</details>
 
-| 数据类型 | 通道 | 说明 |
-|---|---|---|
-| AI 对话 / 流式 token / 工具事件 / 主动提醒 | WebSocket | 渲染进程直连 Python，低延迟 |
-| 配置持久化（LLM / 人设 / 桌宠偏好） | IPC | 主进程读写 `config.user.json` |
-| 系统监控数据 / 后端日志 / 就绪信号 | stdio 协议行 + IPC | `__PROTOCOL__` 行 + `[READY] {"port":...}` |
-| 窗口控制（拖动 / 置顶 / 穿透） | IPC | 主进程管理 |
+## ⚙️ 配置
 
-## ⚙️ 配置说明
+<details>
+<summary>配置模板与字段说明</summary>
 
-### 应用配置模板（config.json）
-
-项目基础配置维护在根目录 [`config.json`](config.json)（模板层，随应用更新）：
+根目录的 [`config.json`](config.json) 是模板层（随应用更新）；用户覆盖写在 `userData/config.user.json`：
 
 ```json
 {
@@ -384,77 +292,55 @@ Vite 为多页入口：`index.html`（主窗口）、`setup.html`（引导页）
 }
 ```
 
-主要字段：
-
 | 段 | 说明 |
-|---|---|
-| `agent` | 记忆窗口、递归上限、OCR 开关与引擎、危险操作确认（`interruptOn`） |
-| `dsh` | 动手子代理：LLM 来源（默认复用主模型）、maxTokens、推理强度 |
-| `rag` | 嵌入模型（本地/远程）、自动嵌入、知识库文档解析引擎 |
+| :-- | :-- |
+| `agent` | 记忆窗口、递归上限、OCR 开关与引擎、危险操作确认 |
+| `dsh` | 子代理的模型来源、maxTokens、推理强度 |
+| `rag` | 嵌入模型（本地 / 远程）、自动嵌入、文档解析引擎 |
 | `pet` | 桌宠开关、快捷提问热键、提醒轮询与气泡时长 |
-| `voice` | 语音朗读开关、引擎、自动朗读、音色/语速/音调 |
+| `voice` | 朗读开关、引擎、自动朗读、音色 / 语速 / 音调 |
 | `network` | HTTP/HTTPS 代理 |
 
-### 用户配置（config.user.json）
-
-运行时用户配置（LLM 连接、人设提示词、桌宠偏好等）存储在 Electron `userData/config.user.json`，通过设置页可视化编辑。采用**双层配置**设计：模板默认值 + 用户覆盖深度合并，应用升级不丢失个人配置。
-
-### 自定义 Python 版本
-
-修改 `config.json` 中的 `pythonVersion`，重启应用生效。若已下载过嵌入式 Python，需删除 `python_env` 目录后重启。
-
-## 📦 打包说明
-
-将应用图标放置在 `assets/` 目录：
-
-- `icon.ico` — Windows 图标
-- `icon.icns` — macOS 图标
-- `icon.png` — Linux 图标
-
-`electron-builder` 的 `extraResources` 会自动将 `requirements.txt`、`python/`、`config.json`、`assets/`、`runtime/skills/` 打包进应用。Windows 安装包为 NSIS 格式，支持自选安装目录、创建桌面/开始菜单快捷方式（配置见 [`package.json`](package.json) 的 `build` 段）。
+改 `pythonVersion` 会切换嵌入式 Python；如果之前已经下载过，删掉 `python_env/` 再重启。
+</details>
 
 ## ❓ 常见问题
 
 <details>
-<summary><b>启动后 Python 服务没起来 / 聊天无响应？</b></summary>
+<summary><b>Python 服务没起来 / 聊天没反应</b></summary>
 
-- 打开 **日志页** 查看后端输出；首次启动会自动下载嵌入式 Python 并安装 `requirements.txt` 依赖，耗时较长属正常。
-- 若端口被占用，后端会自动回退到随机可用端口，一般无需处理。
-- 依赖安装失败多为网络问题，可在设置中配置代理后重启。
-
+去 **日志** 页看后端输出。首次启动要下载嵌入式 Python 并安装依赖，会慢一会儿 —— 这是正常的。端口被占的话，后端会自动换一个空闲端口。依赖安装失败通常是网络问题，在设置里配个代理再重启。
 </details>
 
 <details>
-<summary><b>知识库嵌入模型没有下载成功？</b></summary>
+<summary><b>嵌入模型下载不下来</b></summary>
 
-默认从 HuggingFace 下载 `BAAI/bge-small-zh-v1.5`，网络受限时请在设置中配置代理，或将嵌入模型改为远程 API。
-
+默认会从 HuggingFace 下载 `BAAI/bge-small-zh-v1.5`。网络受限时，配置代理，或者改用远程 embedding API。
 </details>
 
 <details>
-<summary><b>桌宠不显示 / 位置不对？</b></summary>
+<summary><b>桌宠不见了</b></summary>
 
-桌宠开关在设置页与 `config.json` 的 `pet.enabled`。桌宠窗口透明置顶，找不到时可从托盘菜单切换显示。
-
+设置里有桌宠开关（`config.json` 中的 `pet.enabled`）。窗口是透明置顶的，也可以从托盘菜单里切换显示。
 </details>
 
 <details>
-<summary><b>Agent 每次执行命令都要确认，太繁琐？</b></summary>
+<summary><b>每条命令都要确认，太吵了？</b></summary>
 
-确认行为由 `config.json` 的 `agent.interruptOn` 控制，可按工具逐项关闭（不推荐全部关闭）。
-
+确认行为由 `agent.interruptOn` 控制，可以按工具逐项关掉（不建议全部关掉）。
 </details>
 
-## 🗺️ 开发路线图
+## 🗺 路线图
 
-进行中的设计/迁移方案记录在 [`plans/`](plans/) 目录，包括：
+进行中的设计和迁移文档都在 [`plans/`](plans/)：
 
-- ✅ 桌宠精灵动画迁移（[`pet-sprite-migration-plan.md`](plans/pet-sprite-migration-plan.md)）
-- ✅ 语音朗读 TTS（[`tts-voice-read-aloud-plan.md`](plans/tts-voice-read-aloud-plan.md)）
-- ✅ 流式 Markdown 渲染性能优化（[`streaming-markdown-render-perf-plan.md`](plans/streaming-markdown-render-perf-plan.md)）
-- ✅ DSH 动手子代理设置（[`dsh-settings-plan.md`](plans/dsh-settings-plan.md)）
-- 🚧 Agent 错误重试（[`agent-error-retry-plan.md`](plans/agent-error-retry-plan.md)）
-- 🚧 上下文窗口压缩（[`context-window-compression-plan.md`](plans/context-window-compression-plan.md)）
+- ✅ 桌宠精灵动画迁移
+- ✅ TTS 语音朗读
+- ✅ 流式 Markdown 渲染性能
+- ✅ DSH 子代理设置
+- ✅ UI 设计系统（“墨夜 · 琥珀”）
+- 🚧 Agent 错误重试
+- 🚧 上下文窗口压缩
 
 ## 📝 许可证
 
@@ -462,8 +348,10 @@ Vite 为多页入口：`index.html`（主窗口）、`setup.html`（引导页）
 
 ## 🤝 贡献
 
-欢迎提交 Issue 和 Pull Request！建议改动前先阅读 [`plans/`](plans/) 中相关设计文档，保持架构一致。
+欢迎提 Issue 和 Pull Request。动手之前，请先读一读 [`plans/`](plans/) 下相关的设计文档，保持架构一致。
 
 ## 📮 反馈
 
-如有问题，请前往 [项目主页](https://github.com/zjwan461/sassy-cat) 提交 Issue，或查看 [更新日志](https://github.com/zjwan461/sassy-cat/releases)。
+- 主页：<https://github.com/zjwan461/sassy-cat>
+- Issues：<https://github.com/zjwan461/sassy-cat/issues>
+- Releases：<https://github.com/zjwan461/sassy-cat/releases>

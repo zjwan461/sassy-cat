@@ -1,360 +1,269 @@
-<p align="center">
-  <img src="assets/icon.png" alt="Sassy Cat" width="120" />
-</p>
+<div align="center">
 
-<h1 align="center">🐱 优墨 · Sassy Cat</h1>
+<img src="assets/icon.png" width="112" alt="优墨 Sassy Cat" />
 
-<p align="center">
-  <strong>An AI desktop pet assistant</strong> — Electron + Vue 3 + Python
-</p>
+# 优墨 · Sassy Cat
 
-<p align="center">
-  <a href="#-features">Features</a> ·
-  <a href="#-screens">Screens</a> ·
-  <a href="#-tech-stack">Tech Stack</a> ·
-  <a href="#-architecture">Architecture</a> ·
-  <a href="#-project-structure">Structure</a> ·
-  <a href="#-quick-start">Quick Start</a> ·
-  <a href="#-user-guide">User Guide</a> ·
-  <a href="#-development-guide">Dev Guide</a> ·
-  <a href="#-configuration">Configuration</a> ·
-  <a href="#-faq">FAQ</a>
-</p>
+**A slightly sassy desktop cat that chats, remembers, reminds — and actually gets real work done.**
 
-<p align="center">
-  <strong>English</strong> | <a href="README.zh-CN.md">简体中文</a>
-</p>
+<sub>Electron + Vue 3 desktop shell · Python AI agent backend · animated desktop pet</sub>
+
+<br />
+
+<img src="https://img.shields.io/badge/Electron-28-2B2E3A?logo=electron&logoColor=9FEAF9" alt="Electron 28" />
+<img src="https://img.shields.io/badge/Vue-3.4-42B883?logo=vuedotjs&logoColor=white" alt="Vue 3" />
+<img src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11" />
+<img src="https://img.shields.io/badge/License-Apache--2.0-E8A33D" alt="Apache-2.0" />
+<img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-8AB4F8" alt="Platform" />
+
+<br /><br />
+
+[English](README.md) · [简体中文](README.zh-CN.md)
+
+[Screenshots](#-screenshots) · [Highlights](#-highlights) · [Tech Stack](#-tech-stack) · [Architecture](#-architecture) · [Quick Start](#-quick-start) · [User Guide](#-user-guide) · [Development](#-development) · [Configuration](#-configuration) · [FAQ](#-faq)
+
+</div>
 
 ---
 
-A slightly sassy but dependable desktop cat companion. Built with **Electron + Vue 3 + Python**, it combines an **AI Agent** (LangChain / LangGraph / DeepAgents) with a transparent, always-on-top **desktop pet** that chats with you, watches your system, reminds you to take a break, parses documents, answers questions from your own knowledge base, and even gets its paws dirty doing real work.
+**优墨** is a black cat that lives on your desktop. It stitches together an **Electron + Vue 3 desktop shell**, a **Python AI agent backend**, and an **animated desktop pet**:
 
-## ✨ Features
+- Ask in plain language — it runs commands, reads and writes files, writes code, and searches your own knowledge base.
+- Risky operations pause and ask you first; it never quietly deletes your work.
+- Long jobs are handed to an isolated subagent, so the main conversation never blocks.
+- When idle, it naps in the corner and occasionally peeks out to ask what you're up to.
 
-### 🤖 AI Conversational Agent
-- Powered by LangChain / LangGraph / DeepAgents: **streaming replies**, **tool calling**, **multi-turn memory** (configurable memory window)
-- **Customizable system persona (人设)** — tune your cat's personality anytime
-- Multiple LLM provider profiles (OpenAI-compatible, DeepSeek, etc.), switchable from the visual settings page
-- **MCP adapter** support to plug in external MCP tool servers
-- Built-in toolkits: web search (Tavily), reminders, date/time, and more
+> The UI is in Chinese. All conversations and data in the screenshots are illustrative demo content.
+
+## 📸 Screenshots
+
+![Dashboard](docs/screenshots/dashboard.jpg)
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/chat.jpg" alt="Chat" /></td>
+    <td width="50%"><img src="docs/screenshots/skills.jpg" alt="Skills" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Chat</b> · streaming replies, reasoning, tool calls, token usage</sub></td>
+    <td align="center"><sub><b>Skills</b> · plugin library, in-app file tree, import / export</sub></td>
+  </tr>
+</table>
+
+![Knowledge base](docs/screenshots/knowledge-base.jpg)
+
+## ✨ Highlights
+
+| | |
+| :-- | :-- |
+| **🐾 It actually lives on your desktop**<br>A transparent, always-on-top, draggable pet with idle / walk / talk / think / sleep / remind animations and moods. Its speech bubble grows with the answer. | **🧠 It thinks — and acts**<br>A LangGraph-powered agent with streaming output, tool calls and multi-turn memory. Shell, Python and file I/O included, with human-in-the-loop confirmation for anything dangerous. |
+| **📚 Local-first RAG**<br>Multiple knowledge bases with automatic chunking and vector indexing (ChromaDB). The local `bge-small-zh` embedding model works out of the box; PDFs, Office files and images go through OCR. | **🛠 An extensible toolbox**<br>Plug in MCP servers directly. Drop a skill directory into `runtime/skills/` and it becomes a new capability — browse, create and edit them in-app. |
+| **⏰ It reaches out first**<br>Ignore it too long and it pops up to ask why. Say "remind me in 20 minutes" and it will. Replies can also be read aloud. | **🎨 A UI that was actually designed**<br>Streaming Markdown, syntax highlighting, LaTeX and Mermaid; usage analytics, knowledge-base stats and live backend logs. |
 
 ### 🐾 Desktop Pet
-- Transparent, frameless, always-on-top window with sprite frame animations (idle / walk / talk / think / sleep / react and more)
-- Drag to move, click to interact, optional click-through mode
-- Bubble messages: agent replies and reminders pop up above the cat
-- Quick ask: global shortcut `Alt+Shift+Q` for instant questions right at the pet, with real-time session sync to the main window
 
-### 🧠 Knowledge Base (RAG)
-- Build a private local knowledge base: automatic document chunking and vector indexing (ChromaDB)
-- Local embedding model `BAAI/bge-small-zh-v1.5` (auto-downloaded if missing); remote embedding APIs also supported
-- Management UI: multiple knowledge bases, document upload, detail view, deletion
-- The agent retrieves from your knowledge base to answer questions (via RAG tools)
+<p align="center">
+  <img src="docs/screenshots/desktop-pet.jpg" width="560" alt="Desktop pet" />
+</p>
 
-### 📄 Document Parsing & OCR
-- PDF / Word / Excel / PPT / images / text supported
-- Multi-engine parsing: MarkItDown, Docling, RapidOCR, Unstructured (engine switchable in config)
-- Parsed content can be fed directly into the chat or indexed into the knowledge base
+The pet is its own always-on-top window sharing the same agent session as the main window:
 
-### ⏰ Proactive Interaction
-- Idle detection + greeting scheduling: ignore the cat too long and it bubbles up ("Why aren't you talking to me? 😾")
-- Scheduled reminder tools: ask the cat to remind you to drink water or take a break
-- **TTS voice read-aloud**: replies can be spoken (Web Speech API, configurable voice / rate / pitch)
-
-### 🪄 Agent Actions
-- The agent can run shell commands, execute Python, and read/write/edit files; dangerous actions (`execute` / `write_file` / `edit_file` / `delete`) **require user confirmation** by default (human-in-the-loop interrupts)
-- **DSH hands-on subagent** (DeepSeek Harness): multi-step "chores" are delegated to an isolated worker process that auto-creates a todo list, executes step by step, and reports back — the main cat is never blocked by long tasks
-- Skill plugin system: drop a conforming skill directory (with `SKILL.md`) into `runtime/skills/` and it works — e.g. the bundled `html-ppt` slide-deck skill
-
-### 📊 System Monitoring
-- Real-time CPU, GPU (NVIDIA), memory, disk, and process metrics on an ECharts dashboard (psutil + pynvml)
-
-### 💬 Rich Chat Rendering
-- Markdown + code highlighting (highlight.js) + LaTeX (KaTeX) + Mermaid diagrams
-- Streaming-optimized incremental chunk rendering — long replies stay smooth
-- Persistent chat history (SQLite): multiple conversations, pinning, deletion
-
-### 🛠️ Engineering
-- Visual settings page: LLM profiles, persona, RAG, proxy (HTTP/HTTPS), pet preferences, voice
-- **Dual-layer config**: template defaults (`config.json`) + user overrides (`config.user.json`); personal settings survive app upgrades
-- Database migrations managed by Alembic, auto-upgraded at startup (see [MIGRATION.md](MIGRATION.md))
-- Logs page: backend logs streamed to the frontend in real time
-- Python environment auto-detection: embedded Python downloaded automatically if missing; dependencies installed at startup
-- One-click packaging: electron-builder for Windows (NSIS) / macOS (DMG) / Linux (AppImage)
-
-## 🖼️ Screens
-
-| Page | Route | Description |
-|---|---|---|
-| Dashboard | `#/` | System monitor charts (CPU / GPU / memory / disk) |
-| Chat | `#/chat` | Streaming chat, tool-call states, session history, file attachments |
-| Knowledge Base | `#/kb` | Multi-KB management, document upload, retrieval config |
-| MCP Servers | `#/mcp` | MCP server configuration and management |
-| Skills | `#/skills` | Skill plugin browsing, details, creation |
-| Settings | `#/settings` | LLM / persona / RAG / voice / proxy / pet |
-| Logs | `#/logs` | Live backend logs |
-| About | `#/about` | Version and project links |
-
-The pet window is a separate page (`pet/pet.html`) — transparent and always-on-top, synced with the main window via IPC/WebSocket.
-
-## 🛠️ Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Desktop Framework | Electron 28 |
-| Frontend | Vue 3 (Composition API) + Vue Router + Vite 5 + ECharts |
-| Chat Rendering | markdown-it + highlight.js + KaTeX + Mermaid |
-| Backend | Python 3.11 + FastAPI + uvicorn + asyncio (single-process model) |
-| AI Agent | LangChain + LangGraph + DeepAgents (+ langchain-mcp-adapters) |
-| Hands-on Subagent | deepseek-harness-sdk (DSH worker process) |
-| Knowledge Base | ChromaDB + sentence-transformers + langchain-huggingface |
-| Document Parsing | MarkItDown + Docling + RapidOCR + Unstructured |
-| Persistence | SQLAlchemy (asyncio) + SQLite (aiosqlite) + Alembic migrations |
-| Monitoring | psutil + pynvml + wmi/pywin32 |
-| Communication | WebSocket (chat/events) + IPC (window/config) + stdio protocol lines (monitor/logs/ready) |
-| Packaging | electron-builder (NSIS / DMG / AppImage) |
-
-## 🏗️ Architecture
-
-```
-┌──────────────────────── Electron main process (electron/main.js) ────────────────────────┐
-│  Main window (src/index.html)          Pet window (transparent, pet/pet.html)   Tray      │
-│      │ IPC (preload.js)                    │ IPC (pet-preload.js)                          │
-│  config-store.js dual-layer config ──► config.user.json                                    │
-│  python-env-checker.js ──► spawn & supervise python/main.py (stdio [READY]/protocol)      │
-└──────────────────────────────────────────┬───────────────────────────────────────────────┘
-                                           │
-                 ┌─────────────────────────┴─────────────────────────┐
-                 │       Python backend (FastAPI, single-process     │
-                 │                    asyncio)                       │
-                 │  /ws/agent  WebSocket: streaming chat / tool      │
-                 │             events / proactive reminders          │
-                 │  REST: /api/kb /api/conversations /api/stats      │
-                 │      /api/skills /api/mcp                         │
-                 │  ┌───────────┐ ┌─────────┐ ┌────────┐ ┌────────┐  │
-                 │  │   Agent   │ │  RAG    │ │ Monitor│ │Proactive│  │
-                 │  │ LangGraph │ │ ChromaDB│ │ psutil │ │ idle &  │  │
-                 │  │ + tools   │ │ + OCR   │ │ pynvml │ │ greeting│  │
-                 │  │ + DSH sub.│ └─────────┘ └────────┘ └────────┘  │
-                 │  └────┬──────┘                                     │
-                 │       │ SQLite (messages.sqlite) + Alembic         │
-                 └───────┴──── WebSocket ◄── renderer direct ─────────┘
-```
-
-Key design points:
-
-- **Renderer connects directly to the Python WebSocket**: chat tokens, tool-call states, and proactive events bypass the main process for low latency; window control and config persistence still go through IPC.
-- **Single-process asyncio backend**: FastAPI server, monitoring (blocking calls wrapped with `to_thread`), proactive scheduling, and the agent engine all live in one Python process, supervised by the Electron main process.
-- **stdio protocol lines**: the Python process emits `__PROTOCOL__` lines and a `[READY] {"port":...}` signal on stdout — logs are forwarded to the frontend Logs page.
-- **Port fallback**: if the preferred port is occupied, the backend automatically falls back to a free port; the main process broadcasts `agent-ready` based on `[READY]`.
-- **Dual-layer config**: `config.json` (template, updated with the app) deep-merged with `userData/config.user.json` (user overrides) — upgrades never lose settings.
-- **Subagent isolation**: the DSH hands-on subagent runs in an independent worker process that only receives the delegated task; multi-step work must start with a todo list.
-
-## 📁 Project Structure
-
-```
-sassy-cat/
-├── electron/                      # Electron main process
-│   ├── main.js                    # Entry (main + pet window + tray + Python lifecycle)
-│   ├── preload.js                 # Main-window preload script
-│   ├── pet-preload.js             # Pet-window preload script
-│   ├── config-store.js            # Dual-layer config (deep merge + atomic write)
-│   └── python-env-checker.js      # Python env check / embedded Python download
-├── src/                           # Main-window Vue 3 frontend
-│   ├── views/
-│   │   ├── Dashboard.vue          # System monitor dashboard
-│   │   ├── ChatView.vue           # AI chat (streaming + tools + history)
-│   │   ├── KnowledgeBase.vue / KnowledgeBaseDetail.vue  # RAG management
-│   │   ├── SkillManager.vue / SkillDetail.vue           # Skill plugins
-│   │   ├── McpManager.vue         # MCP server management
-│   │   ├── Settings.vue           # LLM + persona + RAG + voice + proxy
-│   │   └── Logs.vue / About.vue / Setup.vue
-│   ├── composables/
-│   │   ├── useAgentSocket.js      # WebSocket client (singleton + auto-reconnect)
-│   │   ├── useChatStore.js        # Chat state store
-│   │   ├── useFileUpload.js       # File upload (OCR / RAG)
-│   │   ├── useTTS.js              # Voice read-aloud (Web Speech)
-│   │   └── useKbUploadState.js / useModelDownloadState.js / useRestartState.js
-│   ├── components/
-│   │   ├── MarkdownRenderer.vue   # Markdown/LaTeX/Mermaid (incremental chunks)
-│   │   ├── ConversationItem.vue / DocumentAttachment.vue / FilePreview.vue
-│   ├── utils/streamSplitter.js    # Streaming text chunking
-│   └── api/                       # REST clients (kb / messages / stats / skills / mcp)
-├── pet/                           # Pet window (Vite multi-page entry)
-│   ├── pet.html / pet-main.js
-│   ├── assets/sprites/cat/        # Sprite frames + config.json (actions/FPS)
-│   └── components/
-│       ├── PetApp.vue             # Bubbles + interaction + state orchestration
-│       └── sprite/                # Sprite system (PetSprite / Svg & Spritesheet renderers / preload)
-├── python/                        # Python backend (single-process asyncio)
-│   ├── main.py                    # Entry ([READY] signal + port fallback)
-│   ├── config_loader.py / paths.py / utils.py
-│   ├── server/
-│   │   ├── app.py                 # FastAPI app + routes + lifespan
-│   │   ├── ws_agent.py            # /ws/agent endpoint + session management
-│   │   ├── bus.py                 # In-process event bus
-│   │   ├── conversations.py / kb_api.py / stats_api.py / skills_api.py / mcp_api.py
-│   │   └── db/                    # SQLAlchemy models + repositories + Alembic + seed
-│   ├── agent/
-│   │   ├── engine.py              # Agent builder (config injection)
-│   │   ├── runner.py / main_agent.py  # Streaming bridge
-│   │   ├── llms.py                # LLM factory
-│   │   ├── prompts.py             # Persona templates + runtime prompt assembly
-│   │   ├── middlewares.py         # Agent middlewares
-│   │   ├── reminders.py           # Reminder context injection
-│   │   ├── virtual_shell.py       # Sandboxed shell execution
-│   │   ├── tools/                 # builtin / rag / reminder / mcp / subagent(dsh)
-│   │   └── rag/                   # rag_service / document_retriever / model_download
-│   ├── monitor/                   # System metrics (cpu / gpu / memory / disks / protocol)
-│   ├── ocr/                       # Document parsing (markitdown / docling / rapidocr / xls …)
-│   └── proactive/                 # Idle detection + greetings + reminder scheduling
-├── runtime/
-│   └── skills/                    # Skill plugin directory (e.g. bundled html-ppt skill)
-├── tests/                         # Ad-hoc verification / probe scripts
-├── plans/                         # Design & migration docs
-├── assets/                        # App icons
-├── config.json                    # App config template
-├── requirements.txt               # Python dependencies
-├── vite.config.js                 # Vite multi-page config (index / setup / pet)
-├── start.bat                      # Windows one-click dev launcher
-├── MIGRATION.md                   # Database migration guide
-└── package.json                   # Node dependencies + electron-builder config
-```
+- Press `Alt + Shift + Q` to ask the cat directly; answers sync back to the main window.
+- Click, drag, pet — it reacts. Optional click-through keeps it out of your way.
+- Bubbles show live agent replies and reminders; long answers expand in place.
 
 ## 🚀 Quick Start
 
-### Requirements
-
-- **Node.js**: 18+
-- **npm**: 9+
-- **Python**: 3.10+ (auto-detected; an embedded Python is downloaded to `python_env/` if none is available)
-
-### Install Dependencies
+**Requirements:** Node.js 18+, npm 9+. Python 3.10+ is optional — an embedded Python is downloaded automatically on first launch if none is found.
 
 ```bash
+git clone https://github.com/zjwan461/sassy-cat.git
+cd sassy-cat
 npm install
 ```
 
-### Development Mode
+**Windows (one-click):**
 
-**Windows (recommended, one-click):**
 ```bash
 start.bat
 ```
-The script checks Node/npm, runs `npm install` on first launch, then starts the dev environment.
 
 **macOS / Linux:**
+
 ```bash
 npm run electron:dev
 ```
 
-Dev mode uses `concurrently` to start the Vite dev server (`http://localhost:5173`) and Electron together, with hot reload. The Python backend is spawned by the Electron main process, and `requirements.txt` dependencies are installed automatically at startup.
+The first launch runs an environment check and installs `requirements.txt`, then starts the Python backend (FastAPI + asyncio). Once the pet appears, open **Settings** and configure an LLM (Base URL / API Key / model name — OpenAI-compatible endpoints and DeepSeek both work), then save.
 
-### Production Build
+> Packaging: `npm run electron:build` for the current platform, or `electron:build:win` / `:mac` / `:linux`. Artifacts land in `dist_electron/`.
 
-```bash
-# Build for the current platform
-npm run electron:build
+## 🛠 Tech Stack
 
-# Build for a specific platform
-npm run electron:build:win     # Windows NSIS installer
-npm run electron:build:mac     # macOS DMG
-npm run electron:build:linux   # Linux AppImage
+| Layer | Technology |
+| :-- | :-- |
+| Desktop shell | Electron 28 + electron-builder |
+| Frontend | Vue 3 (Composition API) + Vue Router + Vite 5 + ECharts |
+| Chat rendering | markdown-it + highlight.js + KaTeX + Mermaid |
+| Backend | Python 3.11 + FastAPI + uvicorn + asyncio (single-process) |
+| AI Agent | LangChain + LangGraph + DeepAgents + langchain-mcp-adapters |
+| Hands-on subagent | deepseek-harness-sdk (isolated worker process) |
+| Knowledge base | ChromaDB + sentence-transformers + langchain-huggingface |
+| Document parsing | MarkItDown + Docling + RapidOCR + Unstructured |
+| Persistence | SQLAlchemy (async) + SQLite (aiosqlite) + Alembic |
+| Communication | WebSocket (chat/events) + IPC (window/config) + stdio protocol lines (logs/ready) |
 
-# Build frontend assets and preview Electron locally
-npm run electron:preview
+## 🏗 Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Main window (src/index.html)          Pet window (transparent, pet/pet.html) │
+│      │ IPC (preload.js)                    │ IPC (pet-preload.js)             │
+│  config-store.js two-layer config ──► config.user.json                        │
+│  python-env-checker.js ──► spawn & supervise python/main.py                  │
+└──────────────────────────────────────────┬───────────────────────────────────┘
+                                           │
+                 ┌─────────────────────────┴─────────────────────────┐
+                 │       Python backend (FastAPI, single-process)     │
+                 │  /ws/agent  WebSocket: streaming chat / tools /    │
+                 │             proactive reminders                    │
+                 │  REST: /api/kb /api/conversations /api/stats       │
+                 │        /api/skills /api/mcp                        │
+                 │  ┌───────────┐ ┌─────────┐ ┌────────┐ ┌────────┐   │
+                 │  │   Agent   │ │  RAG    │ │ Monitor│ │Proactive│  │
+                 │  │ LangGraph │ │ ChromaDB│ │ psutil │ │ idle & │   │
+                 │  │ + tools   │ │ + OCR   │ │ pynvml │ │greeting│   │
+                 │  │ + DSH sub.│ └─────────┘ └────────┘ └────────┘   │
+                 │  └────┬──────┘                                     │
+                 │       │ SQLite (messages.sqlite) + Alembic          │
+                 └───────┴──── WebSocket ◄── renderer direct ──────────┘
 ```
 
-Build artifacts are output to the `dist_electron/` directory.
+Design notes worth knowing:
+
+- **The renderer talks to the Python WebSocket directly** — chat tokens, tool state and proactive events skip the main process for lower latency; window control and config persistence still go through IPC.
+- **Single-process asyncio backend** — FastAPI, metric collection, proactive scheduling and the agent engine share one process supervised by Electron; blocking calls are wrapped in `to_thread`.
+- **stdio protocol lines** — Python emits `__PROTOCOL__` log lines and a `[READY] {"port":…}` signal; the port falls back automatically if the preferred one is taken.
+- **Two-layer config** — `config.json` (template, updated with the app) deep-merged with `userData/config.user.json` (user overrides), so upgrades never lose settings.
+- **Subagent isolation** — the hands-on DSH subagent runs in its own worker process with only the delegated task; multi-step work must start with a todo list.
+
+## 📁 Project Structure
+
+<details>
+<summary>Expand the directory tree</summary>
+
+```text
+sassy-cat/
+├── electron/                      # Main process
+│   ├── main.js                    # Entry (main + pet window + tray + Python lifecycle)
+│   ├── preload.js / pet-preload.js
+│   ├── config-store.js            # Two-layer config (deep merge + atomic write)
+│   └── python-env-checker.js      # Python env check / embedded Python download
+├── src/                           # Main-window Vue 3 frontend
+│   ├── styles/                    # Design tokens + base layer ("ink night · amber")
+│   ├── views/                     # Dashboard / Chat / KB / Skills / MCP / Settings / Logs …
+│   ├── components/                # AppIcon / MarkdownRenderer / conversation item / previews
+│   ├── composables/               # WS client / chat store / upload / TTS / state
+│   ├── utils/streamSplitter.js    # Streaming chunk splitter
+│   └── api/                       # REST clients
+├── pet/                           # Pet window (separate Vite entry)
+│   ├── pet.html / pet-main.js
+│   ├── assets/sprites/cat/        # Sprite frames + action config
+│   └── components/                # Bubbles / interaction / sprite renderers
+├── python/                        # Backend (single-process asyncio)
+│   ├── main.py                    # [READY] signal + port fallback
+│   ├── server/                    # FastAPI routes, WS, event bus, DB/Alembic
+│   ├── agent/                     # Engine, streaming bridge, prompts, tools, RAG
+│   ├── monitor/                   # System metric collection
+│   ├── ocr/                       # Document parsing engines
+│   └── proactive/                 # Idle detection / greetings / reminders
+├── runtime/skills/                # Skill plugin directory
+├── docs/screenshots/              # README images
+├── plans/                         # Design & migration docs
+├── tests/                         # Verification / probe scripts
+├── config.json                    # App config template
+├── requirements.txt
+└── vite.config.js                 # Multi-page entries (index / setup / pet)
+```
+</details>
 
 ## 📖 User Guide
 
-### First Launch
+### First launch
 
-1. On startup the app runs an environment check (Python / dependency installation); the `Setup` page shows progress.
-2. Go to **Settings** and configure at least one LLM: Base URL, API Key, and model name (OpenAI-compatible endpoints and DeepSeek are supported), then save and activate it.
-3. Open the chat page or poke the pet to start talking; press `Alt+Shift+Q` for a quick ask right next to the pet.
+1. An environment check runs automatically (Python / dependency install); the setup window shows progress.
+2. Open **Settings**, configure at least one LLM — Base URL, API Key, model name — then save and activate it.
+3. Open **Chat** or poke the pet to start talking. `Alt + Shift + Q` asks the cat directly.
 
-### Knowledge Base
+### Knowledge base
 
-1. **Knowledge Base page** → create a new KB.
-2. Upload PDF / Word / Excel / images and more — documents are parsed (OCR/doc engines), chunked, and vectorized automatically.
-3. During chat, the agent retrieves from the KB to answer (via RAG tools; you can also explicitly ask "answer based on my knowledge base").
-4. The default embedding model is local `BAAI/bge-small-zh-v1.5`, downloaded on first use if missing; a remote embedding API can be configured instead.
+1. **Library** → create a knowledge base.
+2. Upload PDFs, Word, Excel, images and more — documents are parsed (OCR / document engines), chunked and vectorized automatically.
+3. During chat, ask the agent to answer "based on my knowledge base", or just ask related questions.
+4. The default local embedding model is `BAAI/bge-small-zh-v1.5`, downloaded on first use; a remote embedding API can be configured instead.
 
 ### Skills & MCP
 
-- **Skills**: place a conforming skill directory (with `SKILL.md`) under `runtime/skills/`; browse, create, and use them from the Skills page.
-- **MCP**: add server configs (command / args / env) on the MCP page, and the agent can call the tools they expose.
+- **Skills**: drop a directory containing `SKILL.md` into `runtime/skills/`; browse, edit and enable it from the Skills page. A bundled `html-ppt` skill is included as an example.
+- **MCP**: add server configs (command / args / env) on the MCP page and the agent can call the tools they expose.
 
-### Dangerous Action Confirmation
+### Dangerous action confirmation
 
-By default the agent **interrupts and waits for confirmation** before executing shell commands, writing, editing, or deleting files (tune via `agent.interruptOn` in `config.json`).
+By default the agent **interrupts and waits for your confirmation** before running shell commands, writing, editing or deleting files. Tune this per tool via `agent.interruptOn` in `config.json`.
 
-### Proactive Reminders
+### Proactive reminders
 
-The pet greets you based on idle detection; you can also just say "remind me to drink water in 10 minutes" and it will bubble up on schedule.
+The pet greets you after a period of idleness; you can also say "remind me to drink water in 10 minutes" and it will bubble up on schedule. Replies can be read aloud (Web Speech).
 
-## 🔧 Development Guide
+## 🔧 Development
 
-### Frontend (Main Window)
+<details>
+<summary>Frontend / pet / backend / migrations / tests</summary>
 
-The frontend uses Vue 3 + Vite under `src/` (alias `@` → `src/`):
+### Frontend (main window)
 
-- [`ChatView.vue`](src/views/ChatView.vue) — AI chat page (streaming + tool-call display + history)
-- [`Dashboard.vue`](src/views/Dashboard.vue) — System monitor dashboard (ECharts)
-- [`KnowledgeBase.vue`](src/views/KnowledgeBase.vue) / [`KnowledgeBaseDetail.vue`](src/views/KnowledgeBaseDetail.vue) — KB management
-- [`SkillManager.vue`](src/views/SkillManager.vue) / [`McpManager.vue`](src/views/McpManager.vue) — extension management
-- [`Settings.vue`](src/views/Settings.vue) — LLM / persona / RAG / voice / proxy settings
-- [`useAgentSocket.js`](src/composables/useAgentSocket.js) — WebSocket client wrapper (singleton + auto-reconnect)
-- [`MarkdownRenderer.vue`](src/components/MarkdownRenderer.vue) — rich rendering (with [`streamSplitter.js`](src/utils/streamSplitter.js) for incremental chunks)
+Vue 3 + Vite, alias `@` → `src/`:
 
-Vite is configured with multiple page entries: `index.html` (main window), `setup.html` (bootstrap), [`pet/pet.html`](pet/pet.html) (pet) — see [`vite.config.js`](vite.config.js). Frontend changes hot-reload automatically.
+- [`ChatView.vue`](src/views/ChatView.vue) — chat page (streaming + tool state + history)
+- [`Dashboard.vue`](src/views/Dashboard.vue) — usage dashboard (ECharts)
+- [`KnowledgeBase.vue`](src/views/KnowledgeBase.vue) / [`KnowledgeBaseDetail.vue`](src/views/KnowledgeBaseDetail.vue) — knowledge-base management
+- [`useAgentSocket.js`](src/composables/useAgentSocket.js) — WebSocket client (singleton + auto-reconnect)
+- [`MarkdownRenderer.vue`](src/components/MarkdownRenderer.vue) — rich rendering + incremental chunks
 
-### Pet Window
+The design system is documented in [`plans/ui-design-system.md`](plans/ui-design-system.md); colors, radii and shadows all come from [`src/styles/tokens.css`](src/styles/tokens.css), with primitives in [`src/styles/base.css`](src/styles/base.css).
 
-The pet lives under `pet/` with its own Vite entry:
+### Pet window
 
 - [`PetApp.vue`](pet/components/PetApp.vue) — bubbles, dragging, click interaction, state orchestration
-- [`pet/components/sprite/`](pet/components/sprite/) — sprite rendering system: [`PetSprite.vue`](pet/components/sprite/PetSprite.vue) as the entry, [`SpritesheetRenderer.vue`](pet/components/sprite/SpritesheetRenderer.vue) / [`SvgSpriteRenderer.vue`](pet/components/sprite/SvgSpriteRenderer.vue) as two render backends, [`useSpritePreload.js`](pet/components/sprite/useSpritePreload.js) for frame preloading
-- [`pet/assets/sprites/cat/config.json`](pet/assets/sprites/cat/config.json) — action/frame animation config (idle, walk, talk, think, sleep, react, remind, …)
-- [`pet-preload.js`](electron/pet-preload.js) — dedicated preload script (click-through, dragging, etc.)
+- [`pet/components/sprite/`](pet/components/sprite/) — sprite rendering (SVG / spritesheet backends, preloading)
+- [`pet/assets/sprites/cat/config.json`](pet/assets/sprites/cat/config.json) — actions and frame-rate config
 
-### Python Backend
+### Python backend
 
-The backend lives under `python/` (FastAPI + single-process asyncio):
-
-- [`main.py`](python/main.py) — service entry (port fallback + `[READY]` signal)
-- [`server/ws_agent.py`](python/server/ws_agent.py) — WebSocket chat endpoint and session management
+- [`main.py`](python/main.py) — service entry (port fallback + `[READY]`)
+- [`server/ws_agent.py`](python/server/ws_agent.py) — WebSocket chat and session management
 - [`agent/engine.py`](python/agent/engine.py) / [`agent/runner.py`](python/agent/runner.py) — agent builder and streaming bridge
-- [`agent/prompts.py`](python/agent/prompts.py) — persona templates and runtime prompt assembly
-- [`agent/tools/`](python/agent/tools/) — toolkits: builtin shell/file tools, RAG retrieval, reminders, MCP, DSH subagent
-- [`monitor/service.py`](python/monitor/service.py) — periodic system metrics collection
-- [`proactive/scheduler.py`](python/proactive/scheduler.py) — idle detection / greeting / reminder scheduling
+- [`agent/tools/`](python/agent/tools/) — built-in shell/file tools, RAG, reminders, MCP, DSH subagent
+- [`proactive/scheduler.py`](python/proactive/scheduler.py) — idle detection / greetings / reminder scheduling
 
 Add Python dependencies to [`requirements.txt`](requirements.txt); they are installed automatically at startup.
 
-### Database Migrations
+### Database migrations
 
-Schema is managed by Alembic (`python/server/db/migrations/`) and auto-upgrades at startup — users never notice. When adding or changing tables during development, follow [MIGRATION.md](MIGRATION.md) (autogenerate → manual review → verification script).
+Schema is managed by Alembic (`python/server/db/migrations/`) and auto-upgraded at startup. When changing tables, follow [MIGRATION.md](MIGRATION.md): autogenerate → manual review → verification.
 
-### Testing
+### Tests
 
-The `tests/` directory contains ad-hoc verification/probe scripts (e.g. [`tmp_test_migration.py`](tests/tmp_test_migration.py), [`stream_splitter.test.mjs`](tests/stream_splitter.test.mjs), [`incremental_render_equivalence.test.mjs`](tests/incremental_render_equivalence.test.mjs)) that can be run to validate the corresponding subsystems.
+`tests/` contains verification and probe scripts, e.g. [`stream_splitter.test.mjs`](tests/stream_splitter.test.mjs) and [`incremental_render_equivalence.test.mjs`](tests/incremental_render_equivalence.test.mjs).
 
-### Communication Architecture
-
-| Data Type | Channel | Description |
-|---|---|---|
-| AI chat / streaming tokens / tool events / proactive reminders | WebSocket | Renderer connects directly to Python for low latency |
-| Config persistence (LLM / persona / pet preferences) | IPC | Main process reads/writes `config.user.json` |
-| System metrics / backend logs / ready signal | stdio protocol lines + IPC | `__PROTOCOL__` lines + `[READY] {"port":...}` |
-| Window control (drag / always-on-top / click-through) | IPC | Managed by the main process |
+</details>
 
 ## ⚙️ Configuration
 
-### App Config Template (`config.json`)
+<details>
+<summary>Config template and field reference</summary>
 
-Base project configuration lives in the root [`config.json`](config.json) (template layer, updated with the app):
+The root [`config.json`](config.json) is the template layer (updated with the app); user overrides live in `userData/config.user.json`:
 
 ```json
 {
@@ -383,77 +292,55 @@ Base project configuration lives in the root [`config.json`](config.json) (templ
 }
 ```
 
-Sections at a glance:
-
 | Section | Description |
-|---|---|
-| `agent` | Memory window, recursion limit, OCR toggle/engine, dangerous-action confirmation (`interruptOn`) |
-| `dsh` | Hands-on subagent: LLM source (defaults to the main model), maxTokens, reasoning effort |
-| `rag` | Embedding model (local/remote), auto-embedding, KB document parse engine |
+| :-- | :-- |
+| `agent` | Memory window, recursion limit, OCR toggle & engine, dangerous-action confirmation |
+| `dsh` | Subagent model source, maxTokens, reasoning effort |
+| `rag` | Embedding model (local/remote), auto-embedding, document parse engine |
 | `pet` | Pet toggle, quick-ask shortcut, reminder polling and bubble duration |
 | `voice` | Read-aloud toggle, engine, auto-read, voice name / rate / pitch |
 | `network` | HTTP/HTTPS proxy |
 
-### User Config (`config.user.json`)
-
-Runtime user settings (LLM connections, persona prompts, pet preferences, etc.) are stored in `userData/config.user.json` and edited via the visual settings page. The dual-layer design (template + user override, deep-merged) ensures settings survive upgrades.
-
-### Custom Python Version
-
-Change `pythonVersion` in `config.json` and restart. If an embedded Python was already downloaded, delete the `python_env` directory before restarting.
-
-## 📦 Packaging
-
-Place app icons in `assets/`:
-
-- `icon.ico` — Windows icon
-- `icon.icns` — macOS icon
-- `icon.png` — Linux icon
-
-`extraResources` auto-bundles `requirements.txt`, `python/`, `config.json`, `assets/`, and `runtime/skills/` into the app. The Windows installer is NSIS-based with a customizable install directory and desktop/Start-Menu shortcuts (see the `build` section in [`package.json`](package.json)).
+Changing `pythonVersion` switches the embedded Python; if one was already downloaded, delete `python_env/` and restart.
+</details>
 
 ## ❓ FAQ
 
 <details>
-<summary><b>Python service didn't start / chat is unresponsive?</b></summary>
+<summary><b>The Python service didn't start / chat is unresponsive</b></summary>
 
-- Open the **Logs page** to inspect backend output. On first launch, embedded Python is downloaded and `requirements.txt` is installed — this takes a while and is normal.
-- If the port is occupied, the backend automatically falls back to a random free port; usually nothing to do.
-- Dependency install failures are often network issues; configure a proxy in Settings and restart.
-
+Check the **Logs** page for backend output. The first launch downloads an embedded Python and installs dependencies, which takes a while — that's expected. If the port is occupied the backend falls back to a free one. Dependency install failures are usually network issues; configure a proxy in Settings and restart.
 </details>
 
 <details>
-<summary><b>Embedding model download failed?</b></summary>
+<summary><b>The embedding model failed to download</b></summary>
 
-The default downloads `BAAI/bge-small-zh-v1.5` from HuggingFace. If your network is restricted, configure a proxy in Settings, or switch to a remote embedding API.
-
+The default downloads `BAAI/bge-small-zh-v1.5` from HuggingFace. On restricted networks, configure a proxy or switch to a remote embedding API.
 </details>
 
 <details>
-<summary><b>Pet window not visible / wrong position?</b></summary>
+<summary><b>The pet is missing</b></summary>
 
-The pet toggle lives in Settings and `pet.enabled` in `config.json`. The pet window is transparent and always-on-top; if you can't find it, switch its visibility from the tray menu.
-
+There's a pet toggle in Settings (`pet.enabled` in `config.json`). The window is transparent and always-on-top; you can also toggle its visibility from the tray menu.
 </details>
 
 <details>
-<summary><b>The agent asks for confirmation on every command — too tedious?</b></summary>
+<summary><b>Every command needs confirmation — too noisy?</b></summary>
 
-Confirmation is controlled by `agent.interruptOn` in `config.json`, which can be disabled per tool (turning everything off is not recommended).
-
+Confirmation is controlled by `agent.interruptOn` and can be disabled per tool (turning everything off is not recommended).
 </details>
 
-## 🗺️ Roadmap
+## 🗺 Roadmap
 
-Ongoing design/migration docs are recorded in [`plans/`](plans/), including:
+Ongoing design and migration docs live in [`plans/`](plans/):
 
-- ✅ Pet sprite animation migration ([`pet-sprite-migration-plan.md`](plans/pet-sprite-migration-plan.md))
-- ✅ TTS voice read-aloud ([`tts-voice-read-aloud-plan.md`](plans/tts-voice-read-aloud-plan.md))
-- ✅ Streaming Markdown render performance ([`streaming-markdown-render-perf-plan.md`](plans/streaming-markdown-render-perf-plan.md))
-- ✅ DSH subagent settings ([`dsh-settings-plan.md`](plans/dsh-settings-plan.md))
-- 🚧 Agent error retry ([`agent-error-retry-plan.md`](plans/agent-error-retry-plan.md))
-- 🚧 Context window compression ([`context-window-compression-plan.md`](plans/context-window-compression-plan.md))
+- ✅ Pet sprite animation migration
+- ✅ TTS voice read-aloud
+- ✅ Streaming Markdown rendering performance
+- ✅ DSH subagent settings
+- ✅ UI design system ("ink night · amber")
+- 🚧 Agent error retry
+- 🚧 Context window compression
 
 ## 📝 License
 
@@ -461,8 +348,10 @@ Ongoing design/migration docs are recorded in [`plans/`](plans/), including:
 
 ## 🤝 Contributing
 
-Issues and pull requests are welcome! Please read the relevant docs under [`plans/`](plans/) before making changes, to keep the architecture consistent.
+Issues and pull requests are welcome. Before making changes, please read the relevant design docs under [`plans/`](plans/) to keep the architecture consistent.
 
 ## 📮 Feedback
 
-Report issues on the [project homepage](https://github.com/zjwan461/sassy-cat), or check the [release notes](https://github.com/zjwan461/sassy-cat/releases).
+- Homepage: <https://github.com/zjwan461/sassy-cat>
+- Issues: <https://github.com/zjwan461/sassy-cat/issues>
+- Releases: <https://github.com/zjwan461/sassy-cat/releases>
