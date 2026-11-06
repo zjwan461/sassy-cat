@@ -8,7 +8,9 @@
 
 发送策略：
 - 广播前先把帧序列化一次（多个连接不再各自 json.dumps）；
-- 多个连接并发发送，避免一个慢连接把整条流式输出拖住；
+- 不同连接之间并发发送，避免一个慢连接把整条流式输出拖住；
+- **同一连接上的发送串行**：两条广播同时打向同一个 ws 时，若无锁，两次
+  send_text 会在 ASGI 层交错写入，前端可能收到半帧拼别的帧（表现为文本乱序/丢字）；
 - 单连接发送超时（默认 2s）只记日志、不阻塞其它连接。
 """
 
@@ -30,6 +32,16 @@ class Hub:
         self._rooms: dict[str, Set[WebSocket]] = {}
         self._all: Set[WebSocket] = set()
         self._lock = asyncio.Lock()
+        # 每条连接一把发送锁：保证同一 ws 上的帧不会互相穿插
+        self._send_locks: dict[int, asyncio.Lock] = {}
+
+    def _lock_for(self, ws: WebSocket) -> asyncio.Lock:
+        key = id(ws)
+        lock = self._send_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._send_locks[key] = lock
+        return lock
 
     async def join(self, session_id: str, ws: WebSocket):
         async with self._lock:
@@ -39,6 +51,7 @@ class Hub:
     async def leave(self, session_id: str | None, ws: WebSocket):
         async with self._lock:
             self._all.discard(ws)
+            self._send_locks.pop(id(ws), None)
             if session_id and session_id in self._rooms:
                 self._rooms[session_id].discard(ws)
                 if not self._rooms[session_id]:
@@ -53,7 +66,8 @@ class Hub:
 
     async def _send_text(self, ws: WebSocket, payload: str) -> None:
         try:
-            await asyncio.wait_for(ws.send_text(payload), timeout=_SEND_TIMEOUT)
+            async with self._lock_for(ws):
+                await asyncio.wait_for(ws.send_text(payload), timeout=_SEND_TIMEOUT)
         except asyncio.TimeoutError:
             logger.warning("WS 发送超时（%.1fs），跳过该帧；对端可能已卡死", _SEND_TIMEOUT)
         except Exception:

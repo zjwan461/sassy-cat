@@ -52,6 +52,17 @@ def classify_error(e: Exception) -> tuple[str, str]:
     if isinstance(e, (APIConnectionError, APITimeoutError)):
         return "network", "网络异常或超时，请重试"
 
+    # 代理环境变量不合法（NO_PROXY 里的 [::1] / 通配符等）会在「构造 HTTP 客户端」
+    # 阶段就抛 InvalidURL，此时请求根本没发出去，和"网络异常"是两回事，
+    # 必须给出可操作的提示，否则用户只会反复重试同一个必然失败的请求。
+    name = type(e).__name__
+    if name in ("InvalidURL", "UnsupportedProtocol") or "Invalid port:" in str(e):
+        return (
+            "proxy_config",
+            "代理环境变量格式不正确（通常是 NO_PROXY 里含 [::1] 或 10.* 这类条目），"
+            "请检查系统代理设置后重启应用",
+        )
+
     status = getattr(e, "status_code", None)
     try:
         body = str(getattr(e, "body", "")) or str(e)

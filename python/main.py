@@ -39,6 +39,13 @@ _protocol_handler = ProtocolLogHandler()
 _protocol_handler.setLevel(logging.INFO)
 logging.getLogger().addHandler(_protocol_handler)
 
+# 代理环境变量清洗：必须在任何 HTTP 客户端（LLM / MCP / 模型下载）构造之前执行，
+# 否则 NO_PROXY 里的 `[::1]`、`10.101.*` 这类条目会让 httpx 直接抛 InvalidURL，
+# 表现为"每次模型调用都失败，只提示生成失败"（详见 net_env 模块说明）。
+import net_env  # noqa: E402
+
+net_env.apply()
+
 logger = logging.getLogger('main')
 
 
