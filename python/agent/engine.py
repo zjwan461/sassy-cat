@@ -12,9 +12,10 @@ import threading
 import aiosqlite
 from deepagents import create_deep_agent
 
-from agent.virtual_shell import VirtualShellBackend
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite.aio import AsyncSqliteStore
+
+from agent.shell_backend import create_shell_backend
 
 
 import config_loader
@@ -38,7 +39,7 @@ from agent.tools.reminder_tools import (
 from agent.tools.rag_tools import search_from_kb
 from agent.tools.subagent_tool import call_dsh
 from agent.tools.mcp_tools import get_mcp_tools
-from agent.constant import DB_URL, WORK_DIR
+from agent.constant import DB_URL, SKILLS_DIR, WORK_DIR
 from agent.middlewares import (
     trim_messages,
     trim_media_history,
@@ -256,15 +257,13 @@ class AgentHolder:
         agent = create_deep_agent(
             # name="SassyCat", # 加上这个本地ninfer会报错
             model=llm,
-            skills=["/skills"],
+            # 技能目录使用真实路径：backend 为真实路径模式，文件工具与 shell 共用一套口径
+            skills=[SKILLS_DIR],
             tools=tools,
             interrupt_on=interrupt_on,
-            # backend=FilesystemBackend(root_dir=WORK_DIR, virtual_mode=True),
-            # VirtualShellBackend = LocalShellBackend + 虚拟路径重写：
-            # - inherit_env=True：继承 PATH 等环境变量，python/node 等外部命令可用
-            # - /skills/... 等虚拟路径在执行前重写为 WORK_DIR 下真实路径，
-            #   否则 Windows 下 shell 会把 /skills/x 解析成 <当前盘符>:\skills\x
-            backend=VirtualShellBackend(root_dir=WORK_DIR, virtual_mode=True, inherit_env=True),
+            # 平台原生 shell：Windows 走 PowerShell（pwsh 优先，5.1 回退），
+            # macOS/Linux 走 /bin/sh。工作区根目录即 WORK_DIR，命令默认在此执行。
+            backend=create_shell_backend(WORK_DIR),
             checkpointer=get_checkpointer(),
             system_prompt=system_prompt,
             store=get_store(),

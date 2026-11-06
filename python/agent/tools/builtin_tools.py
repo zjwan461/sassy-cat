@@ -74,9 +74,27 @@ def _find_python() -> str:
     return sys.executable
 
 
+# ==========================================================================
+# 【已废弃（保留代码，勿新增调用）】
+#
+# run_python / run_command 及其下方一整套 Windows cmd 加固逻辑（_convert_virtual_path、
+# _looks_like_switch、_comspec、_needs_start_title、_decode_output …）来自「虚拟路径 +
+# cmd.exe」时代，现已被 agent.shell_backend（Windows=PowerShell / POSIX=sh，真实路径）
+# 完全取代。它们不再注册为工具，也不再被任何运行路径调用，仅留作历史参考与被
+# tests/tmp_run_command_probe.py 覆盖。
+#
+# 新代码请使用：agent.shell_backend.create_shell_backend(...).execute(command)
+# 设计说明见 plans/shell-backend-powershell.md。
+# ==========================================================================
+
+
 # @tool
 def run_python(code: str):
-    """使用项目环境（.venv 或 python_env）中的 Python 解释器执行 Python 代码，返回执行结果。"""
+    """【已废弃】使用项目环境执行 Python 代码。
+
+    现由 shell 后端取代：直接让 Agent 调 execute 执行 `python xxx.py` 即可
+    （venv 已在 PATH 最前）。保留此函数仅为兼容历史引用，不再注册为工具。
+    """
     python_exe = _find_python()
     try:
         result = subprocess.run(
@@ -396,31 +414,18 @@ def _decode_output(data: bytes | None) -> str:
 
 # @tool
 def run_command(command: list[str], timeout: int = 60):
-    """执行系统命令，返回执行结果。
+    """【已废弃】以 argv 方式执行系统命令。
 
-    参数为命令片段数组，例如：["python", "/skills/test.py", "--arg", "value"]
-    支持虚拟路径自动转换：数组中以 / 开头的路径片段会自动转换为真实路径。
-    不得使用真实路径作为参数传入，比如D://skills, 命令行参数仅支持虚拟环境路径参数，必须是/开头。
-    调用如python,pip,java,node,npm,pnpm,go ... 等等开发常用命令时，不要使用绝对路径，只能使用命令本身。如：直接用python,java等，不要使用/home/user/java 这种绝对路径。
-    Windows环境下不得使用真实盘符作为变量开头，比如D:/python.exe等。
+    现由 shell 后端取代（agent.shell_backend）。保留此函数仅为兼容历史引用，
+    不再注册为工具。下面这段是旧「虚拟路径 + cmd.exe」时代的语义说明，
+    与当前「真实路径 + PowerShell」契约不一致，**请勿据此编写新代码**：
 
-    当前平台为 Windows，执行细节（正常写法不受影响）：
-    1. 本工具以原生 argv 执行命令，不做额外的 shell 包装，参数与引号原样传递
-       （["python", "-c", "print(1)"] 这类带引号参数不会再被吞掉）。
-    2. 执行 cmd 内置命令（dir/echo/type/copy/start 等）请写成 ["cmd", "/c", ...]，
-       /c 表示执行完就退出；缺少 /c 的调用会被直接拒绝，因为 cmd 会进入交互式
-       shell、只打印版本横幅就退出（退出码 0 但没有执行任何命令）。
-       不带 cmd 前缀的内置命令（如 ["dir", "/skills"]）会自动补上 cmd /c。
-       /c、/k、/A、/wait 这类开关会原样保留，不会被当虚拟路径。
-    3. 用浏览器/默认程序打开本地文件，用 start 并紧跟一个空标题 ""，例如：
-       ["cmd", "/c", "start", "", "/code/index.html"]
-       否则 cmd 会把第一个参数当成窗口标题，结果什么都没打开。工具会自动补空标题，
-       并在打开前校验文件是否存在（不存在直接报错，不会假成功）。
-    4. 虚拟路径以工作目录为根：/code/x.html → <工作目录>\\code\\x.html。
-       子代理（dsh）的产物在 /.dsh/workspace/ 下，例如 /.dsh/workspace/index.html。
+    参数为命令片段数组，例如：["python", "code/test.py", "--arg", "value"]
+    调用 python / pip / java / node / npm 等常用命令时只写命令名本身，
+    由工具解析为项目环境内的绝对路径。
 
     参数：
-      timeout: 命令执行超时时间（秒），默认 60。执行耗时较长的任务（如安装依赖、编译、下载等）请适当调大。
+      timeout: 命令执行超时时间（秒），默认 60。
     """
     # 提前初始化，避免转换阶段抛异常时 except 分支引用未定义变量
     command_str = ""
@@ -1175,17 +1180,37 @@ def _resolve_skill_file_path(skill_dir: str, rel_path: str) -> str | None:
     return target
 
 
-def _resolve_virtual_src(virtual_path: str) -> str | None:
-    """work_dir 下的虚拟路径（/code/xxx.py）-> 真实绝对路径；越界返回 None。"""
-    rel = (virtual_path or "").replace("\\", "/").lstrip("/")
-    if not rel or ":" in rel.split("/")[0]:
+def _resolve_virtual_src(path: str) -> str | None:
+    """把 copies.src 解析为工作区内的真实路径；越界返回 None。
+
+    兼容三种写法（工作区根目录 = runtime/）：
+    - 相对路径（推荐）：``code/clean.py``
+    - 旧版虚拟路径：``/code/clean.py``（等价于上一种，保留兼容）
+    - 真实绝对路径：``D:/work/clean.py``（必须位于工作区内）
+    """
+    raw = (path or "").strip().replace("\\", "/")
+    if not raw:
         return None
-    parts = rel.split("/")
-    if any(p in ("", ".", "..") for p in parts):
-        return None
-    target = os.path.realpath(os.path.join(work_dir, *parts))
     root = os.path.realpath(work_dir)
-    if not target.startswith(root + os.sep):
+
+    if raw.startswith("/"):
+        workspace_relative = os.path.join(root, raw.lstrip("/"))
+        if os.path.exists(workspace_relative):
+            candidate = workspace_relative
+        elif os.path.isabs(raw):
+            candidate = raw
+        else:
+            return None
+    elif os.path.isabs(raw):
+        candidate = raw
+    else:
+        parts = raw.split("/")
+        if any(p in ("", ".", "..") for p in parts):
+            return None
+        candidate = os.path.join(root, *parts)
+
+    target = os.path.realpath(candidate)
+    if target != root and not target.startswith(root + os.sep):
         return None
     return target
 
@@ -1218,13 +1243,14 @@ def create_skill(
       脚本调用方式、输出示例与注意事项。这是技能的灵魂，务必详尽可执行。
     - files: 可选，辅助文件列表，每项 {"path": 技能内相对路径, "content": 文本内容}，
       如 {"path": "scripts/run.py", "content": "..."}。禁止二进制与越界路径。
-    - copies: 可选，把本次对话在虚拟环境中已生成的产物复制进技能，
-      每项 {"src": 虚拟路径, "dest": 技能内相对路径}，
-      如 {"src": "/code/clean_data.py", "dest": "scripts/clean_data.py"}。
-      src 必须是 / 开头、位于虚拟环境内的路径（如 /code、/data、/tmp 下的文件）。
+    - copies: 可选，把工作区里已生成的产物复制进技能，
+      每项 {"src": 源文件路径, "dest": 技能内相对路径}，
+      如 {"src": "code/clean_data.py", "dest": "scripts/clean_data.py"}。
+      src 支持工作区相对路径或真实绝对路径，但必须位于工作区内。若要访问
+      旧版虚拟写法（/code/x），也仍然兼容。
     - overwrite: 同名技能已存在时是否覆盖（默认 False 直接拒绝）。
       覆盖时旧版本自动备份到工作目录下的 backup 目录（runtime/backup，
-      虚拟路径为 /backup/{name}.bak-时间戳），不再留在 skills 目录内。
+      相对路径 backup/{name}.bak-时间戳），不再留在 skills 目录内。
 
     返回创建结果。注意：新技能在**新会话**中才会被加载，当前会话不会立即生效。
     """
@@ -1261,7 +1287,7 @@ def create_skill(
             os.makedirs(BACKUP_ROOT, exist_ok=True)
             # 跨目录移动，用 shutil.move；技能目录与 backup 同在 work_dir 下，正常是同一卷
             shutil.move(skill_dir, backup)
-            backup_note = f"（旧版本已备份至 /backup/{os.path.basename(backup)}）"
+            backup_note = f"（旧版本已备份至 backup/{os.path.basename(backup)}）"
         except OSError as e:
             return f"错误：备份旧技能失败：{e}"
 
@@ -1305,7 +1331,7 @@ def create_skill(
             rel = (item or {}).get("dest", "")
             real_src = _resolve_virtual_src(src)
             if real_src is None:
-                return f"错误：copies.src 必须是虚拟环境内的合法路径（/ 开头）：{src!r}"
+                return f"错误：copies.src 必须是工作区内的合法路径：{src!r}"
             if not os.path.isfile(real_src):
                 return f"错误：copies.src 指向的文件不存在：{src!r}"
             target = _resolve_skill_file_path(skill_dir, rel)
@@ -1338,7 +1364,7 @@ def create_skill(
 
     return (
         f"技能「{slug}」已创建成功{backup_note}。"
-        f"位置：/skills/{slug}/，文件：{', '.join(written)}。"
+        f"位置：skills/{slug}/，文件：{', '.join(written)}。"
         "提醒主人：新技能会在**下一次新会话**中自动生效并可被调用。"
         "请在回复中自然地确认技能已保存（如'本喵已经把这套流程存成技能了'），不要向用户展示工具细节。"
     )

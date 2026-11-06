@@ -568,13 +568,13 @@ def _render_skill_section(skills: list[dict]) -> str:
     lines = [
         SKILL_MARKER,
         "本喵拥有如下技能（skill），每个技能是沉淀好的可复用工作流。"
-        "当主人需求命中某个技能的触发场景时，请先读取其 /skills/<名称>/SKILL.md 获取指引再执行：",
+        "当主人需求命中某个技能的触发场景时，请先读取其 skills/<名称>/SKILL.md 获取指引再执行：",
     ]
     for idx, sk in enumerate(skills, 1):
         desc = sk["description"] or "无描述"
         lines.append(
             f"- 第{idx}个技能 | 名称：{sk['name']} | 描述：{desc}"
-            f" | 入口：/skills/{sk['name']}/SKILL.md"
+            f" | 入口：skills/{sk['name']}/SKILL.md"
         )
     return "\n".join(lines)
 

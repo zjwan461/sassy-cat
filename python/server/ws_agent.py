@@ -27,7 +27,6 @@ from server.bus import hub
 from server.protocol import envelope
 from server.db import (
     save_message,
-    save_attachment,
     update_message,
     get_message_by_id,
     get_messages_by_session,
@@ -37,6 +36,80 @@ logger = logging.getLogger(__name__)
 
 # 每个 session 的运行态：当前取消事件
 _session_cancel: dict[str, threading.Event] = {}
+
+# 后台任务集合：持强引用（避免任务被 GC）+ 统一异常日志 + 关闭时排空
+_bg_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro, name: str = ""):
+    """创建后台任务并登记：异常不再静默丢失，服务关闭时可统一等待/取消。"""
+    task = asyncio.create_task(coro, name=name or None)
+    _bg_tasks.add(task)
+
+    def _done(t: asyncio.Task):
+        _bg_tasks.discard(t)
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            logger.error(
+                "后台任务异常%s: %s",
+                f" ({name})" if name else "",
+                exc,
+                exc_info=exc,
+            )
+
+    task.add_done_callback(_done)
+    return task
+
+
+async def drain_background_tasks(timeout: float = 8.0) -> None:
+    """关闭前尽力排空后台任务（消息落库等），超时后取消剩余任务。"""
+    if not _bg_tasks:
+        return
+    pending = list(_bg_tasks)
+    _done, pending = await asyncio.wait(pending, timeout=timeout)
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+        logger.warning("已取消 %d 个未完成的后台任务", len(pending))
+
+# 每个 session 当前轮次所在的 asyncio 任务：新消息/确认到来时先等旧轮真正收尾，
+# 避免两个 astream 并发写同一个 LangGraph thread 的 checkpoint（会互相覆盖状态）。
+_session_turn_tasks: dict[str, asyncio.Task] = {}
+
+
+async def _begin_turn(
+    session_id: str, cancel: threading.Event, wait_seconds: float = 8.0
+) -> None:
+    """让同一会话的轮次串行：取消并等待上一轮结束，再登记本轮。
+
+    - 先 set 上一轮的取消事件（让它的流尽快 break）；
+    - 再等它的任务真正退出（最多 wait_seconds），保证 checkpoint 写入串行；
+    - 最后登记本轮的 cancel / task，供 chat.cancel 与新消息取消。
+    """
+    prev_cancel = _session_cancel.get(session_id)
+    if prev_cancel is not None and prev_cancel is not cancel:
+        prev_cancel.set()
+
+    prev_task = _session_turn_tasks.get(session_id)
+    current = asyncio.current_task()
+    if prev_task is not None and prev_task is not current and not prev_task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(prev_task), timeout=wait_seconds)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "session=%s 上一轮在 %.0fs 内未退出，继续开启新一轮（可能并发写 checkpoint）",
+                session_id,
+                wait_seconds,
+            )
+        except Exception:  # noqa: BLE001 - 上一轮的异常由它自己处理，这里只负责串行
+            logger.debug("等待上一轮结束时捕获异常", exc_info=True)
+
+    _session_cancel[session_id] = cancel
+    if current is not None:
+        _session_turn_tasks[session_id] = current
 
 # 当前正在流式输出的聊天轮次数量（打招呼等旁路生成据此避让）
 _running_turns = 0
@@ -94,46 +167,47 @@ async def _save_user_message_safe(
     content: str,
     attachments: list,
 ):
-    """安全地保存用户消息和附件到数据库，失败不影响聊天"""
+    """安全地保存用户消息和附件到数据库，失败不影响聊天。
+
+    消息与附件在同一个事务里写入：一次发送只 commit 一次，
+    避免多附件时产生 N 次写库，也避免"消息已入库、附件丢失"的半截状态。
+    """
     try:
-        # 保存用户消息
+        rows = []
+        now = int(time.time() * 1000)
+        for att in attachments:
+            att_type = att.get("type", "text")
+            file_name = att.get("name", "unknown")
+            file_ext = os.path.splitext(file_name)[1] if file_name else ""
+            row = {
+                "id": "att-" + uuid.uuid4().hex[:12],
+                "message_id": msg_id,
+                "file_name": file_name,
+                "file_ext": file_ext,
+                "created_at": now,
+            }
+            if att_type == "image":
+                row.update(
+                    type="image",
+                    file_size=len(att.get("data", "")) // 4 * 3,  # 估算 base64 大小
+                    mime_type=att.get("mimeType", "image/png"),
+                    base64_data=att.get("data"),
+                )
+            else:
+                row.update(
+                    type="document",
+                    mime_type="text/plain",
+                    markdown_content=att.get("content"),
+                )
+            rows.append(row)
+
         await save_message(
             id=msg_id,
             session_id=session_id,
             role="user",
             content=content,
+            attachments=rows or None,
         )
-
-        # 保存附件
-        for att in attachments:
-            att_id = "att-" + uuid.uuid4().hex[:12]
-            att_type = att.get("type", "text")
-            file_name = att.get("name", "unknown")
-            file_ext = os.path.splitext(file_name)[1] if file_name else ""
-
-            if att_type == "image":
-                # 图片附件
-                await save_attachment(
-                    id=att_id,
-                    message_id=msg_id,
-                    type="image",
-                    file_name=file_name,
-                    file_ext=file_ext,
-                    file_size=len(att.get("data", "")) // 4 * 3,  # 估算 base64 大小
-                    mime_type=att.get("mimeType", "image/png"),
-                    base64_data=att.get("data"),
-                )
-            elif att_type == "text":
-                # 文档附件（OCR 结果）
-                await save_attachment(
-                    id=att_id,
-                    message_id=msg_id,
-                    type="document",
-                    file_name=file_name,
-                    file_ext=file_ext,
-                    mime_type="text/plain",
-                    markdown_content=att.get("content"),
-                )
     except Exception as e:
         logger.warning(f"用户消息保存失败 (不影响聊天): {e}")
 
@@ -226,31 +300,6 @@ async def _save_or_update_assistant_message_sage(
         logger.warning(f"AI 消息保存/更新失败 (不影响聊天): {e}")
 
 
-async def _save_assistant_message_safe(
-    session_id: str,
-    msg_id: str,
-    content: str,
-    reasoning: str | None = None,
-    tool_calls: list | None = None,
-    tool_call_args: dict | None = None,
-    interrupt_actions: list | None = None,
-):
-    """安全地保存 AI 消息到数据库，失败不影响聊天"""
-    try:
-        await save_message(
-            id=msg_id,
-            session_id=session_id,
-            role="assistant",
-            content=content,
-            reasoning=reasoning,
-            tool_calls=tool_calls,
-            tool_call_args=tool_call_args,
-            interrupt_actions=interrupt_actions,
-        )
-    except Exception as e:
-        logger.warning(f"AI 消息保存失败 (不影响聊天): {e}")
-
-
 async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.Event):
     """消费 runner 事件生成器，节流后 fan-out 到房间"""
 
@@ -265,7 +314,9 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
 
     buffer = []
     buffer_agent = None  # 当前 buffer 的来源：None=主 agent 自己，'dsh'=子 agent 产出
+    buffer_chars = 0  # buffer 内累计字符数（避免每次 sum 遍历）
     args_buffer = []
+    args_chars = 0
     last_flush = time.monotonic()
 
     # 用于持久化的累积数据
@@ -282,8 +333,31 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     usage_metadata = None  # token 用量（流式过程中累积，done 时随消息落库）
     finalized = False  # 本轮是否已由 done/error 正常收尾（取消提前结束则为 False）
 
+    async def persist(error: str = "", content: str | None = None):
+        """本轮落库：done / error / 取消三条路径共用，保证字段口径一致。"""
+        _spawn(
+            _save_or_update_assistant_message_sage(
+                session_id=session_id,
+                msg_id=msg_id,
+                content=(
+                    content if content is not None else "".join(content_parts)
+                ),
+                reasoning="".join(reasoning_parts) if reasoning_parts else None,
+                tool_calls=tool_call if tool_call else None,
+                tool_call_args=tool_call_args_list if tool_call_args_list else None,
+                interrupt_actions=interrupt_actions if interrupt_actions else None,
+                tool_call_result=tool_call_result if tool_call_result else None,
+                usage_metadata=usage_metadata,
+                error=error,
+                subagent_name=subagent_name,
+                segments=subagent_segments if subagent_name else None,
+            ),
+            name=f"persist-assistant-{msg_id}",
+        )
+
     async def flush():
-        nonlocal buffer, buffer_agent, args_buffer, last_flush, subagent_name
+        nonlocal buffer, buffer_agent, buffer_chars, last_flush, subagent_name
+        nonlocal args_buffer, args_chars
         if buffer:
             text = "".join(buffer)
             content_parts.append(text)
@@ -301,6 +375,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
             await emit("chat.delta", payload)
             buffer = []
             buffer_agent = None
+            buffer_chars = 0
         if args_buffer:
             args_text = "".join(args_buffer)
             # 将工具参数追加到当前工具的参数中
@@ -308,6 +383,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 tool_call_args_list[current_tool_index] += args_text
             await emit("agent.tool_args", {"msgId": msg_id, "args": args_text})
             args_buffer = []
+            args_chars = 0
         last_flush = time.monotonic()
 
     try:
@@ -320,18 +396,17 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 if buffer and agent != buffer_agent:
                     await flush()
                 buffer_agent = agent
-                buffer.append(event["text"])
-                if (
-                    time.monotonic() - last_flush >= FLUSH_INTERVAL
-                    or sum(len(x) for x in buffer) >= FLUSH_MAX_CHARS
-                ):
+                text = event["text"]
+                buffer.append(text)
+                buffer_chars += len(text)
+                # 维护累计字符数而不是每次 sum()：流式期间这是每 token 都会走的热路径
+                if time.monotonic() - last_flush >= FLUSH_INTERVAL or buffer_chars >= FLUSH_MAX_CHARS:
                     await flush()
             elif kind == "tool_args":
-                args_buffer.append(event["args"])
-                if (
-                    time.monotonic() - last_flush >= FLUSH_INTERVAL
-                    or sum(len(x) for x in args_buffer) >= FLUSH_MAX_CHARS
-                ):
+                args_part = event["args"]
+                args_buffer.append(args_part)
+                args_chars += len(args_part)
+                if time.monotonic() - last_flush >= FLUSH_INTERVAL or args_chars >= FLUSH_MAX_CHARS:
                     await flush()
             elif kind == "reasoning":
                 # 先把已积累的 delta 正文 flush，保证 reasoning 帧不插队到正文之前
@@ -361,8 +436,12 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 )
             elif kind == "interrupt":
                 await flush()
-                actions = event["payload"].get("actions")
-                interrupt_actions.extend(actions[0].get("action_requests"))
+                actions = event.get("payload", {}).get("actions") or []
+                # actions 是 middleware 的 interrupt 值列表（通常 1 个），
+                # 取第一项的 action_requests；缺字段/空列表时保持安全跳过
+                if actions:
+                    first = actions[0] or {}
+                    interrupt_actions.extend(first.get("action_requests") or [])
                 await emit(
                     "agent.interrupt",
                     {
@@ -409,30 +488,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 final_text = event.get("text", "")
                 await emit("chat.completed", {"msgId": msg_id, "text": final_text})
                 # 异步保存 AI 消息（不阻塞聊天）；error="" 显式清除历史错误标记
-                asyncio.create_task(
-                    _save_or_update_assistant_message_sage(
-                        session_id=session_id,
-                        msg_id=msg_id,
-                        content=final_text or "".join(content_parts),
-                        reasoning="".join(reasoning_parts) if reasoning_parts else None,
-                        tool_calls=tool_call if tool_call else None,
-                        tool_call_args=(
-                            tool_call_args_list if tool_call_args_list else None
-                        ),
-                        interrupt_actions=(
-                            interrupt_actions if interrupt_actions else None
-                        ),
-                        tool_call_result=(
-                            tool_call_result if tool_call_result else None
-                        ),
-                        usage_metadata=usage_metadata,
-                        error="",
-                        subagent_name=subagent_name,
-                        segments=(
-                            subagent_segments if subagent_name else None
-                        ),
-                    )
-                )
+                await persist(error="", content=final_text or None)
             elif kind == "error":
                 finalized = True
                 await flush()
@@ -447,27 +503,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 )
                 # 失败轮次也落库（含已流式输出的部分内容 + error 标记），
                 # 使刷新/切回会话后错误气泡与「重试」入口依然存在
-                asyncio.create_task(
-                    _save_or_update_assistant_message_sage(
-                        session_id=session_id,
-                        msg_id=msg_id,
-                        content="".join(content_parts),
-                        reasoning="".join(reasoning_parts) if reasoning_parts else None,
-                        tool_calls=tool_call if tool_call else None,
-                        tool_call_args=(
-                            tool_call_args_list if tool_call_args_list else None
-                        ),
-                        tool_call_result=(
-                            tool_call_result if tool_call_result else None
-                        ),
-                        usage_metadata=usage_metadata,
-                        error=err_msg,
-                        subagent_name=subagent_name,
-                        segments=(
-                            subagent_segments if subagent_name else None
-                        ),
-                    )
-                )
+                await persist(error=err_msg)
         if not finalized and cancel.is_set():
             # 生成器因取消而提前结束（未产出 done/error）：收尾本轮——
             # flush 已缓冲内容、广播完成并落库已生成的部分内容，
@@ -476,37 +512,26 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
             await emit(
                 "chat.completed", {"msgId": msg_id, "text": "".join(content_parts)}
             )
-            asyncio.create_task(
-                _save_or_update_assistant_message_sage(
-                    session_id=session_id,
-                    msg_id=msg_id,
-                    content="".join(content_parts),
-                    reasoning="".join(reasoning_parts) if reasoning_parts else None,
-                    tool_calls=tool_call if tool_call else None,
-                    tool_call_args=(
-                        tool_call_args_list if tool_call_args_list else None
-                    ),
-                    tool_call_result=(
-                        tool_call_result if tool_call_result else None
-                    ),
-                    usage_metadata=usage_metadata,
-                    error="",
-                    subagent_name=subagent_name,
-                    segments=(
-                        subagent_segments if subagent_name else None
-                    ),
-                )
-            )
+            await persist(error="")
     except Exception as e:
         logger.exception("stream turn 异常")
         code, msg = runner.classify_error(e)
         await emit("chat.error", {"msgId": msg_id, "code": code, "message": msg})
+        # 未正常收尾的轮次同样落库：否则本轮已产出的内容只存在于前端内存，
+        # 刷新/切回会话后整轮消失（与 done/error 路径保持一致的持久化语义）
+        if not finalized:
+            try:
+                await persist(error=msg)
+            except Exception:  # noqa: BLE001 - 落库失败不应干扰异常向上传播
+                logger.warning("异常轮次落库失败", exc_info=True)
     finally:
         _running_turns -= 1
         # 仅当注册的取消事件仍是本轮的才清理：旧轮次结束时可能已有新轮次
         # 注册了自己的事件，无条件 pop 会误删新轮次的取消句柄
         if _session_cancel.get(session_id) is cancel:
             _session_cancel.pop(session_id, None)
+        if _session_turn_tasks.get(session_id) is asyncio.current_task():
+            _session_turn_tasks.pop(session_id, None)
 
 
 async def _pending_interrupt_decisions(session_id: str, content: str):
@@ -616,11 +641,8 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
         )
     await conversations.touch(session_id)
     cancel = threading.Event()
-    # 同一 session 已有进行中的轮次 -> 先取消
-    old = _session_cancel.get(session_id)
-    if old:
-        old.set()
-    _session_cancel[session_id] = cancel
+    # 同一 session 已有进行中的轮次 -> 先取消并等待其收尾，再开始本轮
+    await _begin_turn(session_id, cancel)
 
     # 用户消息回显给所有聊天客户端（携带 source/sessionId，供多窗口同步与按会话归位）
     # 注意：chat.user 使用独立的 user_msg_id，避免与助手回复的 msg_id 冲突
@@ -643,7 +665,7 @@ async def _handle_chat_send(ws, payload: dict, room_ref: dict | None = None):
     await hub.publish_all(envelope("pet.command", {"action": "think"}))
 
     # 异步保存用户消息和附件到数据库（不阻塞聊天）
-    asyncio.create_task(
+    _spawn(
         _save_user_message_safe(
             session_id=session_id,
             msg_id=user_msg_id,
@@ -689,11 +711,8 @@ async def _handle_chat_retry(ws, payload: dict):
     msg_id = payload.get("msgId") or uuid.uuid4().hex[:12]
 
     cancel = threading.Event()
-    # 同一 session 已有进行中的轮次 -> 先取消，避免双流并发写同一 checkpoint
-    old = _session_cancel.get(session_id)
-    if old:
-        old.set()
-    _session_cancel[session_id] = cancel
+    # 同一 session 已有进行中的轮次 -> 先取消并等待其收尾，避免双流并发写同一 checkpoint
+    await _begin_turn(session_id, cancel)
 
     # 重置该消息的持久化内容：done 分支按「累积」语义写入，若不重置，
     # 上一次失败残留的部分内容会与新内容拼接造成重复
@@ -755,10 +774,13 @@ async def _handle_tool_confirm(ws, payload: dict):
     msg_id = payload.get("msgId")
     # 新协议：前端直接发送 decisions 数组
     decisions = payload.get("decisions")
-    message = await get_message_by_id(msg_id=msg_id)
+    if not isinstance(decisions, list):
+        decisions = []
+    message = await get_message_by_id(msg_id=msg_id) or {}
     last_dec = message.get("interruptDecisions") or []
-    # 更新interrupt decisions
-    await _update_interrupt_decisions(msg_id=msg_id, decisions=decisions)
+    # 更新 interrupt decisions（空数组同样写回，表示"用户已处理全部待确认项"）
+    if decisions:
+        await _update_interrupt_decisions(msg_id=msg_id, decisions=decisions)
     if len(decisions) > len(last_dec):
         # 截取decisions超过last_dec的部分重新赋值decisions，只把新增部分交给 resume
         decisions = decisions[len(last_dec) :]
@@ -780,11 +802,8 @@ async def _handle_tool_confirm(ws, payload: dict):
         return
 
     cancel = threading.Event()
-    # 与 chat.send 一致：同一 session 已有进行中的轮次 -> 先取消，避免双流并发写同一 checkpoint
-    old = _session_cancel.get(session_id)
-    if old:
-        old.set()
-    _session_cancel[session_id] = cancel
+    # 与 chat.send 一致：同一 session 已有进行中的轮次 -> 先取消并等待收尾
+    await _begin_turn(session_id, cancel)
     await hub.publish_all(
         envelope("chat.started", {"msgId": msg_id, "sessionId": session_id})
     )
@@ -944,7 +963,7 @@ async def ws_agent_endpoint(ws: WebSocket):
         )
         if client == "pet":
             # 桌宠连接建立：今日首次加载则由服务端判定并打招呼（幂等，非阻塞）
-            asyncio.create_task(greeting.maybe_greet())
+            _spawn(greeting.maybe_greet())
         while True:
             raw = await ws.receive_text()
             try:
@@ -960,9 +979,9 @@ async def ws_agent_endpoint(ws: WebSocket):
                 if mtype == "ping":
                     await _send(ws, envelope("pong", {}))
                 elif mtype == "chat.send":
-                    asyncio.create_task(_handle_chat_send(ws, payload, room_ref))
+                    _spawn(_handle_chat_send(ws, payload, room_ref))
                 elif mtype == "chat.retry":
-                    asyncio.create_task(_handle_chat_retry(ws, payload))
+                    _spawn(_handle_chat_retry(ws, payload))
                 elif mtype == "chat.cancel":
                     sid = payload.get("sessionId") or room_ref.get("id") or "default"
                     ev = _session_cancel.get(sid)
@@ -970,7 +989,7 @@ async def ws_agent_endpoint(ws: WebSocket):
                         ev.set()
                     await hub.publish_all(envelope("pet.command", {"action": "idle"}))
                 elif mtype == "tool.confirm":
-                    asyncio.create_task(_handle_tool_confirm(ws, payload))
+                    _spawn(_handle_tool_confirm(ws, payload))
                 elif mtype.startswith("conv."):
                     await _handle_conv(ws, mtype, payload, room_ref)
                 elif mtype == "prompt.preview":
@@ -1026,3 +1045,4 @@ async def ws_agent_endpoint(ws: WebSocket):
         logger.info(
             f"WS 连接关闭 client={client} session={room_ref.get('id') or session_id}"
         )
+

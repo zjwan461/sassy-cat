@@ -9,13 +9,59 @@ import json
 import logging
 from typing import Optional
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.orm import selectinload
 
 from server.db.database import get_session
 from server.db.models import Message, Attachment
 
 logger = logging.getLogger(__name__)
+
+
+def _load_json(value):
+    """JSON 字段解码：空值返回 None，脏数据原样返回，避免整条消息读取失败。"""
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _message_to_dict(msg: Message) -> dict:
+    """统一的消息序列化：分页列表与单条查询共用，避免两处字段口径不一致。"""
+    return {
+        "id": msg.id,
+        "sessionId": msg.session_id,
+        "role": msg.role,
+        "content": msg.content,
+        "reasoning": msg.reasoning,
+        "toolCalls": _load_json(msg.tool_calls),
+        "toolCallArgs": _load_json(msg.tool_call_args),
+        "createdAt": msg.created_at,
+        # 这三项在库中是 JSON 文本，必须解码成数组/对象再下发；
+        # 之前分页接口漏了 json.loads，前端拿到字符串导致中断卡片/工具结果刷新后丢失。
+        "interruptActions": _load_json(msg.interrupt_actions),
+        "interruptDecisions": _load_json(msg.interrupt_decisions),
+        "toolCallResult": _load_json(msg.tool_call_result),
+        "usageMetadata": _load_json(msg.usage_metadata),
+        "error": msg.error,
+        "subagentName": msg.subagent_name,
+        "segments": _load_json(msg.segments),
+        "attachments": [
+            {
+                "id": att.id,
+                "type": att.type,
+                "fileName": att.file_name,
+                "fileExt": att.file_ext,
+                "fileSize": att.file_size,
+                "mimeType": att.mime_type,
+                "base64Data": att.base64_data,
+                "markdownContent": att.markdown_content,
+            }
+            for att in msg.attachments
+        ],
+    }
 
 
 async def save_message(
@@ -34,6 +80,7 @@ async def save_message(
     error: Optional[str] = None,
     subagent_name: Optional[str] = None,
     segments: Optional[list] = None,
+    attachments: Optional[list[dict]] = None,
 ) -> bool:
     """
     保存消息到数据库。
@@ -74,6 +121,10 @@ async def save_message(
                 segments=json.dumps(segments, ensure_ascii=False) if segments else None,
             )
             session.add(msg)
+            # 附件与消息同事务写入：一次用户消息（含多张图片/文档）只提交一次，
+            # 避免 N 个附件产生 N 次 commit，也避免消息已入库、附件丢失的半截状态
+            for att in attachments or []:
+                session.add(Attachment(**att))
             await session.commit()
             logger.debug(f"消息已保存: id={id}, role={role}")
             return True
@@ -119,45 +170,47 @@ async def update_message(
         bool: 是否更新成功
     """
     try:
+        values: dict = {}
+        if session_id is not None:
+            values["session_id"] = session_id
+        if role is not None:
+            values["role"] = role
+        if content is not None:
+            values["content"] = content
+        if reasoning is not None:
+            values["reasoning"] = reasoning
+        if tool_calls is not None:
+            values["tool_calls"] = json.dumps(tool_calls, ensure_ascii=False)
+        if tool_call_args is not None:
+            values["tool_call_args"] = json.dumps(tool_call_args, ensure_ascii=False)
+        if interrupt_actions is not None:
+            values["interrupt_actions"] = json.dumps(interrupt_actions, ensure_ascii=False)
+        if interrupt_decisions is not None:
+            values["interrupt_decisions"] = json.dumps(interrupt_decisions, ensure_ascii=False)
+        if tool_call_result is not None:
+            values["tool_call_result"] = json.dumps(tool_call_result, ensure_ascii=False)
+        if usage_metadata is not None:
+            values["usage_metadata"] = json.dumps(usage_metadata, ensure_ascii=False)
+        if error is not None:
+            values["error"] = error
+        if subagent_name is not None:
+            values["subagent_name"] = subagent_name
+        if segments is not None:
+            values["segments"] = json.dumps(segments, ensure_ascii=False)
+
+        if not values:
+            return False
+
+        # 单条 UPDATE 完成：不再先 SELECT 再逐字段赋值。
+        # 少了读-改-写的中间态，并发写入时不会互相覆盖对方已提交的字段。
         async with get_session() as session:
-            # 查询消息
-            stmt = select(Message).where(Message.id == id)
-            result = await session.execute(stmt)
-            msg = result.scalar_one_or_none()
-            
-            if msg is None:
+            result = await session.execute(
+                update(Message).where(Message.id == id).values(**values)
+            )
+            await session.commit()
+            if result.rowcount == 0:
                 logger.debug(f"消息不存在: id={id}")
                 return False
-            
-            # 更新提供的字段
-            if session_id is not None:
-                msg.session_id = session_id
-            if role is not None:
-                msg.role = role
-            if content is not None:
-                msg.content = content
-            if reasoning is not None:
-                msg.reasoning = reasoning
-            if tool_calls is not None:
-                msg.tool_calls = json.dumps(tool_calls, ensure_ascii=False)
-            if tool_call_args is not None:
-                msg.tool_call_args = json.dumps(tool_call_args, ensure_ascii=False)
-            if interrupt_actions is not None:
-                msg.interrupt_actions = json.dumps(interrupt_actions, ensure_ascii=False)
-            if interrupt_decisions is not None:
-                msg.interrupt_decisions = json.dumps(interrupt_decisions, ensure_ascii=False)
-            if tool_call_result is not None:
-                msg.tool_call_result = json.dumps(tool_call_result, ensure_ascii=False)
-            if usage_metadata is not None:
-                msg.usage_metadata = json.dumps(usage_metadata, ensure_ascii=False)
-            if error is not None:
-                msg.error = error
-            if subagent_name is not None:
-                msg.subagent_name = subagent_name
-            if segments is not None:
-                msg.segments = json.dumps(segments, ensure_ascii=False)
-            
-            await session.commit()
             logger.debug(f"消息已更新: id={id}")
             return True
     except Exception as e:
@@ -258,40 +311,8 @@ async def get_messages_by_session(
             messages = result.scalars().all()
             
             # 转换为字典列表
-            items = []
-            for msg in messages:
-                item = {
-                    "id": msg.id,
-                    "sessionId": msg.session_id,
-                    "role": msg.role,
-                    "content": msg.content,
-                    "reasoning": msg.reasoning,
-                    "toolCalls": json.loads(msg.tool_calls) if msg.tool_calls else None,
-                    "toolCallArgs": json.loads(msg.tool_call_args) if msg.tool_call_args else None,
-                    "createdAt": msg.created_at,
-                    "interruptActions": msg.interrupt_actions,
-                    "interruptDecisions": msg.interrupt_decisions,
-                    "toolCallResult": msg.tool_call_result,
-                    "usageMetadata": json.loads(msg.usage_metadata) if msg.usage_metadata else None,
-                    "error": msg.error,
-                    "subagentName": msg.subagent_name,
-                    "segments": json.loads(msg.segments) if msg.segments else None,
-                    "attachments": [
-                        {
-                            "id": att.id,
-                            "type": att.type,
-                            "fileName": att.file_name,
-                            "fileExt": att.file_ext,
-                            "fileSize": att.file_size,
-                            "mimeType": att.mime_type,
-                            "base64Data": att.base64_data,
-                            "markdownContent": att.markdown_content,
-                        }
-                        for att in msg.attachments
-                    ],
-                }
-                items.append(item)
-            
+            items = [_message_to_dict(msg) for msg in messages]
+
             return items, total
     except Exception as e:
         logger.error(f"查询消息失败: session_id={session_id}, error={e}")
@@ -341,36 +362,7 @@ async def get_message_by_id(msg_id: str) -> Optional[dict]:
                 logger.debug(f"消息不存在: id={msg_id}")
                 return None
 
-            return {
-                "id": msg.id,
-                "sessionId": msg.session_id,
-                "role": msg.role,
-                "content": msg.content,
-                "reasoning": msg.reasoning,
-                "toolCalls": json.loads(msg.tool_calls) if msg.tool_calls else None,
-                "toolCallArgs": json.loads(msg.tool_call_args) if msg.tool_call_args else None,
-                "createdAt": msg.created_at,
-                "interruptActions": json.loads(msg.interrupt_actions) if msg.interrupt_actions else None,
-                "interruptDecisions": json.loads(msg.interrupt_decisions) if msg.interrupt_decisions else None,
-                "toolCallResult": json.loads(msg.tool_call_result) if msg.tool_call_result else None,
-                "usageMetadata": json.loads(msg.usage_metadata) if msg.usage_metadata else None,
-                "error": msg.error,
-                "subagentName": msg.subagent_name,
-                "segments": json.loads(msg.segments) if msg.segments else None,
-                "attachments": [
-                    {
-                        "id": att.id,
-                        "type": att.type,
-                        "fileName": att.file_name,
-                        "fileExt": att.file_ext,
-                        "fileSize": att.file_size,
-                        "mimeType": att.mime_type,
-                        "base64Data": att.base64_data,
-                        "markdownContent": att.markdown_content,
-                    }
-                    for att in msg.attachments
-                ],
-            }
+            return _message_to_dict(msg)
     except Exception as e:
         logger.error(f"查询消息失败: id={msg_id}, error={e}")
         return None

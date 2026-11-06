@@ -5,15 +5,24 @@
 - 房间（Room）：同一 sessionId 下的所有 WS 连接（桌宠 / 主窗口 / Electron 系统连接）
 - publish(session_id, frame)：向房间内除来源外的所有连接 fan-out
 - 系统事件（无 session）：publish_system 广播给所有连接
+
+发送策略：
+- 广播前先把帧序列化一次（多个连接不再各自 json.dumps）；
+- 多个连接并发发送，避免一个慢连接把整条流式输出拖住；
+- 单连接发送超时（默认 2s）只记日志、不阻塞其它连接。
 """
 
 import asyncio
+import json
 import logging
 from typing import Set
 
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
+
+# 单连接单帧发送上限：正常本地 WS 是毫秒级，超过说明对端卡死/管道堵塞
+_SEND_TIMEOUT = 2.0
 
 
 class Hub:
@@ -42,25 +51,29 @@ class Hub:
             if conns:
                 self._rooms.setdefault(new_id, set()).update(conns)
 
+    async def _send_text(self, ws: WebSocket, payload: str) -> None:
+        try:
+            await asyncio.wait_for(ws.send_text(payload), timeout=_SEND_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("WS 发送超时（%.1fs），跳过该帧；对端可能已卡死", _SEND_TIMEOUT)
+        except Exception:
+            logger.debug("发送失败，连接可能已关闭", exc_info=True)
+
+    async def _broadcast(self, frame: dict, targets, exclude: WebSocket | None):
+        if not targets:
+            return
+        # 只序列化一次：流式场景下每帧可能同时发给主窗口 + 桌宠
+        payload = json.dumps(frame, ensure_ascii=False, default=str)
+        await asyncio.gather(
+            *(self._send_text(ws, payload) for ws in targets if ws is not exclude)
+        )
+
     async def publish(self, session_id: str, frame: dict, exclude: WebSocket | None = None):
         """向会话房间广播；exclude 用于不回显来源连接"""
-        targets = list(self._rooms.get(session_id, ()))
-        for ws in targets:
-            if ws is exclude:
-                continue
-            try:
-                await ws.send_json(frame)
-            except Exception:
-                logger.debug("fan-out 失败，连接可能已关闭", exc_info=True)
+        await self._broadcast(frame, list(self._rooms.get(session_id, ())), exclude)
 
     async def publish_all(self, frame: dict, exclude: WebSocket | None = None):
-        for ws in list(self._all):
-            if ws is exclude:
-                continue
-            try:
-                await ws.send_json(frame)
-            except Exception:
-                logger.debug("broadcast 失败", exc_info=True)
+        await self._broadcast(frame, list(self._all), exclude)
 
     def active_sessions(self) -> set:
         """当前有活跃连接的 session 集合（proactive 判定用）"""

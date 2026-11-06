@@ -74,8 +74,8 @@ def classify_error(e: Exception) -> tuple[str, str]:
 
 
 def _extract_item(item: dict, msg_chunk):
+    """从单个 content_block 解析事件，返回 list[dict]（可能为空）。"""
     if isinstance(msg_chunk, AIMessageChunk):
-        """从单个 content_block 解析事件，返回 list[dict]（可能为空）"""
         t = item.get("type")
         if t == "text":
             return [{"kind": "delta", "text": item.get("text", "")}]
@@ -119,6 +119,7 @@ async def _worker_stream(
 ):
     """在事件循环内运行异步的 agent.astream，事件推入 asyncio 队列 q"""
     final_parts = []
+    last_usage = None  # 上一帧 usage：usage_metadata 是累计值，重复帧不必重复下发
     try:
         async for _ , stream_mode, chunk in agent.astream(
             input_payload,
@@ -133,7 +134,8 @@ async def _worker_stream(
                 msg_chunk = chunk[0]
                 if isinstance(msg_chunk, AIMessageChunk):
                     usage_metadata = msg_chunk.usage_metadata
-                    if usage_metadata and usage_metadata is not None:
+                    if usage_metadata and usage_metadata != last_usage:
+                        last_usage = usage_metadata
                         await q.put({"kind": "usage", "usage_metadata": usage_metadata})
                 cb = msg_chunk.content_blocks
                 if not cb:
@@ -195,7 +197,7 @@ async def _drive_stream(agent, input_payload, config, cancel_event: threading.Ev
     即便 agent 处于工具执行 / 上游缓冲等无 chunk 阶段，也能在取消后立即结束本轮，
     避免"停止"延迟数秒（与旧线程 + janus 方案保持一致的响应语义）。
     """
-    q: asyncio.Queue = asyncio.Queue()
+    q: asyncio.Queue = asyncio.Queue(maxsize=2000)
     task = asyncio.create_task(
         _worker_stream(agent, input_payload, config, q, cancel_event)
     )

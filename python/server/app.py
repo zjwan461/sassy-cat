@@ -19,7 +19,7 @@ from agent.rag import model_download
 from agent.rag.rag_service import get_rag_service
 from ocr.ocr_engine import do_ocr
 from proactive import reminder_runner, scheduler
-from server.ws_agent import ws_agent_endpoint
+from server.ws_agent import ws_agent_endpoint, drain_background_tasks, _spawn
 from server.kb_api import router as kb_router
 from server.stats_api import router as stats_router
 from server.skills_api import router as skills_router
@@ -60,6 +60,8 @@ async def lifespan(app: FastAPI):
     proactive_task.cancel()
     reminder_task.cancel()
     await asyncio.gather(proactive_task, reminder_task, return_exceptions=True)
+    # 排空聊天侧的后台任务（消息落库等），避免退出瞬间丢失正在进行的那一轮
+    await drain_background_tasks()
     await agent_engine.close_db()
     await close_message_db()
     logger.info("后台任务已停止")
@@ -113,13 +115,16 @@ def create_app() -> FastAPI:
             result = await do_ocr("chat", file.filename or "unknown", file_bytes)
             markdown = result.get("page_content", "")
             # 异步后台保存到 default 知识库（OCR 内容自动向量化，供 RAG 检索），不阻塞 OCR 响应
-            asyncio.create_task(save_to_default_kb(
-                content=markdown,
-                file_name=file.filename or "unknown",
-                file_path=save_path,
-                file_ext=os.path.splitext(file.filename or "")[1].lower(),
-                file_size=len(file_bytes),
-            ))
+            _spawn(
+                save_to_default_kb(
+                    content=markdown,
+                    file_name=file.filename or "unknown",
+                    file_path=save_path,
+                    file_ext=os.path.splitext(file.filename or "")[1].lower(),
+                    file_size=len(file_bytes),
+                ),
+                name="save-to-default-kb",
+            )
             return {
                 "status": "success",
                 "filename": file.filename,
