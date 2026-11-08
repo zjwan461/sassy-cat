@@ -568,7 +568,9 @@ def _render_skill_section(skills: list[dict]) -> str:
     lines = [
         SKILL_MARKER,
         "本喵拥有如下技能（skill），每个技能是沉淀好的可复用工作流。"
-        "当主人需求命中某个技能的触发场景时，请先读取其 skills/<名称>/SKILL.md 获取指引再执行：",
+        "当主人需求命中某个技能的触发场景时，先用 read_file 读它的 skills/<名称>/SKILL.md"
+        "（给 limit=1000，默认 100 行通常不够），再按里面的步骤执行；"
+        "技能自带的脚本用 `python skills/<名称>/scripts/<脚本>.py` 直接跑（在工作区根目录执行，不用 cd）：",
     ]
     for idx, sk in enumerate(skills, 1):
         desc = sk["description"] or "无描述"

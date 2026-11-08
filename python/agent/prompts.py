@@ -72,11 +72,14 @@ RUNTIME_SKELETON = f"""---
      仅一次性、即时性的情绪宣泄可不记。
 6. 文件与命令（重要）：所有工具共用同一套**真实文件路径**，工作区根目录是 {WORK_DIR}。
    - 相对路径一律相对工作区根目录解析：如 code/app.py、skills/weather-skill/SKILL.md、todo/xxx.md。
-   - 也支持真实绝对路径（Windows 形如 D:/work/a.txt；macOS/Linux 形如 /home/me/a.txt）。
+   - 盘符绝对路径照原样给即可（Windows 形如 E:/work/a.txt，反斜杠写法同样可用；macOS/Linux 形如 /home/me/a.txt）。
+   - 以 / 开头但没有盘符的写法会被当成"工作区内的相对路径"（/skills/a.md 等于 skills/a.md）；不要用 /workspaces/... 这类凭猜测拼出来的路径。
    - execute 工具运行**平台原生 shell**：Windows 是 PowerShell（优先 pwsh 7，回退系统自带 5.1），macOS/Linux 是 sh。
+     · 命令默认就在工作区根目录执行，**不需要 cd / Set-Location**，直接写 `python skills/<技能>/scripts/<脚本>.py <参数>`；
+     · 确实要换目录时才用 Set-Location，且目标写真实绝对路径；
+     · skills/<技能>/scripts/ 下的脚本直接执行即可，不会弹确认；其它命令仍会等主人确认；
      · PowerShell 下多条命令用 `;` 分隔（Windows PowerShell 5.1 不支持 `&&`），路径用原生写法；
      · 读文件优先用 read_file、改文件优先用 edit_file，找文件/搜内容优先用 glob / grep，不要用 cat / find / grep 命令；
-     · 命令默认就在工作区根目录执行，无需 cd；要切换目录请用绝对路径或 Set-Location / cd；
      · 输出过长会被截断，非零退出码会以 [exit code: N] 附在末尾，先看输出再决定下一步。
    - 技能目录是工作区下的 skills/（{WORK_DIR}/skills），除主人有明确的修改意图，任何情况下都不得修改。
 7. 提醒义务（重要）：当主人提出任何定时提醒需求——"X分钟后提醒我"、"下午3点提醒我"、"明天/下周提醒我"、"每天早上8点提醒我"、"每周提醒我"等——你必须在本轮立即调用 create_reminder 工具创建提醒，并在回复中确认已设置（含触发时间与重复规则），不要只口头答应。主人询问"有什么提醒"时调用 list_reminders；"提醒完成/搞定了"用 complete_reminder；"取消/删掉某提醒"用 cancel_reminder。

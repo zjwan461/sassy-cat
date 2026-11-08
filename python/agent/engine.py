@@ -39,7 +39,8 @@ from agent.tools.reminder_tools import (
 from agent.tools.rag_tools import search_from_kb
 from agent.tools.subagent_tool import call_dsh
 from agent.tools.mcp_tools import get_mcp_tools
-from agent.constant import DB_URL, SKILLS_DIR, WORK_DIR
+from agent.command_policy import apply_execute_allowlist
+from agent.constant import DB_URL, WORK_DIR
 from agent.middlewares import (
     trim_messages,
     trim_media_history,
@@ -221,6 +222,23 @@ async def close_db() -> None:
         logger.info("SQLite 共享连接已关闭")
 
 
+def _resolve_interrupt_on(cfg: "config_loader.AppConfig") -> dict:
+    """计算最终传给 create_deep_agent 的 interrupt_on。
+
+    两步：
+    1. 读 agent.interruptOn（设置页的「高危操作人工确认」勾选，true=打断）；
+    2. 当 agent.autoApproveSkillScripts 开启（缺省开启）时，把 execute 升级成带 when
+       谓词的配置——只有 skills/<技能>/scripts/*.py 这类技能脚本免确认，其余命令照旧打断。
+       见 agent/command_policy.py 的安全边界说明。
+
+    抽成独立函数是为了可测：engine 构建需要 DB/LLM，单测只关心这两行决策。
+    """
+    interrupt_on = cfg.get("agent.interruptOn") or {}
+    if cfg.get("agent.autoApproveSkillScripts", True):
+        interrupt_on = apply_execute_allowlist(interrupt_on)
+    return interrupt_on
+
+
 class AgentHolder:
     def __init__(self):
         self._lock = threading.Lock()
@@ -234,7 +252,8 @@ class AgentHolder:
         system_prompt = build_system_prompt(cfg.active_agent_config().get("persona", ""))
         # 高危工具人工确认策略（agent.interruptOn，可在设置页配置）：
         # true = 执行前打断等待用户确认；false = 直接放行
-        interrupt_on = cfg.get("agent.interruptOn") or {}
+        # execute 的免确认白名单（仅技能脚本）由 _resolve_interrupt_on 统一决定。
+        interrupt_on = _resolve_interrupt_on(cfg)
         # MCP 工具（注册表中「已启用」server 经 tools/list 装载的缓存）：
         # 装载发生在服务启动与注册表变更时（见 agent.tools.mcp_tools），
         # 此处只读缓存、零 IO；停用的 server 不进入工具列表
@@ -257,8 +276,9 @@ class AgentHolder:
         agent = create_deep_agent(
             # name="SassyCat", # 加上这个本地ninfer会报错
             model=llm,
-            # 技能目录使用真实路径：backend 为真实路径模式，文件工具与 shell 共用一套口径
-            skills=[SKILLS_DIR],
+            # 不再传 skills=：deepagents 的 SkillsMiddleware 会再渲染一份「绝对路径版」技能
+            # 清单（且提示词要求 "Always use absolute paths"），与自研 [技能] 段（相对路径）
+            # 重复且口径打架。技能清单只由 agent.middlewares._render_skill_section 提供。
             tools=tools,
             interrupt_on=interrupt_on,
             # 平台原生 shell：Windows 走 PowerShell（pwsh 优先，5.1 回退），

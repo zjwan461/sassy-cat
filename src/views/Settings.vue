@@ -252,6 +252,17 @@
           </div>
           <span class="hint">勾选的工具在 Agent 执行前会中断并等待你确认（同意/拒绝）；取消勾选则直接放行自动执行</span>
         </div>
+        <div class="field">
+          <label class="check">
+            <input type="checkbox" v-model="form.autoApproveSkillScripts" />
+            技能脚本免确认（skills 下的 scripts 目录）
+          </label>
+          <span class="hint">
+            开启后，运行技能自带脚本（python skills/技能名/scripts/脚本.py，可带前置 Set-Location）不再弹确认；
+            其它命令、以及带管道 / 重定向 / 变量 / 反引号等拼接写法的命令仍会打断。
+            仅在勾选上面的「执行命令（execute）」时生效。
+          </span>
+        </div>
         <div class="actions">
           <button class="btn" @click="togglePreview">{{ preview ? '隐藏完整提示词' : '预览完整提示词' }}</button>
           <button class="btn" @click="resetPersona">恢复默认人设</button>
@@ -705,6 +716,8 @@ const form = reactive({
   tavilyApiKey: '',
   agentEnableOcr: true, agentOcrEngine: 'markitdown',
   interruptOn: defaultInterruptOn(),
+  // 技能脚本免确认（execute 白名单，见 python/agent/command_policy.py）
+  autoApproveSkillScripts: true,
   ragAutoEmbedding: true, ragEmbedType: 'local', ragEmbedModel: 'BAAI/bge-small-zh-v1.5',
   ragEmbedBaseUrl: '', ragEmbedApiKey: '', ragOcrEngine: 'docling',
   ragLocalDownloaded: false,
@@ -869,6 +882,8 @@ async function loadConfig() {
   form.interruptOn = Object.fromEntries(
     interruptTools.map((t) => [t.name, interruptOn[t.name] !== false])
   )
+  // 技能脚本免确认：缺省视为开启（与 Python DEFAULTS 一致）
+  form.autoApproveSkillScripts = cfg.agent?.autoApproveSkillScripts !== false
   // 知识库（RAG）
   form.ragAutoEmbedding = cfg.rag?.autoEmbedding !== false
   form.ragEmbedType = cfg.rag?.embeddingModel?.type === 'remote' ? 'remote' : 'local'
@@ -1139,6 +1154,7 @@ async function saveAll() {
     { path: 'agent.enableOcr', value: !!form.agentEnableOcr },
     { path: 'agent.ocrEngine', value: form.agentOcrEngine === 'docling' ? 'docling' : 'markitdown' },
     { path: 'agent.interruptOn', value: { ...form.interruptOn } },
+    { path: 'agent.autoApproveSkillScripts', value: !!form.autoApproveSkillScripts },
     { path: 'rag.autoEmbedding', value: !!form.ragAutoEmbedding },
     { path: 'rag.embeddingModel.type', value: form.ragEmbedType === 'remote' ? 'remote' : 'local' },
     { path: 'rag.embeddingModel.baseUrl', value: form.ragEmbedBaseUrl.trim() },

@@ -26,9 +26,12 @@ import subprocess
 import sys
 import tempfile
 from functools import lru_cache
+from pathlib import Path
 
 from deepagents.backends import LocalShellBackend
 from deepagents.backends.protocol import ExecuteResponse
+
+from agent.deepagents_path_compat import install as install_path_compat
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +148,10 @@ class _LocalProcessBackend(LocalShellBackend):
         env: dict[str, str] | None = None,
         inherit_env: bool = True,
     ) -> None:
+        # 先装 Windows 路径兼容层：把 deepagents 内置文件工具的 validate_path 换成
+        # 「真实路径」语义（盘符路径放行、/ 开头按工作区根目录），见
+        # agent/deepagents_path_compat.py 的模块说明。幂等，重复构造 backend 无副作用。
+        install_path_compat()
         # 真实路径模式：相对路径基于 root_dir，绝对路径按原样使用。
         super().__init__(
             root_dir=root_dir,
@@ -167,6 +174,24 @@ class _LocalProcessBackend(LocalShellBackend):
         env_map.setdefault("PYTHONUTF8", "1")
         env_map.setdefault("PYTHONIOENCODING", "utf-8")
         self._env = env_map
+
+    def _resolve_path(self, key: str) -> Path:
+        """把「无盘符的 /x」按工作区根目录解析（Windows）。
+
+        deepagents 默认实现是 `Path(key)` 后判断 `is_absolute()`：Windows 上
+        `/skills/a.md` 有 root 而无 drive，`is_absolute()` 为 False，拼到 cwd 上会
+        替换掉整段路径 → `E:\\skills\\a.md`（盘符根），既跑出工作区，又与
+        validate_path 的返回口径不一致。
+
+        这里统一成真实文件语义：盘符 / UNC 绝对路径原样交给父类（保留 symlink 环检测），
+        其余（相对路径、/ 开头、空串）一律相对工作区根目录。
+        兼容层的 validate_path 已把 `/x` 换成 `x`，此处是兜底：deepagents 内部有些写入
+        （如大工具结果外迁到 `/large_tool_results/...`）不经过 validate_path，直接调
+        backend.write，必须在这里也纠正，否则会写到盘符根目录。
+        """
+        if os.name == "nt" and not Path(key).is_absolute():
+            return super()._resolve_path(key.lstrip("/\\"))
+        return super()._resolve_path(key)
 
     # ---- 子类只需实现这两个钩子 ----
     def _build_argv(self, command: str) -> list[str]:

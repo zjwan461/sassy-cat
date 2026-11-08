@@ -80,6 +80,11 @@ DEFAULTS = {
             "call_dsh": True,
             "execute": True,
         },
+        # execute 的免确认白名单（见 agent/command_policy.py）：
+        # 只放行「工作区内 + 跑 skills/<技能>/scripts/*.py + 无 shell 拼接/重定向字符」的
+        # 命令（可带前置的 Set-Location），其余命令仍按上面的 interruptOn 逐条确认。
+        # 关掉它 = 恢复「每条 execute 都弹确认」的旧行为。
+        "autoApproveSkillScripts": True,
     },
     # dsh(DeepSeek Harness) 子代理：独立于 llm/agent 配置档的全局配置块，
     # 与「设置 → dsh 子代理」卡片一一对应，由 agent/tools/dsh/dsh_invoker.py 读取

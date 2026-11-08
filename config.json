@@ -16,7 +16,8 @@
       "write_file": true,
       "edit_file": true,
       "delete": true
-    }
+    },
+    "autoApproveSkillScripts": true
   },
   "dsh": {
     "useMainLlm": true,
