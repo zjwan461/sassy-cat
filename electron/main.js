@@ -1165,6 +1165,28 @@ ipcMain.handle('pet:get-position', () => {
   return { x, y };
 });
 
+// 桌宠自主走动：按增量移动窗口（渲染层只负责决定方向与节奏）。
+// 位移必须由主进程执行：渲染层的 screenX 会随窗口一起漂移，自己算增量会抖动。
+// 这里按窗口中心所在显示器的工作区钳制，并返回 moved 供渲染层判断是否到边。
+ipcMain.handle('pet:move-by', (event, opts) => {
+  if (!petWindow || petWindow.isDestroyed()) return { moved: false };
+  const dx = Math.round(Number(opts && opts.dx) || 0);
+  const dy = Math.round(Number(opts && opts.dy) || 0);
+  if (!dx && !dy) return { moved: false };
+  const [x, y] = petWindow.getPosition();
+  const [w, h] = petWindow.getSize();
+  const { screen } = require('electron');
+  const wa = screen.getDisplayNearestPoint({
+    x: Math.round(x + w / 2),
+    y: Math.round(y + h / 2),
+  }).workArea;
+  const nextX = Math.min(wa.x + wa.width - w, Math.max(wa.x, x + dx));
+  const nextY = Math.min(wa.y + wa.height - h, Math.max(wa.y, y + dy));
+  if (nextX === x && nextY === y) return { moved: false, x, y };
+  petWindow.setPosition(nextX, nextY);
+  return { moved: true, x: nextX, y: nextY };
+});
+
 // 支持 { height, width } 或数字（兼容旧调用）；以窗口底边中心为锚点向上/两侧扩展，
 // 并钳制到所在显示器工作区顶部，避免气泡展开时窗口超出屏幕
 ipcMain.handle('pet:resize', (event, opts) => {

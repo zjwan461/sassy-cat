@@ -6,6 +6,8 @@
     :state="state"
     :mood="mood"
     :facing-left="facingLeft"
+    :hovered="hovered"
+    :action="action"
     @complete="$emit('complete')"
   />
 </template>
@@ -19,7 +21,9 @@ import { currentRenderer, RENDERER_SPRITESHEET } from './config'
 defineProps({
   state: { type: String, default: 'idle' },
   mood: { type: String, default: '' },
-  facingLeft: { type: Boolean, default: false }
+  facingLeft: { type: Boolean, default: false },
+  hovered: { type: Boolean, default: false },
+  action: { type: String, default: '' }
 })
 defineEmits(['complete'])
 

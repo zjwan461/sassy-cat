@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('petAPI', {
   dragStart: () => ipcRenderer.send('pet:drag-start'),
   dragEnd: () => ipcRenderer.send('pet:drag-end'),
   getPosition: () => ipcRenderer.invoke('pet:get-position'),
+  // 桌宠自主走动：按增量移动窗口（主进程按屏幕工作区钳制，返回 { moved, x, y }）
+  moveBy: (delta) => ipcRenderer.invoke('pet:move-by', delta),
   // 动态调整窗口高度（快捷输入展开/收起）
   resize: (height) => ipcRenderer.invoke('pet:resize', height),
   // 请求主窗口显示并跳转到聊天页

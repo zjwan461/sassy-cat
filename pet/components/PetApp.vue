@@ -6,25 +6,36 @@
         v-if="bubbleText && !inputOpen"
         class="bubble"
         :class="{ expanded: bubbleExpanded }"
+        :data-kind="bubbleKind"
         @mouseenter="onBubbleEnter"
         @mouseleave="onBubbleLeave"
       >
+        <div class="bubble-meta">
+          <span class="meta-icon">{{ bubbleKind === 'reminder' ? '⏰' : bubbleKind === 'chat' ? '🐱' : '✦' }}</span>
+          <span class="meta-text">{{ bubbleKind === 'reminder' ? '提醒' : bubbleKind === 'chat' ? '优墨' : '本喵' }}</span>
+          <span v-if="state === 'talk'" class="meta-typing"><i></i><i></i><i></i></span>
+          <button class="bubble-close" type="button" title="关闭" @click.stop="hideBubble">×</button>
+        </div>
         <div ref="bubbleTextRef" class="bubble-text" :class="{ clamped: !bubbleExpanded }">{{ bubbleText }}</div>
         <div v-if="bubbleActionsVisible" class="bubble-actions">
           <button v-if="!bubbleExpanded && bubbleOverflows" class="bbtn" @click.stop="expandBubble">▾ 展开</button>
           <button v-if="bubbleExpanded" class="bbtn" @click.stop="collapseBubble">▴ 收起</button>
-          <button v-if="bubbleTruncated || bubbleExpanded || state === 'talk'" class="bbtn" @click.stop="openFullChat">💬 完整对话</button>
-          <button v-if="bubbleExpanded" class="bbtn bbtn-x" title="关闭" @click.stop="hideBubble">✕</button>
+          <button v-if="bubbleTruncated || bubbleExpanded || state === 'talk'" class="bbtn" @click.stop="openFullChat">完整对话 →</button>
         </div>
       </div>
       <div v-if="inputOpen" class="quick-input">
-        <input
+        <textarea
           ref="quickInputRef"
           v-model="quickDraft"
+          rows="2"
           placeholder="跟本喵说点什么…"
-          @keydown.enter.prevent="sendQuick"
+          @keydown.enter.exact.prevent="sendQuick"
           @keydown.esc="closeInput"
-        />
+        ></textarea>
+        <div class="quick-actions">
+          <span class="quick-hint">Enter 发送 · Esc 关闭</span>
+          <button class="quick-send" type="button" :disabled="!quickDraft.trim()" @click="sendQuick">发送</button>
+        </div>
       </div>
     </div>
 
@@ -32,9 +43,12 @@
     <div
       ref="spriteRef"
       class="pet-sprite"
-      :class="{ flip: facingLeft, spritesheet: isSpritesheet }"
+      :class="{ flip: facingLeft, spritesheet: isSpritesheet, hovered }"
       @mousedown="onMouseDown"
       @click="onClick"
+      @dblclick="onDoubleClick"
+      @mouseenter="onPetEnter"
+      @mouseleave="onPetLeave"
       @contextmenu.prevent="onContextMenu"
       @wheel.prevent="onWheel"
     >
@@ -42,6 +56,8 @@
         :state="state"
         :mood="mood"
         :facing-left="facingLeft"
+        :hovered="hovered"
+        :action="idleAction"
         @complete="onAnimComplete"
       />
       <SpriteOverlay :state="state" :mood="mood" :long-pressing="longPressing" />
@@ -88,6 +104,10 @@ const bubbleWrapRef = ref(null)
 const bubbleTextRef = ref(null)
 const longPressing = ref(false)
 const clickCount = ref(0)
+// 鼠标悬停在猫身上：耳朵竖起、眼睛发亮（渲染器负责具体形变）
+const hovered = ref(false)
+// idle 时的随机小动作：look | stretch | groom | yawn（纯 CSS 动画，不改变 state）
+const idleAction = ref('')
 // 主窗口是否处于前台激活（由主进程推送 / 挂载时查询）：
 // 激活时桌宠不再用气泡复述聊天内容，避免与主窗口重复、干扰正常使用
 const mainActive = ref(false)
@@ -117,12 +137,108 @@ function onAnimComplete() {}
 // ---------- 状态机 ----------
 function setState(s, holdMs = 0) {
   state.value = s
+  // 任何"活跃状态"都重置休眠倒计时；sleep 自身不再重置，避免自我续期
+  if (s !== 'sleep') resetSleepTimer()
   if (holdMs) {
     clearTimeout(timers.hold)
     timers.hold = setTimeout(() => {
       if (state.value === s) setState('idle')
     }, holdMs)
   }
+}
+
+// ---------- idle 行为调度 ----------
+// 桌宠长期停在 idle 会显得"死"。这里用两个独立节奏让它活起来：
+//   · 每 8~18s 随机做一个小动作（张望 / 伸懒腰 / 舔爪 / 打哈欠）
+//   · 每 35~70s 在桌面上小步走一段（窗口由主进程按屏幕边界钳制）
+//   · 120s 没有任何互动就睡着，鼠标靠近或点击会把它叫醒
+const IDLE_ACTIONS = ['look', 'stretch', 'groom', 'yawn']
+const SLEEP_AFTER_MS = 120000
+let idleTimer = null
+let wanderTimer = null
+let sleepTimer = null
+let actionTimer = null
+let wandering = false
+
+function clearIdleAction() {
+  clearTimeout(actionTimer)
+  actionTimer = null
+  idleAction.value = ''
+}
+
+function scheduleIdleAction() {
+  clearTimeout(idleTimer)
+  const wait = 8000 + Math.random() * 10000
+  idleTimer = setTimeout(() => {
+    if (state.value === 'idle' && !hovered.value && !bubbleText.value && !inputOpen.value && !dragging) {
+      const action = IDLE_ACTIONS[Math.floor(Math.random() * IDLE_ACTIONS.length)]
+      idleAction.value = action
+      clearTimeout(actionTimer)
+      actionTimer = setTimeout(() => {
+        if (idleAction.value === action) idleAction.value = ''
+      }, 1900)
+    }
+    scheduleIdleAction()
+  }, wait)
+}
+
+function resetSleepTimer() {
+  clearTimeout(sleepTimer)
+  sleepTimer = setTimeout(() => {
+    if (state.value === 'idle' && !hovered.value && !bubbleText.value && !inputOpen.value && !dragging) {
+      clearIdleAction()
+      setState('sleep')
+    }
+  }, SLEEP_AFTER_MS)
+}
+
+function wake() {
+  if (state.value === 'sleep') setState('idle')
+  resetSleepTimer()
+}
+
+function onPetEnter() {
+  hovered.value = true
+  wake()
+}
+function onPetLeave() {
+  hovered.value = false
+}
+
+// ---------- 自主走动 ----------
+// 只做水平小步移动：窗口位移交给主进程（渲染层 screenX 会随窗口漂移，不能自己算），
+// 主进程负责按当前显示器工作区钳制，返回 moved=false 说明到边了，立即停下。
+let wanderStepTimer = null
+async function maybeWander() {
+  if (wandering) return
+  if (state.value !== 'idle' || hovered.value || bubbleText.value || inputOpen.value || dragging) return
+  if (!window.petAPI || typeof window.petAPI.moveBy !== 'function') return
+  wandering = true
+  const dir = Math.random() < 0.5 ? -1 : 1
+  facingLeft.value = dir < 0
+  setState('walk')
+  const steps = 16
+  for (let i = 0; i < steps; i++) {
+    let res = null
+    try {
+      res = await window.petAPI.moveBy({ dx: dir * 3, dy: 0 })
+    } catch { /* 移动失败就停在原地，不影响其它逻辑 */ }
+    if (!res || res.moved === false) break
+    await new Promise((r) => { wanderStepTimer = setTimeout(r, 62) })
+    if (state.value !== 'walk' || dragging || hovered.value) break
+  }
+  clearTimeout(wanderStepTimer)
+  if (state.value === 'walk') setState('idle')
+  wandering = false
+}
+
+function scheduleWander() {
+  clearTimeout(wanderTimer)
+  const wait = 35000 + Math.random() * 35000
+  wanderTimer = setTimeout(() => {
+    maybeWander()
+    scheduleWander()
+  }, wait)
 }
 
 // ---------- 交互 ----------
@@ -147,8 +263,12 @@ function onMouseUp() {
   }
 }
 
-function onClick() {
+function onClick(e) {
   if (dragMoved) return
+  // 双击的第一下也会派发 click；这里按 detail 忽略，交给 onDoubleClick 处理
+  if (e && e.detail > 1) return
+  wake()
+  clearIdleAction()
   // 连击检测
   clickCount.value++
   clearTimeout(clickTimer)
@@ -171,9 +291,19 @@ function onClick() {
   }, 400)
 }
 
+function onDoubleClick() {
+  // 双击 = 打开主窗口聊天：比"点五次晕倒"更符合直觉的快捷入口
+  clearTimeout(clickTimer)
+  clickCount.value = 0
+  clearIdleAction()
+  if (window.petAPI) window.petAPI.showChat()
+}
+
 function onWheel(e) {
   // 滚轮：向上摸头（开心），向下戳（不满）
   if (state.value === 'drag') return
+  wake()
+  clearIdleAction()
   if (e.deltaY < 0) {
     // 向上滚动：摸头
     setMood('happy', 1500)
@@ -193,6 +323,8 @@ function onContextMenu() {
   window.petAPI && window.petAPI.popupMenu([
     { label: '💬 打开聊天', action: 'chat' },
     { label: inputOpen.value ? '收起输入框' : '⌨️ 快速提问', action: 'input' },
+    { label: '🐾 散散步', action: 'walk' },
+    { label: state.value === 'sleep' ? '☀️ 叫醒它' : '😴 打个盹', action: 'sleep' },
     { label: '🙈 隐藏桌宠', action: 'hide' }
   ])
 }
@@ -205,6 +337,11 @@ function onQuickAskHotkey() {
 function onMenuAction({ action }) {
   if (action === 'chat') window.petAPI.showChat()
   else if (action === 'input') inputOpen.value ? closeInput() : openInput()
+  else if (action === 'walk') { maybeWander() }
+  else if (action === 'sleep') {
+    if (state.value === 'sleep') wake()
+    else { clearIdleAction(); setState('sleep') }
+  }
   else if (action === 'hide') window.petAPI.hideSelf()
 }
 
@@ -303,7 +440,9 @@ function hideBubble() {
 
 function showBubble(text, ms = 5000, kind = 'local') {
   // 记录气泡来源：chat（聊天内容，主窗口前台时不展示）| reminder（提醒，始终展示）| local（桌宠本地互动）
-  bubbleKind = kind
+  bubbleKind.value = kind
+  wake()
+  clearIdleAction()
   let t = String(text || '')
   bubbleTruncated.value = t.length > BUBBLE_MAX_CHARS
   if (bubbleTruncated.value) t = t.slice(0, BUBBLE_MAX_CHARS) + '…'
@@ -329,7 +468,7 @@ let streamBuf = ''
 let streamTarget = ''
 let typer = null
 // 当前展示内容的来源：chat | reminder | local（见 showBubble / onMainWindowStateChanged）
-let bubbleKind = 'local'
+const bubbleKind = ref('local')
 function typewriteStart() {
   streamBuf = ''; streamTarget = ''
   clearInterval(typer)
@@ -356,7 +495,7 @@ function onMainWindowStateChanged(active) {
   const was = mainActive.value
   mainActive.value = !!active
   if (!mainActive.value || was) return
-  if (bubbleKind !== 'chat') return
+  if (bubbleKind.value !== 'chat') return
   typewriteStop()
   streamBuf = ''; streamTarget = ''
   if (bubbleText.value) hideBubble()
@@ -371,6 +510,9 @@ function onMainWindowStateChanged(active) {
 let dragMoved = false
 function onMouseDown(e) {
   if (e.button !== 0 || !window.petAPI) return
+  wake()
+  clearIdleAction()
+  wandering = false
   // 长按检测（撸猫）
   longPressing.value = false
   clearTimeout(longPressTimer)
@@ -415,13 +557,13 @@ function onMouseDown(e) {
 // ---------- 鼠标穿透控制 ----------
 let hoverInside = true
 function onDocMouseMove(e) {
-  if (!window.petAPI) return
   const el = spriteRef.value
   if (!el) return
   const pad = 14
   const r = el.getBoundingClientRect()
-  let inside = e.clientX >= r.left - pad && e.clientX <= r.right + pad &&
-               e.clientY >= r.top - pad && e.clientY <= r.bottom + pad
+  const petInside = e.clientX >= r.left - pad && e.clientX <= r.right + pad &&
+                    e.clientY >= r.top - pad && e.clientY <= r.bottom + pad
+  let inside = petInside
   // 气泡区域同样需要命中（悬停暂停倒计时、展开后可滚动/点按钮）
   if (!inside) {
     const bw = bubbleWrapRef.value
@@ -431,6 +573,15 @@ function onDocMouseMove(e) {
                e.clientY >= b.top && e.clientY <= b.bottom
     }
   }
+  // 悬停态：只在进出边界时切换，避免每帧触发 wake/清理动作
+  if (petInside !== hovered.value) {
+    hovered.value = petInside
+    if (petInside) {
+      wake()
+      clearIdleAction()
+    }
+  }
+  if (!window.petAPI) return
   // 拖动过程中强制保持可交互，避免光标短暂移出宠物/气泡范围时切回穿透导致丢失 mouseup
   const need = inside || inputOpen.value || dragging
   if (need !== hoverInside) {
@@ -440,9 +591,27 @@ function onDocMouseMove(e) {
 }
 
 // ---------- 生命周期 ----------
+// 调试/截图入口：pet.html?state=sleep&mood=happy&action=stretch&hovered=1
+// 仅读取 URL 参数，不改变生产行为（正常启动没有这些参数）
+function applyDebugParams() {
+  try {
+    const qp = new URLSearchParams(window.location.search)
+    if (qp.get('state')) state.value = qp.get('state')
+    if (qp.get('mood')) mood.value = qp.get('mood')
+    if (qp.get('action')) idleAction.value = qp.get('action')
+    if (qp.get('hovered') === '1') hovered.value = true
+    if (qp.get('bubble')) showBubble(qp.get('bubble'), 600000, qp.get('kind') || 'chat')
+    if (qp.get('input') === '1') openInput()
+  } catch { /* 忽略非法参数 */ }
+}
+
 onMounted(async () => {
   setState('idle')
   document.addEventListener('mousemove', onDocMouseMove)
+  scheduleIdleAction()
+  scheduleWander()
+  resetSleepTimer()
+  applyDebugParams()
 
   // 预加载分级：仅在 spritesheet 渲染器下预载位图（SVG 模式无需）；
   // 任一资源加载失败 -> 自动降级回 SVG（响应式，组件自动重渲染）
@@ -479,7 +648,7 @@ onMounted(async () => {
   on('chat.delta', (p) => {
     if (p.sessionId && p.sessionId !== sock.sessionId) return
     if (mainActive.value) return
-    if (state.value !== 'talk') { setState('talk'); typewriteStart(); bubbleKind = 'chat' }
+    if (state.value !== 'talk') { setState('talk'); typewriteStart(); bubbleKind.value = 'chat' }
     streamTarget += p.text
   })
   on('chat.completed', (p) => {
@@ -500,7 +669,7 @@ onMounted(async () => {
   })
   // ---------- 每日首次加载打招呼（服务端触发，属于主动问候，主窗口前台时也照常展示） ----------
   on('greeting.delta', (p) => {
-    if (state.value !== 'talk') { setState('talk'); typewriteStart(); bubbleKind = 'reminder' }
+    if (state.value !== 'talk') { setState('talk'); typewriteStart(); bubbleKind.value = 'reminder' }
     streamTarget += p.text
   })
   on('greeting.completed', (p) => {
@@ -542,6 +711,11 @@ onBeforeUnmount(() => {
   if (dragging) { dragging = false; window.petAPI && window.petAPI.dragEnd() }
   Object.values(timers).forEach((t) => { clearInterval(t); clearTimeout(t) })
   clearTimeout(bubbleTimer)
+  clearTimeout(idleTimer)
+  clearTimeout(wanderTimer)
+  clearTimeout(sleepTimer)
+  clearTimeout(actionTimer)
+  clearTimeout(wanderStepTimer)
   typewriteStop()
   document.removeEventListener('mousemove', onDocMouseMove)
 })
@@ -551,10 +725,14 @@ onBeforeUnmount(() => {
 .pet-root { position: relative; width: 100vw; height: 100vh; background: transparent; }
 .pet-sprite {
   position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
-  cursor: grab; filter: drop-shadow(0 4px 8px rgba(0,0,0,.35));
+  cursor: grab;
+  transition: transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1), filter 0.22s ease;
+  filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.28));
 }
+.pet-sprite.hovered { transform: translateX(-50%) scale(1.025); filter: drop-shadow(0 9px 18px rgba(0, 0, 0, 0.34)); }
 .pet-sprite.drag { cursor: grabbing; }
 .pet-sprite.flip { transform: translateX(-50%) scaleX(-1); }
+.pet-sprite.flip.hovered { transform: translateX(-50%) scaleX(-1) scale(1.025); }
 /* 说明：状态/心情的 CSS 关键帧动画与 overlay 动效已内聚到对应渲染器组件
    （见 sprite/SvgSpriteRenderer.vue、sprite/SpriteOverlay.vue），
    避免 scoped 样式跨组件穿透问题，并使动画作用于 svg 元素而非持有
@@ -568,13 +746,49 @@ onBeforeUnmount(() => {
 .bubble-wrap { position: absolute; bottom: 118px; left: 50%; transform: translateX(-50%); width: 280px; z-index: 10; }
 .bubble {
   background: linear-gradient(170deg, #FDF6E8 0%, #F7EAD2 100%);
-  color: #2C2113; border-radius: 14px; padding: 10px 14px;
+  color: #2C2113; border-radius: 14px; padding: 8px 12px 10px;
   font-size: 13px; line-height: 1.6; position: relative;
   border: 1px solid rgba(239, 168, 76, 0.35);
   box-shadow: 0 10px 30px -10px rgba(0, 0, 0, .55), 0 2px 6px rgba(0, 0, 0, .18);
   word-break: break-word;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
 }
+/* 来源色条：聊天=琥珀，提醒=金色，本地互动=中性 */
+.bubble[data-kind="chat"] { border-left: 3px solid rgba(239, 168, 76, 0.75); }
+.bubble[data-kind="reminder"] { border-left: 3px solid #D9A93F; }
+.bubble[data-kind="local"] { border-left: 3px solid rgba(150, 120, 80, 0.35); }
+
+.bubble-meta {
+  display: flex; align-items: center; gap: 5px;
+  height: 16px; margin-bottom: 3px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+  color: rgba(122, 88, 40, 0.85);
+  user-select: none;
+}
+.meta-icon { font-size: 11px; line-height: 1; }
+.meta-text { white-space: nowrap; }
+.meta-typing { display: inline-flex; align-items: center; gap: 2px; margin-left: 2px; }
+.meta-typing i {
+  width: 3px; height: 3px; border-radius: 50%;
+  background: rgba(150, 105, 45, 0.7);
+  animation: typing-dot 1s ease-in-out infinite;
+}
+.meta-typing i:nth-child(2) { animation-delay: .15s; }
+.meta-typing i:nth-child(3) { animation-delay: .3s; }
+@keyframes typing-dot { 0%, 100% { opacity: .25; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-1px); } }
+
+.bubble-close {
+  margin-left: auto;
+  width: 18px; height: 18px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: 50%;
+  background: transparent; color: rgba(122, 88, 40, 0.55);
+  font-size: 15px; line-height: 1; cursor: pointer;
+  opacity: .55; transition: opacity .15s, background .15s, color .15s;
+}
+.bubble:hover .bubble-close { opacity: 1; }
+.bubble-close:hover { background: rgba(180, 120, 40, 0.14); color: #7A4A22; }
+
 .bubble::after {
   content: ''; position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%);
   border: 7px solid transparent; border-top-color: #F7EAD2; border-bottom: none;
@@ -593,15 +807,36 @@ onBeforeUnmount(() => {
   transition: background .15s, border-color .15s;
 }
 .bbtn:hover { background: rgba(239, 168, 76, .3); border-color: rgba(180, 105, 28, .4); }
-.bbtn-x { background: rgba(180, 60, 50, .1); color: #9A332B; border-color: rgba(180, 60, 50, .2); }
-.bbtn-x:hover { background: rgba(180, 60, 50, .18); }
-.quick-input input {
-  width: 100%; box-sizing: border-box;
-  background: #10131A; color: #EBE9E4;
-  border: 1px solid rgba(239, 168, 76, .5); border-radius: 10px;
-  padding: 9px 11px; font-size: 13px;
-  box-shadow: 0 0 0 3px rgba(239, 168, 76, .12), 0 10px 30px -10px rgba(0, 0, 0, .6);
+
+/* ===== 快捷输入 ===== */
+.quick-input {
+  background: linear-gradient(170deg, #12161F 0%, #0E1118 100%);
+  border: 1px solid rgba(239, 168, 76, 0.45);
+  border-radius: 12px;
+  padding: 9px 10px 8px;
+  box-shadow: 0 0 0 3px rgba(239, 168, 76, .10), 0 14px 34px -12px rgba(0, 0, 0, .75);
 }
-.quick-input input::placeholder { color: #6B7280; }
-.quick-input input:focus { outline: none; border-color: #EFA84C; }
+.quick-input textarea {
+  width: 100%; box-sizing: border-box;
+  background: transparent; color: #EBE9E4;
+  border: none; outline: none; resize: none;
+  padding: 0; font-size: 13px; line-height: 1.55;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+}
+.quick-input textarea::placeholder { color: #5E6675; }
+.quick-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 6px; padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+.quick-hint { font-size: 10px; color: #5E6675; user-select: none; }
+.quick-send {
+  height: 24px; padding: 0 12px;
+  border: none; border-radius: 999px;
+  background: linear-gradient(135deg, #F3BE73, #E08F33);
+  color: #2A1A07; font-size: 11.5px; font-weight: 700;
+  cursor: pointer; transition: filter .15s, opacity .15s;
+}
+.quick-send:hover:not(:disabled) { filter: brightness(1.06); }
+.quick-send:disabled { opacity: .35; cursor: not-allowed; }
 </style>
