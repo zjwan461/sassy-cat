@@ -1,50 +1,44 @@
 <template>
   <div class="layout">
-    <!-- 左侧导航 -->
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark">
-          <img :src="logoUrl" alt="优墨" />
-        </div>
-        <div class="brand-text">
-          <div class="brand-name">{{ appConfig.name }}</div>
-          <div class="brand-sub">AI 桌宠</div>
-        </div>
-      </div>
+    <!-- 自绘标题栏（替代 Electron 原生标题栏/菜单栏）：品牌、全局搜索入口与窗口控制 -->
+    <TitleBar @open-search="searchOpen = true" />
 
-      <nav class="nav-menu">
-        <div v-for="group in menuGroups" :key="group.title" class="nav-group">
-          <div class="nav-group-title">{{ group.title }}</div>
-          <router-link
-            v-for="item in group.items"
-            :key="item.label"
-            :to="item.path"
-            class="nav-item"
-            :class="{ disabled: item.disabled, active: !item.disabled && isMenuActive(item.path) }"
-          >
-            <AppIcon :name="item.icon" :size="17" class="nav-icon" />
-            <span class="nav-label">{{ item.label }}</span>
-          </router-link>
-        </div>
-      </nav>
+    <div class="app-body">
+      <!-- 左侧导航 -->
+      <aside class="sidebar">
+        <nav class="nav-menu">
+          <div v-for="group in menuGroups" :key="group.title" class="nav-group">
+            <div class="nav-group-title">{{ group.title }}</div>
+            <router-link
+              v-for="item in group.items"
+              :key="item.label"
+              :to="item.path"
+              class="nav-item"
+              :class="{ disabled: item.disabled, active: !item.disabled && isMenuActive(item.path) }"
+            >
+              <AppIcon :name="item.icon" :size="17" class="nav-icon" />
+              <span class="nav-label">{{ item.label }}</span>
+            </router-link>
+          </div>
+        </nav>
 
-      <div class="rail-foot">
-        <div class="rail-status">
-          <span class="status-dot" :class="connClass"></span>
-          <span class="status-text">{{ connText }}</span>
+        <div class="rail-foot">
+          <div class="rail-status">
+            <span class="status-dot" :class="connClass"></span>
+            <span class="status-text">{{ connText }}</span>
+          </div>
+          <span class="rail-version">v{{ appConfig.version }}</span>
         </div>
-        <span class="rail-version">v{{ appConfig.version }}</span>
-      </div>
-    </aside>
+      </aside>
 
-    <!-- 右侧内容区 -->
-    <main class="content">
-      <router-view v-slot="{ Component }">
-        <transition name="page" mode="out-in">
-          <component :is="Component" />
-        </transition>
-      </router-view>
-    </main>
+      <!-- 右侧内容区 -->
+      <main ref="contentEl" class="content">
+        <!-- 不使用 <transition> 包裹路由：窗口不可见/被遮挡时 rAF 会被节流，
+             离场过渡可能永远不结束，导致页面卡在旧路由上。
+             页面各自的 fadeIn 动画足以承担入场节奏。 -->
+        <router-view />
+      </main>
+    </div>
 
     <!-- 知识库后台上传悬浮指示（全局渲染：任意 tab 均可见，点击回到详情页展开进度窗） -->
     <div
@@ -60,21 +54,43 @@
         <span class="fab-current">{{ kbUploadCurrent }}</span>
       </span>
     </div>
+
+    <!-- 全局搜索 / 命令面板（Ctrl/Cmd + K） -->
+    <GlobalSearch :open="searchOpen" @close="searchOpen = false" />
   </div>
 </template>
 
 <script setup>
-import { onMounted, onBeforeUnmount, watch, computed } from 'vue'
+import { onMounted, onBeforeUnmount, watch, computed, ref, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { appConfig } from './appConfig'
 import { useAgentSocket } from './composables/useAgentSocket'
 import { useKbUploadState } from './composables/useKbUploadState'
 import AppIcon from './components/AppIcon.vue'
-import logoUrl from '../assets/icon.png'
+import TitleBar from './components/TitleBar.vue'
+import GlobalSearch from './components/GlobalSearch.vue'
 
 const route = useRoute()
 const router = useRouter()
 const { state: socketState, connect, send, on, setPort } = useAgentSocket()
+
+// 全局搜索 / 命令面板
+const searchOpen = ref(false)
+const contentEl = ref(null)
+
+// 路由切换后内容区回到顶部：SPA 默认会保留上一个页面的滚动位置，
+// 从长页面（设置/知识库）切到新页面时会停在半截。
+watch(() => route.fullPath, async () => {
+  await nextTick()
+  if (contentEl.value) contentEl.value.scrollTop = 0
+})
+function onGlobalKeydown(e) {
+  const mod = e.ctrlKey || e.metaKey
+  if (mod && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault()
+    searchOpen.value = !searchOpen.value
+  }
+}
 
 // 知识库上传状态（模块级单例，与详情页共享）
 const {
@@ -143,6 +159,7 @@ let offProactiveMessage = null
 
 onMounted(() => {
   connect()
+  window.addEventListener('keydown', onGlobalKeydown)
   offProactiveReminder = on('proactive.reminder', (p) => requestSystemNotify(p, true))
   offProactiveMessage = on('proactive.message', (p) => requestSystemNotify(p, false))
   if (window.electronAPI) {
@@ -167,6 +184,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   clearTimeout(loadingTimer)
   stopWatch()
+  window.removeEventListener('keydown', onGlobalKeydown)
   offProactiveReminder?.()
   offProactiveMessage?.()
 })
@@ -211,6 +229,7 @@ const connText = computed(() => ({
 <style scoped>
 .layout {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
   position: relative;
@@ -219,6 +238,15 @@ const connText = computed(() => ({
     radial-gradient(1100px 620px at 8% -12%, rgba(239, 168, 76, 0.055), transparent 62%),
     radial-gradient(900px 560px at 102% -6%, rgba(143, 182, 232, 0.045), transparent 58%),
     var(--ink-950);
+}
+
+/* 标题栏之下的主体：侧栏 + 内容，二者共同撑满剩余高度 */
+.app-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  position: relative;
+  z-index: 1;
 }
 
 /* 颗粒噪点：极低透明度，经屏幕后几乎看不见，但能消除大面积渐变的"塑料感" */
@@ -244,62 +272,11 @@ const connText = computed(() => ({
   border-right: 1px solid var(--line-1);
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 18px 14px 16px;
-}
-
-/* 黑猫是纯黑剪影：必须落在浅色「月光瓦片」上才看得见，
-   同时用琥珀色外发光把它和侧栏联系起来 */
-.brand-mark {
-  width: 36px;
-  height: 36px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 11px;
-  background: linear-gradient(150deg, #FBF0DA 0%, #E9D2A6 100%);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.14),
-    0 6px 18px -6px rgba(239, 168, 76, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.7);
-}
-
-.brand-mark img {
-  width: 24px;
-  height: 24px;
-  object-fit: contain;
-}
-
-.brand-text {
-  min-width: 0;
-}
-
-.brand-name {
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  color: var(--text-1);
-  line-height: 1.2;
-}
-
-.brand-sub {
-  margin-top: 3px;
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--text-4);
-}
-
 /* ===== 菜单 ===== */
 .nav-menu {
   flex: 1;
   min-height: 0;
-  padding: 0 10px 12px;
+  padding: 6px 10px 12px;
   overflow-y: auto;
 }
 

@@ -344,7 +344,7 @@ onUnmounted(() => {
 }
 
 .log-container {
-  max-height: calc(100vh - 268px);
+  max-height: calc(100vh - 316px);
   overflow-y: auto;
   overflow-x: hidden;
   padding: 6px 16px 14px;
@@ -458,7 +458,7 @@ onUnmounted(() => {
   }
 
   .log-container {
-    max-height: calc(100vh - 240px);
+    max-height: calc(100vh - 288px);
     padding: 6px 12px 12px;
   }
 

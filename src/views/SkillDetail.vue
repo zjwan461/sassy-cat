@@ -440,7 +440,7 @@ onMounted(load)
 .sd-page {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 56px);
+  height: calc(100vh - 104px);
   min-height: 420px;
   color: var(--text-2);
   animation: fadeIn var(--dur-slow) var(--ease-out) both;
@@ -1086,7 +1086,7 @@ onMounted(load)
 
 @media (max-width: 980px) {
   .sd-page {
-    height: calc(100vh - 44px);
+    height: calc(100vh - 92px);
   }
 
   .sd-title {
@@ -1110,7 +1110,7 @@ onMounted(load)
 @media (max-width: 760px) {
   .sd-page {
     height: auto;
-    min-height: calc(100vh - 44px);
+    min-height: calc(100vh - 92px);
   }
 
   .sd-stats {

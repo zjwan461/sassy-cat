@@ -152,11 +152,18 @@ function createWindow() {
   const windowWidth = Math.min(Math.floor(screenWidth * 0.7), 1200);
   const windowHeight = Math.min(Math.floor(screenHeight * 0.75), 800);
 
+  const isMac = process.platform === 'darwin';
   mainWindow = new BrowserWindow({
     width: windowWidth,
     height: windowHeight,
     minWidth: 800,
     minHeight: 600,
+    // 无边框窗口：标题栏/窗口按钮由渲染层自绘（见 src/components/TitleBar.vue）。
+    // macOS 保留原生红绿灯，用 hiddenInset 让它们悬浮在自绘标题栏上。
+    frame: isMac,
+    titleBarStyle: isMac ? 'hiddenInset' : 'default',
+    autoHideMenuBar: true,
+    trafficLightPosition: isMac ? { x: 16, y: 15 } : undefined,
     // 窗口底色与界面一致，避免页面渲染前的白色闪屏（渲染层有全屏 loading 兜底）
     // 与 styles/tokens.css 的 --ink-950 保持一致
     backgroundColor: '#090C11',
@@ -194,6 +201,14 @@ function createWindow() {
   // 主窗口激活状态变化（焦点 / 显隐 / 最小化）-> 同步给桌宠，用于抑制重复聊天气泡
   ['focus', 'blur', 'show', 'hide', 'minimize', 'restore'].forEach((ev) => {
     mainWindow.on(ev, notifyMainWindowState);
+  });
+
+  // 自绘标题栏需要知道最大化状态（图标切换 + 双击行为）
+  ['maximize', 'unmaximize'].forEach((ev) => {
+    mainWindow.on(ev, () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.webContents.send('window:maximized', mainWindow.isMaximized());
+    });
   });
 }
 
@@ -648,6 +663,27 @@ function updateTrayMenu() {
 // IPC处理程序
 ipcMain.handle('get-status', () => {
   return { running: isRunning };
+});
+
+// ---------- 自绘标题栏窗口控制 ----------
+ipcMain.handle('window:minimize', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
+});
+
+ipcMain.handle('window:toggle-maximize', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+  return mainWindow.isMaximized();
+});
+
+// 与右上角关闭按钮既有语义一致：关闭 = 隐藏到托盘（close 事件里 preventDefault）
+ipcMain.handle('window:close', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+});
+
+ipcMain.handle('window:is-maximized', () => {
+  return !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isMaximized());
 });
 
 // 主动拉取最新监控数据/系统信息（缓存）

@@ -2,6 +2,20 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electronAPI', {
+  // 运行平台（渲染层用于 mac 红绿灯留白 / 快捷键文案）
+  platform: process.platform,
+
+  // 自绘标题栏：窗口控制
+  minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
+  toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),
+  closeWindow: () => ipcRenderer.invoke('window:close'),
+  isWindowMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+  onWindowMaximized: (callback) => {
+    const handler = (event, value) => callback(value)
+    ipcRenderer.on('window:maximized', handler)
+    return () => ipcRenderer.removeListener('window:maximized', handler)
+  },
+
   // 服务状态（只读，服务随应用常驻运行）
   getStatus: () => ipcRenderer.invoke('get-status'),
 
