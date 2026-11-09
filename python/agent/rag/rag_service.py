@@ -23,6 +23,7 @@ import torch
 
 import paths
 import config_loader
+from agent.rag.hybrid import BM25Index, rrf_fuse
 
 
 class RAGService:
@@ -50,6 +51,9 @@ class RAGService:
         # 初始化 embedding 模型和向量存储
         self.embeddings = None
         self.vector_store = None
+        # 关键词检索缓存：{where 指纹: (collection count, BM25Index, {chunk_id: Document})}
+        # 只在写入/删除/编辑后失效，查询时按 count 兜底检测外部变更
+        self._keyword_cache: dict[str, tuple[int, BM25Index, dict[str, Document]]] = {}
         self._ensure_embeddings()
     
     def _get_embedding_fingerprint(self) -> str:
@@ -114,6 +118,162 @@ class RAGService:
         self.embeddings = self._init_embeddings()
         self.vector_store = self._init_vector_store()
         self._last_embedding_fingerprint = fingerprint
+        # embedding 变更后集合/分块可能整体换了维度，关键词索引一并作废
+        self._invalidate_keyword_cache()
+
+    def _invalidate_keyword_cache(self) -> None:
+        """写入/删除/编辑后清空 BM25 缓存；下次查询按需重建。"""
+        self._keyword_cache.clear()
+
+    def _get_retrieval_config(self) -> dict:
+        cfg = config_loader.current()
+        return cfg.get("rag.retrieval", {}) or {}
+
+    def _keyword_index(
+        self, where: dict | None
+    ) -> tuple[BM25Index, dict[str, Document]]:
+        """按 metadata 过滤条件构建（或复用）BM25 索引。
+
+        Chroma 没有内置 BM25，这里把过滤后的分块一次性拉到内存建索引；
+        桌面知识库规模下开销可接受，且用 count + 写入失效双重校验缓存。
+        """
+        key = json.dumps(where, sort_keys=True, ensure_ascii=False) if where else "__all__"
+        try:
+            count = int(self.vector_store._collection.count())
+        except Exception:
+            count = -1
+
+        cached = self._keyword_cache.get(key)
+        if cached and cached[0] == count:
+            return cached[1], cached[2]
+
+        data = self.vector_store._collection.get(
+            where=where, include=["documents", "metadatas"]
+        )
+        ids = data.get("ids") or []
+        documents = data.get("documents") or []
+        metadatas = data.get("metadatas") or []
+
+        docs_by_id: dict[str, Document] = {}
+        pairs: list[tuple[str, str]] = []
+        for i, chunk_id in enumerate(ids):
+            text = documents[i] if i < len(documents) else ""
+            if not text or not text.strip():
+                continue
+            meta = metadatas[i] if i < len(metadatas) and metadatas[i] else {}
+            docs_by_id[chunk_id] = Document(page_content=text, metadata=meta, id=chunk_id)
+            pairs.append((chunk_id, text))
+
+        index = BM25Index(pairs)
+        # 简单容量控制：最多缓存 8 个过滤维度（all / 每个 kb / 每个 doc）
+        if len(self._keyword_cache) >= 8:
+            self._keyword_cache.clear()
+        self._keyword_cache[key] = (count, index, docs_by_id)
+        return index, docs_by_id
+
+    def _vector_ranked_ids(
+        self, query: str, limit: int, where: dict | None
+    ) -> list[str]:
+        """向量召回，返回按相似度排序的 chunk id（只关心名次，供 RRF 融合）。"""
+        embedding = self.embeddings.embed_query(query)
+        result = self.vector_store._collection.query(
+            query_embeddings=[embedding],
+            n_results=max(1, limit),
+            where=where,
+            include=["documents", "metadatas", "distances"],
+        )
+        ids = (result.get("ids") or [[]])[0]
+        return [str(i) for i in ids]
+
+    def search_hits(
+        self,
+        query: str,
+        k: int = 4,
+        filter: dict[str, str] | None = None,
+        hybrid: bool | None = None,
+    ) -> List[dict]:
+        """检索并返回带分数/来源方式的结果，供 UI 与工具层共用。
+
+        默认走混合检索（向量 + BM25，RRF 融合）；`rag.retrieval.hybrid=false`
+        或显式传 hybrid=False 时退化为纯向量。返回的 score 是归一化后的融合分
+        （最高为 1.0），只用于排序/展示，不是概率。
+        """
+        self._ensure_embeddings()
+        query = (query or "").strip()
+        if not query:
+            return []
+
+        params = self._get_retrieval_config()
+        if hybrid is None:
+            hybrid = bool(params.get("hybrid", True))
+        multiplier = params.get("candidateMultiplier", 4)
+        try:
+            multiplier = min(10, max(1, int(multiplier)))
+        except (TypeError, ValueError):
+            multiplier = 4
+        candidate_k = max(k * multiplier, k + 10)
+
+        vector_ids: list[str] = []
+        try:
+            vector_ids = self._vector_ranked_ids(query, candidate_k, filter)
+        except Exception as e:
+            # 向量侧失败（embedding 服务抖动、集合维度与当前模型不一致等）时
+            # 仍可依赖 BM25 关键词结果，保证知识库检索不至于整个不可用。
+            import logging
+
+            logging.getLogger(__name__).warning("向量召回失败，降级为关键词检索: %s", e)
+
+        keyword_ids: list[str] = []
+        docs_by_id: dict[str, Document] = {}
+        if hybrid:
+            index, docs_by_id = self._keyword_index(filter)
+            keyword_ids = [chunk_id for chunk_id, _ in index.search(query, candidate_k)]
+
+        if not vector_ids and not keyword_ids:
+            return []
+
+        if hybrid and keyword_ids:
+            fused = rrf_fuse([vector_ids, keyword_ids])
+        else:
+            # 纯向量：名次分同样用 RRF 的 1/(60+rank)，保持分数尺度一致
+            fused = {chunk_id: 1.0 / (60 + rank) for rank, chunk_id in enumerate(vector_ids, 1)}
+
+        vector_rank = {chunk_id: rank for rank, chunk_id in enumerate(vector_ids, 1)}
+        keyword_rank = {chunk_id: rank for rank, chunk_id in enumerate(keyword_ids, 1)}
+        ranked = sorted(fused.items(), key=lambda item: item[1], reverse=True)[:k]
+        max_score = ranked[0][1] if ranked else 1.0
+
+        # 纯向量模式下没有关键词索引的 docs 映射，按需补齐
+        missing = [chunk_id for chunk_id, _ in ranked if chunk_id not in docs_by_id]
+        if missing:
+            for doc in self.get_by_ids(missing):
+                docs_by_id[getattr(doc, "id", None) or ""] = doc
+
+        hits: List[dict] = []
+        for chunk_id, score in ranked:
+            doc = docs_by_id.get(chunk_id)
+            if doc is None:
+                continue
+            v_rank = vector_rank.get(chunk_id)
+            k_rank = keyword_rank.get(chunk_id)
+            if v_rank and k_rank:
+                match = "hybrid"
+            elif k_rank:
+                match = "keyword"
+            else:
+                match = "vector"
+            hits.append(
+                {
+                    "id": chunk_id,
+                    "content": doc.page_content,
+                    "metadata": doc.metadata or {},
+                    "score": round(score / max_score, 4) if max_score else 0.0,
+                    "vectorRank": v_rank,
+                    "keywordRank": k_rank,
+                    "match": match,
+                }
+            )
+        return hits
     
     def refresh(self):
         """强制重新初始化 embedding 模型和向量存储"""
@@ -530,8 +690,20 @@ class RAGService:
         
         if ids is None:
             ids = [str(uuid4()) for _ in range(len(documents))]
-        
-        return self.vector_store.add_documents(documents, ids=ids)
+
+        try:
+            result = self.vector_store.add_documents(documents, ids=ids)
+        except Exception as e:
+            text = str(e)
+            if "expecting embedding with dimension" in text:
+                raise RuntimeError(
+                    f"向量维度与现有索引不一致：{text}。"
+                    "通常是切换过 Embedding 模型导致：请切回建库时使用的模型，"
+                    "或清空该知识库后重新上传文档。"
+                ) from e
+            raise
+        self._invalidate_keyword_cache()
+        return result
     
     def save_document(
         self,
@@ -562,34 +734,20 @@ class RAGService:
         return self.add_documents(all_splits, ids=ids)
     
     async def search(self, query: str, k: int = 4, filter: dict[str, str] | None = None) -> List[Document]:
-        """
-        语义搜索
-        
-        Args:
-            query: 查询文本
-            k: 返回的文档数量
-            filter: Filter by metadata.
+        """语义搜索（默认混合检索，见 search_hits）"""
+        return self.search_sync(query=query, k=k, filter=filter)
 
-        Returns:
-            相似的文档列表
-        """
-        self._ensure_embeddings()  # 确保使用最新的 embedding 配置
-        return self.vector_store.similarity_search(query=query, k=k, filter=filter)
-    
     def search_sync(self, query: str, k: int = 4, filter: dict[str, str] | None = None) -> List[Document]:
-        """
-        同步语义搜索
-        
-        Args:
-            query: 查询文本
-            k: 返回的文档数量
-            filter: Filter by metadata.
-
-        Returns:
-            相似的文档列表
-        """
-        self._ensure_embeddings()  # 确保使用最新的 embedding 配置
-        return self.vector_store.similarity_search(query=query, k=k, filter=filter)
+        """同步检索：返回 Document 列表，保持旧调用方（工具/接口）兼容。"""
+        hits = self.search_hits(query=query, k=k, filter=filter)
+        return [
+            Document(
+                page_content=hit["content"],
+                metadata=hit.get("metadata") or {},
+                id=hit.get("id"),
+            )
+            for hit in hits
+        ]
 
     # ==================== 删除 ====================
 
@@ -602,6 +760,7 @@ class RAGService:
         """
         self._ensure_embeddings()
         self.vector_store.delete(ids=ids)
+        self._invalidate_keyword_cache()
 
     def delete_by_metadata(self, where: Dict[str, Any]) -> int:
         """
@@ -622,6 +781,7 @@ class RAGService:
             return 0
         count = len(results["ids"])
         collection.delete(ids=results["ids"])
+        self._invalidate_keyword_cache()
         return count
 
     def delete_all(self) -> None:
@@ -629,6 +789,7 @@ class RAGService:
         self._ensure_embeddings()
         collection = self.vector_store._collection
         collection.delete()
+        self._invalidate_keyword_cache()
 
     # ==================== 修改 / 更新 ====================
 
@@ -651,6 +812,7 @@ class RAGService:
         if metadata is not None:
             kwargs["metadatas"] = [metadata]
         self.vector_store._collection.update(**kwargs)
+        self._invalidate_keyword_cache()
 
     def update_chunk(
         self,
@@ -677,6 +839,7 @@ class RAGService:
         if metadata is not None:
             kwargs["metadatas"] = [metadata]
         self.vector_store._collection.update(**kwargs)
+        self._invalidate_keyword_cache()
 
     def replace_document(
         self,

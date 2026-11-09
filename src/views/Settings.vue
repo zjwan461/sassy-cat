@@ -383,6 +383,10 @@
           <span class="hint">开启后，普通对话中上传的文件将异步自动 Embedding 到默认知识库</span>
         </div>
         <div class="field">
+          <label class="check"><input type="checkbox" v-model="form.ragHybrid" /> 混合检索（向量 + 关键词）</label>
+          <span class="hint">默认开启：向量语义召回 + BM25 关键词召回，再用 RRF 融合；对编号、专有名词、代码标识符更稳。关闭后回到纯向量 top-k</span>
+        </div>
+        <div class="field">
           <label>Embedding 模型来源</label>
           <select v-model="form.ragEmbedType" @change="onEmbedTypeChange">
             <option value="local">本地模型（Local）</option>
@@ -752,7 +756,7 @@ const form = reactive({
   interruptOn: defaultInterruptOn(),
   // 技能脚本免确认（execute 白名单，见 python/agent/command_policy.py）
   autoApproveSkillScripts: true,
-  ragAutoEmbedding: true, ragEmbedType: 'local', ragEmbedModel: 'BAAI/bge-small-zh-v1.5',
+  ragAutoEmbedding: true, ragHybrid: true, ragEmbedType: 'local', ragEmbedModel: 'BAAI/bge-small-zh-v1.5',
   ragEmbedBaseUrl: '', ragEmbedApiKey: '', ragOcrEngine: 'docling',
   ragLocalDownloaded: false,
   proxyEnabled: false, proxyHttp: '', proxyHttps: '', proxyNoProxy: '',
@@ -921,6 +925,7 @@ async function loadConfig() {
   form.autoApproveSkillScripts = cfg.agent?.autoApproveSkillScripts !== false
   // 知识库（RAG）
   form.ragAutoEmbedding = cfg.rag?.autoEmbedding !== false
+  form.ragHybrid = cfg.rag?.retrieval?.hybrid !== false
   form.ragEmbedType = cfg.rag?.embeddingModel?.type === 'remote' ? 'remote' : 'local'
   form.ragEmbedModel = cfg.rag?.embeddingModel?.model || ''
   // 本地模型已下载状态（下载成功后由本页面写入配置，切换回来即不再显示下载按钮）
@@ -1215,6 +1220,7 @@ async function saveAll() {
     { path: 'agent.interruptOn', value: { ...form.interruptOn } },
     { path: 'agent.autoApproveSkillScripts', value: !!form.autoApproveSkillScripts },
     { path: 'rag.autoEmbedding', value: !!form.ragAutoEmbedding },
+    { path: 'rag.retrieval.hybrid', value: !!form.ragHybrid },
     { path: 'rag.embeddingModel.type', value: form.ragEmbedType === 'remote' ? 'remote' : 'local' },
     { path: 'rag.embeddingModel.baseUrl', value: form.ragEmbedBaseUrl.trim() },
     { path: 'rag.ocrEngine', value: form.ragOcrEngine === 'markitdown' ? 'markitdown' : 'docling' },

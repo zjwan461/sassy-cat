@@ -131,7 +131,14 @@ DEFAULTS = {
             "downloaded": False,  # 本地模式：是否已通过智能下载完成模型下载（True 后设置页不再显示下载按钮）
             "localPath": "",  # 本地模式：下载完成后模型的本地目录
         },
-        "ocrEngine": "docling"  # rag库维护上传文本使用的ocr引擎
+        "ocrEngine": "docling",  # rag库维护上传文本使用的ocr引擎
+        # 检索策略：混合检索 = 向量召回 + BM25 关键词召回，用 RRF 融合。
+        # 纯向量对编号、专有名词、代码标识符容易漏召回，混合后更稳；
+        # 关掉则退化为原来的纯向量 top-k。
+        "retrieval": {
+            "hybrid": True,
+            "candidateMultiplier": 4,  # 各路召回候选数 = k * multiplier，再融合取前 k
+        },
     },
 }
 

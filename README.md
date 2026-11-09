@@ -57,7 +57,7 @@
 | | |
 | :-- | :-- |
 | **🐾 It actually lives on your desktop**<br>A transparent, always-on-top, draggable pet with idle / walk / talk / think / sleep / remind animations and moods. Its speech bubble grows with the answer. | **🧠 It thinks — and acts**<br>A LangGraph-powered agent with streaming output, tool calls and multi-turn memory. Shell, Python and file I/O included, with human-in-the-loop confirmation for anything dangerous. |
-| **📚 Local-first RAG**<br>Multiple knowledge bases with automatic chunking and vector indexing (ChromaDB). The local `bge-small-zh` embedding model works out of the box; PDFs, Office files and images go through OCR. | **🛠 An extensible toolbox**<br>Plug in MCP servers directly. Drop a skill directory into `runtime/skills/` and it becomes a new capability — browse, create and edit them in-app. |
+| **📚 Local-first RAG**<br>Multiple knowledge bases with automatic chunking and vector indexing (ChromaDB). Retrieval defaults to hybrid vector + BM25 keyword search fused with RRF, so IDs and proper nouns are not easily missed. The local `bge-small-zh` embedding model works out of the box; PDFs, Office files and images go through OCR. | **🛠 An extensible toolbox**<br>Plug in MCP servers directly. Drop a skill directory into `runtime/skills/` and it becomes a new capability — browse, create and edit them in-app. |
 | **⏰ It reaches out first**<br>Ignore it too long and it pops up to ask why. Say "remind me in 20 minutes" and it will. Replies can also be read aloud. | **🎨 A UI that was actually designed**<br>Streaming Markdown, syntax highlighting, LaTeX and Mermaid; usage analytics, knowledge-base stats and live backend logs. |
 
 ### 🐾 Desktop Pet

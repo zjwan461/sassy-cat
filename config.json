@@ -41,7 +41,11 @@
       "downloaded": false,
       "localPath": ""
     },
-    "ocrEngine": "docling"
+    "ocrEngine": "docling",
+    "retrieval": {
+      "hybrid": true,
+      "candidateMultiplier": 4
+    }
   },
   "pet": {
     "enabled": true,

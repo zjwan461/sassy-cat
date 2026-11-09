@@ -56,6 +56,10 @@
           >
             <div class="doc-row">
               <span class="doc-name" :title="doc.fileName">{{ doc.fileName }}</span>
+              <button class="doc-del doc-reindex" title="重新索引（重读原始文件并重跑 OCR/分块）" @click.stop="reindexDoc(doc)" :disabled="reindexingId === doc.id">
+                <span v-if="reindexingId === doc.id" class="doc-spinner"></span>
+                <AppIcon v-else name="refresh" :size="13" />
+              </button>
               <button class="doc-del" title="删除文档" @click.stop="confirmDeleteDoc(doc)">
                 <AppIcon name="x" :size="13" />
               </button>
@@ -88,10 +92,62 @@
             <span class="stream-progress">
               {{ chunks.length }} / {{ chunkTotal }} 分块
             </span>
+            <button class="ui-btn ui-btn--sm" :class="{ 'is-active': searchOpen }" @click="toggleSearch">
+              <AppIcon name="search" :size="13" />
+              检索测试
+            </button>
             <button class="ui-btn ui-btn--sm" :disabled="chunkLoading" @click="reloadChunks">
               <AppIcon name="refresh" :size="13" :class="{ spinning: chunkLoading }" />
               刷新
             </button>
+          </div>
+        </div>
+
+        <!-- 检索测试：与 Agent 的 search_from_kb 共用同一套混合检索 -->
+        <div v-if="searchOpen" class="kb-search-panel">
+          <div class="kb-search-bar">
+            <div class="kb-search-input-wrap">
+              <AppIcon name="search" :size="14" />
+              <input
+                ref="searchInputEl"
+                v-model="searchQuery"
+                placeholder="输入问题，测试这个知识库的检索效果…"
+                @keydown.enter="runSearch"
+              />
+            </div>
+            <select v-model.number="searchK" class="kb-search-k" title="返回条数">
+              <option :value="4">Top 4</option>
+              <option :value="8">Top 8</option>
+              <option :value="12">Top 12</option>
+            </select>
+            <label class="kb-search-hybrid" title="向量语义 + BM25 关键词，RRF 融合">
+              <input type="checkbox" v-model="searchHybrid" />
+              混合检索
+            </label>
+            <button class="ui-btn ui-btn--primary ui-btn--sm" :disabled="searchLoading || !searchQuery.trim()" @click="runSearch">
+              <span v-if="searchLoading" class="ui-spinner"></span>
+              {{ searchLoading ? '检索中…' : '检索' }}
+            </button>
+            <button class="kb-search-close" title="关闭" @click="searchOpen = false">
+              <AppIcon name="x" :size="13" />
+            </button>
+          </div>
+
+          <div v-if="searchError" class="kb-search-error">{{ searchError }}</div>
+          <div v-else-if="searchResults.length" class="kb-search-results">
+            <div v-for="(hit, i) in searchResults" :key="hit.id" class="kb-hit">
+              <div class="kb-hit-head">
+                <span class="kb-hit-rank">#{{ i + 1 }}</span>
+                <span class="kb-hit-source" :title="hit.source">{{ hit.source || '未知来源' }}</span>
+                <span class="kb-hit-match" :class="'m-' + (hit.match || 'vector')">{{ matchText(hit.match) }}</span>
+                <span class="kb-hit-score" :title="'融合相关度（归一化）'">{{ Math.round((hit.score || 0) * 100) }}%</span>
+                <button v-if="hit.docId" class="kb-hit-jump" @click="jumpToDoc(hit)">查看文档</button>
+              </div>
+              <div class="kb-hit-content">{{ hit.content }}</div>
+            </div>
+          </div>
+          <div v-else-if="searchSearched && !searchLoading" class="kb-search-empty">
+            没有命中任何分块，试试换个问法、减少限定词，或关闭混合检索再试。
           </div>
         </div>
 
@@ -174,6 +230,7 @@ import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   listKbs, listDocuments, deleteDocument, fetchChunks, updateChunk, deleteChunk,
+  searchKb, reindexDocument,
 } from '../api/kb'
 import { useKbUploadState } from '../composables/useKbUploadState'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
@@ -216,6 +273,71 @@ const editingChunkId = ref(null)
 const editingContent = ref('')
 const savingChunk = ref(false)
 const deletingChunkId = ref(null)
+
+// ---- 检索测试 ----
+// 与 Agent 工具 search_from_kb 共用 /api/kb/{id}/search，结果就是线上召回结果
+const searchOpen = ref(false)
+const searchInputEl = ref(null)
+const searchQuery = ref('')
+const searchK = ref(8)
+const searchHybrid = ref(true)
+const searchLoading = ref(false)
+const searchResults = ref([])
+const searchError = ref('')
+const searchSearched = ref(false)
+
+// ---- 文档重新索引 ----
+const reindexingId = ref('')
+
+function matchText(match) {
+  return { hybrid: '混合', keyword: '关键词', vector: '语义' }[match] || '语义'
+}
+
+function toggleSearch() {
+  searchOpen.value = !searchOpen.value
+  if (searchOpen.value) {
+    nextTick(() => searchInputEl.value?.focus())
+  }
+}
+
+async function runSearch() {
+  const query = searchQuery.value.trim()
+  if (!query || searchLoading.value) return
+  searchLoading.value = true
+  searchError.value = ''
+  searchSearched.value = false
+  try {
+    const res = await searchKb(kbId, query, searchK.value, searchHybrid.value)
+    searchResults.value = res.items || []
+    searchSearched.value = true
+  } catch (e) {
+    searchError.value = `检索失败：${e.message}`
+  } finally {
+    searchLoading.value = false
+  }
+}
+
+function jumpToDoc(hit) {
+  if (!hit.docId) return
+  selectedDocId.value = hit.docId
+  searchOpen.value = false
+  reloadChunks()
+}
+
+async function reindexDoc(doc) {
+  if (reindexingId.value) return
+  if (!window.confirm(`重新索引「${doc.fileName}」？\n将重读原始文件并重跑 OCR / 分块 / embedding，期间该文档暂不可用。`)) return
+  reindexingId.value = doc.id
+  try {
+    await reindexDocument(kbId, doc.id)
+    await Promise.all([loadDocs(), loadKb()])
+    reloadChunks()
+  } catch (e) {
+    alert(`重新索引失败：${e.message}`)
+  } finally {
+    reindexingId.value = ''
+  }
+}
 function statusText(s) {
   return { pending: '待处理', processing: '处理中', done: '已完成', error: '失败' }[s] || s
 }
@@ -756,6 +878,13 @@ onMounted(async () => {
   min-width: 0;
 }
 
+/* 检索测试按钮的开启态 */
+.chunk-actions .ui-btn.is-active {
+  color: var(--amber-300);
+  background: var(--amber-a12);
+  border-color: var(--amber-a35);
+}
+
 .chunk-filter {
   display: inline-flex;
   align-items: center;
@@ -816,6 +945,216 @@ onMounted(async () => {
   background: var(--coral-a12);
   border: 1px solid rgba(233, 119, 110, 0.24);
   border-radius: var(--r-sm);
+}
+
+/* ===== 检索测试 ===== */
+.kb-search-panel {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  max-height: 46%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.16);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+}
+
+.kb-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.kb-search-input-wrap {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 10px;
+  color: var(--text-4);
+  background: var(--ink-900);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+.kb-search-input-wrap:focus-within {
+  border-color: var(--amber-a55);
+  box-shadow: 0 0 0 3px var(--amber-a12);
+}
+
+.kb-search-input-wrap input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-1);
+  font-size: 12.5px;
+}
+
+.kb-search-input-wrap input::placeholder {
+  color: var(--text-4);
+}
+
+.kb-search-k {
+  height: 32px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--ink-900);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+}
+
+.kb-search-hybrid {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-3);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.kb-search-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-4);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.kb-search-close:hover {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.kb-search-results {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.kb-hit {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+}
+
+.kb-hit-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.kb-hit-rank {
+  color: var(--amber-300);
+  font-weight: 700;
+}
+
+.kb-hit-source {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-hit-match {
+  padding: 1px 6px;
+  color: var(--text-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-full);
+}
+
+.kb-hit-match.m-hybrid {
+  color: var(--amber-300);
+  background: var(--amber-a12);
+  border-color: var(--amber-a35);
+}
+
+.kb-hit-match.m-keyword {
+  color: #8FD3B6;
+  background: rgba(143, 211, 182, 0.1);
+  border-color: rgba(143, 211, 182, 0.28);
+}
+
+.kb-hit-score {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.kb-hit-jump {
+  padding: 0;
+  color: var(--amber-300);
+  font-size: 11px;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.kb-hit-jump:hover {
+  text-decoration: underline;
+}
+
+.kb-hit-content {
+  max-height: 96px;
+  overflow-y: auto;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.kb-search-empty,
+.kb-search-error {
+  padding: 6px 2px;
+  font-size: 12px;
+  color: var(--text-4);
+}
+
+.kb-search-error {
+  color: var(--coral-400);
+}
+
+/* 文档重新索引：与删除按钮并排，悬停变琥珀色 */
+.doc-reindex:hover:not(:disabled) {
+  color: var(--amber-300);
+  background: var(--amber-a12);
+  border-color: var(--amber-a35);
+}
+
+.doc-reindex:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.doc-spinner {
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid var(--line-3);
+  border-top-color: var(--amber-300);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 .chunk-empty {

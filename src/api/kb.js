@@ -68,6 +68,26 @@ export function deleteDocument(kbId, docId) {
 }
 
 /**
+ * 重新索引单个文档：重读原始文件，重跑 OCR -> 分块 -> embedding。
+ * 适用于上传时解析失败、或调整 OCR/分块配置后重跑。
+ */
+export function reindexDocument(kbId, docId) {
+  return request(`/api/kb/${kbId}/documents/${docId}/reindex`, { method: 'POST' })
+}
+
+/**
+ * 知识库检索测试（与 Agent 工具共用混合检索实现）。
+ * @returns {Promise<{items: Array, total: number, query: string}>}
+ */
+export function searchKb(kbId, query, k = 8, hybrid = null) {
+  return request(`/api/kb/${kbId}/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, k, hybrid }),
+  })
+}
+
+/**
  * 分页查询知识库文档分块（信息流滚动加载）。
  * @param {string} kbId 知识库 ID
  * @param {number} page 页码（从 1 开始）

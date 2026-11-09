@@ -39,6 +39,12 @@ class ChunkUpdatePayload(BaseModel):
     metadata: Optional[dict] = None
 
 
+class KbSearchPayload(BaseModel):
+    query: str
+    k: int = 8
+    hybrid: Optional[bool] = None
+
+
 # ==================== 知识库 CRUD ====================
 
 @router.get("")
@@ -152,6 +158,107 @@ async def upload_document(kb_id: str, file: UploadFile = File(...)):
         logger.exception(f"文档入库失败: kb={kb_id}, file={filename}, err={e}")
         await kb_repo.set_document_status(doc_id, "error", error=str(e))
         raise HTTPException(status_code=500, detail=f"文档处理失败: {e}")
+
+
+@router.post("/{kb_id}/search")
+async def search_kb(kb_id: str, payload: KbSearchPayload):
+    """知识库检索测试：返回混合检索（向量 + BM25）命中的分块与相关度。
+
+    供知识库详情页的「检索测试」使用；Agent 侧检索走 agent/tools/rag_tools.py，
+    两边共用 RAGService.search_hits，保证测试结果与线上回答的召回一致。
+    """
+    if not await kb_repo.get_kb(kb_id):
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    query = (payload.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="查询内容不能为空")
+    k = max(1, min(int(payload.k or 8), 20))
+
+    try:
+        hits = await asyncio.to_thread(
+            get_rag_service().search_hits,
+            query=query,
+            k=k,
+            filter={"kb_id": kb_id},
+            hybrid=payload.hybrid,
+        )
+    except Exception as e:
+        logger.exception(f"知识库检索失败: kb={kb_id}, query={query!r}")
+        raise HTTPException(status_code=500, detail=f"检索失败: {e}")
+
+    items = []
+    for hit in hits:
+        meta = hit.get("metadata") or {}
+        items.append({
+            "id": hit.get("id"),
+            "docId": meta.get("doc_id", ""),
+            "source": meta.get("source", ""),
+            "content": hit.get("content", ""),
+            "score": hit.get("score", 0),
+            "match": hit.get("match", ""),
+            "vectorRank": hit.get("vectorRank"),
+            "keywordRank": hit.get("keywordRank"),
+        })
+    return {"query": query, "items": items, "total": len(items)}
+
+
+@router.post("/{kb_id}/documents/{doc_id}/reindex")
+async def reindex_document(kb_id: str, doc_id: str):
+    """重新索引单个文档：重读原始文件 -> 重新 OCR/分块/embedding。
+
+    适用场景：上传时 OCR 引擎不可用、解析失败、或修改了 OCR/分块配置后
+    想用同一份原始文件重跑，而不必让用户重新上传。
+    """
+    doc = await kb_repo.get_document(doc_id)
+    if not doc or doc["kbId"] != kb_id:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    file_path = doc.get("filePath") or ""
+    if not file_path or not os.path.isfile(file_path):
+        raise HTTPException(
+            status_code=400, detail="原始文件不存在（可能已被移动或删除），请重新上传"
+        )
+
+    await kb_repo.set_document_status(doc_id, "processing")
+    rag = get_rag_service()
+    try:
+        def _read_file() -> bytes:
+            with open(file_path, "rb") as f:
+                return f.read()
+
+        file_bytes = await asyncio.to_thread(_read_file)
+        removed = await asyncio.to_thread(
+            rag.delete_by_metadata, {"doc_id": doc_id}
+        )
+        ocr_result = await do_ocr("rag", doc["fileName"], file_bytes)
+        content = (ocr_result or {}).get("page_content", "")
+        if not content or not content.strip():
+            raise ValueError("文档解析结果为空，无可入库内容")
+
+        metadata = {
+            "kb_id": kb_id,
+            "doc_id": doc_id,
+            "source": doc["fileName"],
+        }
+        ids = await asyncio.to_thread(rag.save_document, content, metadata)
+        if not ids:
+            raise ValueError("文档分块后无有效内容")
+
+        await kb_repo.set_document_status(doc_id, "done", chunk_count=len(ids))
+        logger.info(
+            f"文档重新索引完成: kb={kb_id}, doc={doc_id}, 旧分块={removed}, 新分块={len(ids)}"
+        )
+        return {
+            "status": "success",
+            "document": await kb_repo.get_document(doc_id),
+            "removedChunks": removed,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"文档重新索引失败: kb={kb_id}, doc={doc_id}, err={e}")
+        await kb_repo.set_document_status(doc_id, "error", error=str(e))
+        raise HTTPException(status_code=500, detail=f"重新索引失败: {e}")
 
 
 @router.delete("/{kb_id}/documents/{doc_id}")

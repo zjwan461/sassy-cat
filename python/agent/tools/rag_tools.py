@@ -10,11 +10,14 @@ from langchain.tools import tool
 from agent.rag.rag_service import get_rag_service
 
 
-@tool(description="从知识库中搜索")
+@tool(description="从知识库中搜索（混合检索：向量语义 + BM25 关键词）")
 def search_from_kb(kb_ids: list[str] | str, query: str, k: int = 4) -> str:
     """从知识库中按语义检索相关内容，返回命中的文档分块。
 
     触发场景：主人询问知识库中的问题，如"查一下我们公司/某知识库里的 XX 内容"时调用。
+
+    检索默认采用混合策略：向量召回（语义相近）+ BM25 召回（编号/专有名词/精确短语），
+    两路结果用 RRF 融合。因此即使用户问的是文档里的精确术语，也能命中。
 
     参数说明：
     - kb_ids: 知识库 ID 列表（如 ["kb-xxx", "kb-yyy"]）或单个 ID（字符串）；
@@ -22,7 +25,7 @@ def search_from_kb(kb_ids: list[str] | str, query: str, k: int = 4) -> str:
     - query: 查询文本（必填）。
     - k: 返回的文档分块数量（默认 4）。
 
-    返回命中的分块内容，每块附带来源（源文件名或文档 ID）；
+    返回命中的分块内容，每块附带来源（源文件名或文档 ID）与相关度；
     未命中时返回提示，可尝试换一种问法或调整关键词后重试。
     """
     rag_service = get_rag_service()
@@ -36,23 +39,29 @@ def search_from_kb(kb_ids: list[str] | str, query: str, k: int = 4) -> str:
         where = {"kb_id": {"$in": list(kb_ids)}}
 
     try:
-        results = rag_service.search_sync(query=query, k=k, filter=where)
+        hits = rag_service.search_hits(query=query, k=k, filter=where)
     except Exception as e:
         return f"知识库搜索失败：{e}"
 
-    if not results:
+    if not hits:
         return "知识库中没有找到相关内容，可以换一种问法或添加文档后再试。"
 
-    lines = [f"已从知识库中找到 {len(results)} 条相关内容："]
-    for i, doc in enumerate(results, 1):
-        meta = doc.metadata or {}
+    lines = [f"已从知识库中找到 {len(hits)} 条相关内容："]
+    for i, hit in enumerate(hits, 1):
+        meta = hit.get("metadata") or {}
         source = (
             meta.get("source")
             or meta.get("doc_id")
-            or getattr(doc, "id", None)
+            or hit.get("id")
             or "未知来源"
         )
-        content = (doc.page_content or "").strip()
-        lines.append(f"\n[{i}] 来源：{source}\n{content}")
+        content = (hit.get("content") or "").strip()
+        score = float(hit.get("score") or 0)
+        match = {"hybrid": "混合", "keyword": "关键词", "vector": "语义"}.get(
+            hit.get("match"), hit.get("match") or ""
+        )
+        lines.append(
+            f"\n[{i}] 来源：{source}（相关度 {score:.2f} · {match}召回）\n{content}"
+        )
 
     return "\n".join(lines)
