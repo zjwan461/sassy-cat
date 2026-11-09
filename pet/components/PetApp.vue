@@ -43,7 +43,7 @@
     <div
       ref="spriteRef"
       class="pet-sprite"
-      :class="{ flip: facingLeft, spritesheet: isSpritesheet, hovered }"
+      :class="{ flip: facingLeft, spritesheet: isSpritesheet, hovered, 'trick-flip': trick === 'flip' }"
       @mousedown="onMouseDown"
       @click="onClick"
       @dblclick="onDoubleClick"
@@ -60,7 +60,7 @@
         :action="idleAction"
         @complete="onAnimComplete"
       />
-      <SpriteOverlay :state="state" :mood="mood" :long-pressing="longPressing" />
+      <SpriteOverlay :state="state" :mood="mood" :long-pressing="longPressing" :trick="trick" />
     </div>
   </div>
 </template>
@@ -108,6 +108,9 @@ const clickCount = ref(0)
 const hovered = ref(false)
 // idle 时的随机小动作：look | stretch | groom | yawn（纯 CSS 动画，不改变 state）
 const idleAction = ref('')
+// 表演类动作（与状态机解耦）：目前支持 flip=翻跟斗
+const trick = ref('')
+let trickTimer = null
 // 主窗口是否处于前台激活（由主进程推送 / 挂载时查询）：
 // 激活时桌宠不再用气泡复述聊天内容，避免与主窗口重复、干扰正常使用
 const mainActive = ref(false)
@@ -123,6 +126,7 @@ const bubbleActionsVisible = computed(() => {
 let timers = {}
 let dragging = false
 let longPressTimer = null
+let pressStartedAt = 0
 let moodTimer = null
 let clickTimer = null
 
@@ -171,12 +175,17 @@ function scheduleIdleAction() {
   const wait = 8000 + Math.random() * 10000
   idleTimer = setTimeout(() => {
     if (state.value === 'idle' && !hovered.value && !bubbleText.value && !inputOpen.value && !dragging) {
-      const action = IDLE_ACTIONS[Math.floor(Math.random() * IDLE_ACTIONS.length)]
-      idleAction.value = action
-      clearTimeout(actionTimer)
-      actionTimer = setTimeout(() => {
-        if (idleAction.value === action) idleAction.value = ''
-      }, 1900)
+      // 偶尔不满足于小动作，直接翻个跟斗
+      if (Math.random() < 0.12) {
+        performTrick('flip')
+      } else {
+        const action = IDLE_ACTIONS[Math.floor(Math.random() * IDLE_ACTIONS.length)]
+        idleAction.value = action
+        clearTimeout(actionTimer)
+        actionTimer = setTimeout(() => {
+          if (idleAction.value === action) idleAction.value = ''
+        }, 1900)
+      }
     }
     scheduleIdleAction()
   }, wait)
@@ -195,6 +204,23 @@ function resetSleepTimer() {
 function wake() {
   if (state.value === 'sleep') setState('idle')
   resetSleepTimer()
+}
+
+// ---------- 表演动作：翻跟斗 ----------
+// 与状态机解耦：不改 state（避免表情/气泡状态被打断），只在容器上叠加一段
+// 旋转+腾空的 CSS 动画；spritesheet 渲染器也能一起翻。
+function performTrick(name = 'flip') {
+  if (state.value === 'drag' || dragging) return
+  wake()
+  clearIdleAction()
+  clearTimeout(trickTimer)
+  // 先清空再下一拍赋值：连续触发时能重启动画，而不是因为 class 没变被浏览器忽略
+  trick.value = ''
+  setTimeout(() => {
+    trick.value = name
+    trickTimer = setTimeout(() => { trick.value = '' }, 1150)
+  }, 16)
+  if (Math.random() < 0.6) showBubble('看本喵翻个跟斗！ 🤸', 2200)
 }
 
 function onPetEnter() {
@@ -260,7 +286,12 @@ function onMouseUp() {
       setMood('happy', 2000)
       showBubble('好舒服喵～ 下次还要！ 😽', 2500)
     }
+    // 撸得够久（≥1s）就奖励一个跟斗
+    if (pressStartedAt && Date.now() - pressStartedAt >= 1000) {
+      performTrick('flip')
+    }
   }
+  pressStartedAt = 0
 }
 
 function onClick(e) {
@@ -324,6 +355,7 @@ function onContextMenu() {
     { label: '💬 打开聊天', action: 'chat' },
     { label: inputOpen.value ? '收起输入框' : '⌨️ 快速提问', action: 'input' },
     { label: '🐾 散散步', action: 'walk' },
+    { label: '🤸 翻个跟斗', action: 'flip' },
     { label: state.value === 'sleep' ? '☀️ 叫醒它' : '😴 打个盹', action: 'sleep' },
     { label: '🙈 隐藏桌宠', action: 'hide' }
   ])
@@ -338,6 +370,7 @@ function onMenuAction({ action }) {
   if (action === 'chat') window.petAPI.showChat()
   else if (action === 'input') inputOpen.value ? closeInput() : openInput()
   else if (action === 'walk') { maybeWander() }
+  else if (action === 'flip') { performTrick('flip') }
   else if (action === 'sleep') {
     if (state.value === 'sleep') wake()
     else { clearIdleAction(); setState('sleep') }
@@ -515,6 +548,7 @@ function onMouseDown(e) {
   wandering = false
   // 长按检测（撸猫）
   longPressing.value = false
+  pressStartedAt = Date.now()
   clearTimeout(longPressTimer)
   longPressTimer = setTimeout(() => {
     if (!dragging && !dragMoved) {
@@ -527,7 +561,11 @@ function onMouseDown(e) {
   dragging = true
   dragMoved = false
   const startX = e.screenX, startY = e.screenY
+  const downAt = Date.now()
+  let lastX = startX, lastY = startY
   const moveHandler = (me) => {
+    lastX = me.screenX
+    lastY = me.screenY
     // 3px 死区：过滤点击时的细微抖动，避免把单击误判成拖动
     if (Math.abs(me.screenX - startX) + Math.abs(me.screenY - startY) < 3) return
     // 拖动时取消长按
@@ -548,6 +586,11 @@ function onMouseDown(e) {
     // 调用 onMouseUp 统一处理撸猫结束逻辑
     onMouseUp()
     if (dragMoved && state.value === 'drag') setState('idle')
+    // 甩出去的一下（拖了 ≥70px 且动作较快）落地后翻个跟斗，像被扔出去又稳稳落地
+    const distance = Math.hypot(lastX - startX, lastY - startY)
+    if (dragMoved && distance >= 70 && Date.now() - downAt <= 1600) {
+      performTrick('flip')
+    }
     setTimeout(() => { dragMoved = false }, 50)
   }
   document.addEventListener('mousemove', moveHandler)
@@ -600,6 +643,7 @@ function applyDebugParams() {
     if (qp.get('mood')) mood.value = qp.get('mood')
     if (qp.get('action')) idleAction.value = qp.get('action')
     if (qp.get('hovered') === '1') hovered.value = true
+    if (qp.get('trick')) trick.value = qp.get('trick')
     if (qp.get('bubble')) showBubble(qp.get('bubble'), 600000, qp.get('kind') || 'chat')
     if (qp.get('input') === '1') openInput()
   } catch { /* 忽略非法参数 */ }
@@ -716,6 +760,7 @@ onBeforeUnmount(() => {
   clearTimeout(sleepTimer)
   clearTimeout(actionTimer)
   clearTimeout(wanderStepTimer)
+  clearTimeout(trickTimer)
   typewriteStop()
   document.removeEventListener('mousemove', onDocMouseMove)
 })
@@ -733,6 +778,32 @@ onBeforeUnmount(() => {
 .pet-sprite.drag { cursor: grabbing; }
 .pet-sprite.flip { transform: translateX(-50%) scaleX(-1); }
 .pet-sprite.flip.hovered { transform: translateX(-50%) scaleX(-1) scale(1.025); }
+
+/* 翻跟斗：整只猫腾空旋转一周，落地回到原位 */
+.pet-sprite.trick-flip { animation: pet-somersault 1.05s cubic-bezier(0.3, 0.7, 0.4, 1); }
+.pet-sprite.flip.trick-flip { animation: pet-somersault-flipped 1.05s cubic-bezier(0.3, 0.7, 0.4, 1); }
+
+@keyframes pet-somersault {
+  0%   { transform: translateX(-50%) translateY(0) rotate(0deg) scale(1, 1); }
+  18%  { transform: translateX(-50%) translateY(4px) rotate(0deg) scale(1.08, 0.9); }
+  45%  { transform: translateX(-50%) translateY(-30px) rotate(180deg) scale(0.98, 1.02); }
+  72%  { transform: translateX(-50%) translateY(-10px) rotate(330deg) scale(1.02, 0.98); }
+  90%  { transform: translateX(-50%) translateY(2px) rotate(360deg) scale(1.06, 0.94); }
+  100% { transform: translateX(-50%) translateY(0) rotate(360deg) scale(1, 1); }
+}
+
+@keyframes pet-somersault-flipped {
+  0%   { transform: translateX(-50%) scaleX(-1) translateY(0) rotate(0deg); }
+  18%  { transform: translateX(-50%) scaleX(-1) translateY(4px) rotate(0deg) scale(1.08, 0.9); }
+  45%  { transform: translateX(-50%) scaleX(-1) translateY(-30px) rotate(-180deg) scale(0.98, 1.02); }
+  72%  { transform: translateX(-50%) scaleX(-1) translateY(-10px) rotate(-330deg) scale(1.02, 0.98); }
+  90%  { transform: translateX(-50%) scaleX(-1) translateY(2px) rotate(-360deg) scale(1.06, 0.94); }
+  100% { transform: translateX(-50%) scaleX(-1) translateY(0) rotate(-360deg) scale(1, 1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pet-sprite.trick-flip { animation: none; }
+}
 /* 说明：状态/心情的 CSS 关键帧动画与 overlay 动效已内聚到对应渲染器组件
    （见 sprite/SvgSpriteRenderer.vue、sprite/SpriteOverlay.vue），
    避免 scoped 样式跨组件穿透问题，并使动画作用于 svg 元素而非持有

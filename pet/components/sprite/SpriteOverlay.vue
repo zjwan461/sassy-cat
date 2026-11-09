@@ -19,6 +19,13 @@
     <!-- 提醒：琥珀色感叹号 -->
     <div v-if="state === 'remind'" class="ov-remind">!</div>
 
+    <!-- 翻跟斗：落地时的小星星 -->
+    <div v-if="trick === 'flip'" class="ov-sparkles">
+      <span class="spark s-1">✦</span>
+      <span class="spark s-2">✧</span>
+      <span class="spark s-3">✦</span>
+    </div>
+
     <!-- 长按撸猫 -->
     <div v-if="longPressing && mood !== 'purring'" class="ov-meow">喵~</div>
 
@@ -36,6 +43,7 @@ defineProps({
   state: { type: String, default: 'idle' },
   mood: { type: String, default: '' },
   longPressing: { type: Boolean, default: false },
+  trick: { type: String, default: '' },
 })
 </script>
 
@@ -116,8 +124,25 @@ defineProps({
   animation: meow-float 1.1s ease-in-out infinite;
 }
 
-/* ---- 爱心 ---- */
-.ov-hearts { position: absolute; right: 6px; top: 8px; }
+/* ---- 翻跟斗星星 ---- */
+.ov-sparkles { position: absolute; inset: 0; }
+.spark {
+  position: absolute;
+  color: #F3BE73;
+  text-shadow: 0 0 8px rgba(239, 168, 76, 0.65);
+  animation: spark-pop 1s ease-out forwards;
+}
+.s-1 { left: 14px; top: 46px; font-size: 15px; }
+.s-2 { right: 10px; top: 34px; font-size: 12px; animation-delay: 0.12s; }
+.s-3 { right: 22px; bottom: 18px; font-size: 10px; animation-delay: 0.22s; }
+
+@keyframes spark-pop {
+  0% { opacity: 0; transform: scale(0.4) translateY(6px); }
+  35% { opacity: 1; transform: scale(1.15) translateY(0); }
+  100% { opacity: 0; transform: scale(0.8) translateY(-8px); }
+}
+
+/* ---- 爱心 ---- */.ov-hearts { position: absolute; right: 6px; top: 8px; }
 .heart {
   position: absolute;
   right: 0;
