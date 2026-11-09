@@ -66,6 +66,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { appConfig } from './appConfig'
 import { useAgentSocket } from './composables/useAgentSocket'
 import { useKbUploadState } from './composables/useKbUploadState'
+import { addNotification } from './composables/useNotifications'
 import AppIcon from './components/AppIcon.vue'
 import TitleBar from './components/TitleBar.vue'
 import GlobalSearch from './components/GlobalSearch.vue'
@@ -156,12 +157,45 @@ function requestSystemNotify(payload, isReminder) {
 
 let offProactiveReminder = null
 let offProactiveMessage = null
+let offRebuildDone = null
 
 onMounted(() => {
   connect()
   window.addEventListener('keydown', onGlobalKeydown)
-  offProactiveReminder = on('proactive.reminder', (p) => requestSystemNotify(p, true))
-  offProactiveMessage = on('proactive.message', (p) => requestSystemNotify(p, false))
+  offProactiveReminder = on('proactive.reminder', (p) => {
+    requestSystemNotify(p, true)
+    addNotification({
+      title: '提醒事项',
+      body: String(p?.text || p?.content || ''),
+      kind: 'reminder',
+      action: '/chat',
+      actionLabel: '去聊天',
+    })
+  })
+  offProactiveMessage = on('proactive.message', (p) => {
+    requestSystemNotify(p, false)
+    addNotification({
+      title: '优墨发来一条消息',
+      body: String(p?.text || p?.content || ''),
+      kind: 'info',
+      action: '/chat',
+      actionLabel: '去聊天',
+    })
+  })
+  // 知识库全量重建结束（后台任务）：即使已经离开设置页也能收到结果
+  offRebuildDone = on('kb.rebuild.done', (p) => {
+    const failed = Number(p?.failed || 0)
+    const total = Number(p?.total || 0)
+    const done = Number(p?.done || 0)
+    const errors = Array.isArray(p?.errors) ? p.errors : []
+    addNotification({
+      title: failed ? `索引重建完成，${failed} 篇失败` : '索引重建完成',
+      body: `共 ${total} 篇文档，成功 ${done} 篇${errors.length ? `；首个错误：${errors[0]}` : ''}`,
+      kind: failed ? 'error' : 'success',
+      action: '/settings',
+      actionLabel: '查看设置',
+    })
+  })
   if (window.electronAPI) {
     window.electronAPI.getAgentInfo().then((info) => {
       if (info && info.port) setPort(info.port)
@@ -187,6 +221,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
   offProactiveReminder?.()
   offProactiveMessage?.()
+  offRebuildDone?.()
 })
 
 // 导航按「日常 / 扩展 / 系统」分组：比一条长列表更容易被扫读，

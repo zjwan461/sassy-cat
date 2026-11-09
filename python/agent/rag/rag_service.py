@@ -17,13 +17,17 @@ from langchain_text_splitters import (
 from langchain_core.documents import Document
 from uuid import uuid4
 import json
+import logging
 import os
 import re
+import time
 import torch
 
 import paths
 import config_loader
 from agent.rag.hybrid import BM25Index, rrf_fuse
+
+logger = logging.getLogger(__name__)
 
 
 class RAGService:
@@ -54,6 +58,10 @@ class RAGService:
         # 关键词检索缓存：{where 指纹: (collection count, BM25Index, {chunk_id: Document})}
         # 只在写入/删除/编辑后失效，查询时按 count 兜底检测外部变更
         self._keyword_cache: dict[str, tuple[int, BM25Index, dict[str, Document]]] = {}
+        # 当前 embedding 维度缓存（health 检查用，避免每次重复 embed）
+        self._embedding_dim: int | None = None
+        self._embedding_error: str | None = None
+        self._embedding_probe_at: float = 0.0
         self._ensure_embeddings()
     
     def _get_embedding_fingerprint(self) -> str:
@@ -118,6 +126,9 @@ class RAGService:
         self.embeddings = self._init_embeddings()
         self.vector_store = self._init_vector_store()
         self._last_embedding_fingerprint = fingerprint
+        self._embedding_dim = None
+        self._embedding_error = None
+        self._embedding_probe_at = 0.0
         # embedding 变更后集合/分块可能整体换了维度，关键词索引一并作废
         self._invalidate_keyword_cache()
 
@@ -962,6 +973,94 @@ class RAGService:
         """返回当前集合中的文档总数"""
         self._ensure_embeddings()
         return self.vector_store._collection.count()
+
+    # ==================== 索引健康 / 重建 ====================
+
+    def _probe_embedding_dim(self) -> int | None:
+        """当前 embedding 模型输出的向量维度（带缓存）。"""
+        if self._embedding_dim:
+            return self._embedding_dim
+        # 失败后 20s 内不重复探测：health 页面会被反复刷新，避免每次都打模型接口
+        if self._embedding_error and time.time() - self._embedding_probe_at < 20:
+            return None
+        try:
+            self._embedding_dim = len(self.embeddings.embed_query("dimension probe"))
+            self._embedding_error = None
+        except Exception as e:
+            self._embedding_dim = None
+            self._embedding_error = str(e) or e.__class__.__name__
+        finally:
+            self._embedding_probe_at = time.time()
+        return self._embedding_dim
+
+    def _probe_collection_dim(self, embedding_dim: int | None) -> int | None:
+        """读取集合实际接受的向量维度。
+
+        Chroma 不暴露维度字段，这里用一个探测向量查询：维度匹配则返回当前维度，
+        不匹配时从报错 "expecting embedding with dimension of N" 中解析 N。
+        """
+        if not embedding_dim:
+            return None
+        try:
+            self.vector_store._collection.query(
+                query_embeddings=[[0.0] * embedding_dim],
+                n_results=1,
+                include=["documents"],
+            )
+            return embedding_dim
+        except Exception as e:
+            match = re.search(r"dimension of (\d+)", str(e))
+            return int(match.group(1)) if match else None
+
+    def health(self) -> dict:
+        """返回索引健康信息，供设置页展示。
+
+        - embeddingDim：当前模型输出维度
+        - collectionDim：集合已建立的维度
+        - dimensionMatch：是否一致；空集合视为健康（尚无索引）
+        """
+        self._ensure_embeddings()
+        cfg = config_loader.current()
+        emb_cfg = cfg.get("rag.embeddingModel", {}) or {}
+        retrieval = cfg.get("rag.retrieval", {}) or {}
+
+        embedding_dim = self._probe_embedding_dim()
+        count = self.vector_store._collection.count()
+        collection_dim = self._probe_collection_dim(embedding_dim) if count else embedding_dim
+        dimension_match = True if count == 0 else (
+            bool(embedding_dim) and embedding_dim == collection_dim
+        )
+
+        return {
+            "collection": self.collection_name,
+            "count": count,
+            "empty": count == 0,
+            "embeddingModel": {
+                "type": emb_cfg.get("type", "local"),
+                "model": emb_cfg.get("model", ""),
+                "localPath": emb_cfg.get("localPath", ""),
+            },
+            "embeddingDim": embedding_dim,
+            "collectionDim": collection_dim,
+            "dimensionMatch": dimension_match,
+            "embeddingError": self._embedding_error or "",
+            "hybrid": bool(retrieval.get("hybrid", True)),
+        }
+
+    def reset_collection(self) -> None:
+        """删除并重建向量集合（用于 embedding 维度变化后的全量重建）。
+
+        注意：会清空全部向量，调用方必须在之后按 SQLite 里的原始文件重新灌入。
+        """
+        self._ensure_embeddings()
+        try:
+            self.vector_store.delete_collection()
+        except Exception:
+            logger.warning("删除旧向量集合失败（可能本来就为空）", exc_info=True)
+        self.vector_store = self._init_vector_store()
+        self._invalidate_keyword_cache()
+        self._embedding_dim = None
+        logger.info("向量集合已重建：%s", self.collection_name)
 
 
 # 全局单例（可选，方便快速使用）

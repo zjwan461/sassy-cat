@@ -5,6 +5,7 @@
  */
 import { ref, computed } from 'vue'
 import { uploadDocument } from '../api/kb'
+import { addNotification } from './useNotifications'
 
 const uploading = ref(false)
 const uploadTotal = ref(0)
@@ -35,6 +36,14 @@ async function pump() {
       await uploadDocument(kbId, file)
     } catch (e) {
       failed.push(`${file.name}: ${e.message}`)
+      // 入库结果同步进通知中心：用户切走页面也能知道哪篇文档失败
+      addNotification({
+        title: `「${file.name}」入库失败`,
+        body: e.message || '未知错误',
+        kind: 'error',
+        action: `/kb/${kbId}`,
+        actionLabel: '查看文档',
+      })
     }
     uploadDone.value += 1
   }

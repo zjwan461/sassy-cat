@@ -236,6 +236,15 @@ async def list_documents(kb_id: str) -> list[dict]:
         return [_doc_to_dict(d) for d in rows]
 
 
+async def list_all_documents() -> list[dict]:
+    """列出所有知识库的全部文档（按上传时间正序），供索引重建遍历。"""
+    async with get_session() as session:
+        rows = (await session.execute(
+            select(KbDocument).order_by(KbDocument.created_at.asc())
+        )).scalars().all()
+        return [_doc_to_dict(d) for d in rows]
+
+
 async def get_document(doc_id: str) -> Optional[dict]:
     """按 ID 获取文档"""
     async with get_session() as session:

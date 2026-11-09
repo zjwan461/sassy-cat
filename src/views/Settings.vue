@@ -369,7 +369,7 @@
     </section>
 
     <!-- 知识库（RAG） -->
-    <section class="card">
+    <section class="card wide">
       <div class="card-header">
         <span class="card-icon"><AppIcon name="database" :size="15" /></span>
         <div class="card-head-main">
@@ -385,6 +385,52 @@
         <div class="field">
           <label class="check"><input type="checkbox" v-model="form.ragHybrid" /> 混合检索（向量 + 关键词）</label>
           <span class="hint">默认开启：向量语义召回 + BM25 关键词召回，再用 RRF 融合；对编号、专有名词、代码标识符更稳。关闭后回到纯向量 top-k</span>
+        </div>
+        <div class="field">
+          <label>索引健康</label>
+          <div class="rag-health" :class="{ bad: ragHealth && !ragHealth.dimensionMatch && !ragHealth.empty }">
+            <div class="rag-health-grid">
+              <span class="rh-item"><span class="rh-label">模型</span>{{ ragHealth?.embeddingModel?.model || '—' }}</span>
+              <span class="rh-item">
+                <span class="rh-label">维度</span>
+                {{ ragHealth ? `${ragHealth.embeddingDim ?? '—'} / 集合 ${ragHealth.collectionDim ?? '—'}` : '检测中…' }}
+              </span>
+              <span class="rh-item">
+                <span class="rh-label">分块 / 文档</span>
+                {{ ragHealth ? `${ragHealth.count} / ${ragHealth.documentCount}` : '—' }}
+              </span>
+            </div>
+            <div v-if="ragHealth && ragHealth.embeddingDim && ragHealth.collectionDim && !ragHealth.dimensionMatch && !ragHealth.empty" class="rag-warn">
+              <AppIcon name="alert" :size="13" />
+              <span>当前模型输出 {{ ragHealth.embeddingDim }} 维，索引是 {{ ragHealth.collectionDim }} 维；向量召回会降级为关键词。请重建索引，或切回建库时的模型。</span>
+            </div>
+            <div v-if="ragHealth?.embeddingError" class="rag-warn">
+              <AppIcon name="alert" :size="13" />
+              <span :title="ragHealth.embeddingError">Embedding 模型调用失败：{{ shortError(ragHealth.embeddingError, 140) }}。请检查模型地址 / API Key，或先修复模型再重建索引。</span>
+            </div>
+            <div v-if="ragHealth?.missingFileCount" class="rag-warn">
+              <AppIcon name="alert" :size="13" />
+              <span>{{ ragHealth.missingFileCount }} 篇文档的原始文件已缺失，重建后这些文档会标记为失败。</span>
+            </div>
+            <div class="rag-health-actions">
+              <button class="mini" type="button" @click="loadRagHealth" :disabled="ragHealthLoading">刷新状态</button>
+              <button class="mini danger" type="button" @click="startRagRebuild" :disabled="ragRebuild.running || ragHealthLoading || !!ragHealth?.embeddingError" :title="ragHealth?.embeddingError ? '请先修复 Embedding 模型' : ''">
+                {{ ragRebuild.running ? '重建中…' : '重建全部索引' }}
+              </button>
+              <span class="rag-health-tip">重建会清空现有向量，并按原始文件重新 OCR / 分块 / embedding</span>
+            </div>
+            <div v-if="ragRebuild.running" class="rag-progress">
+              <div class="rag-progress-bar"><span :style="{ width: ragRebuildPercent + '%' }"></span></div>
+              <div class="rag-progress-text">
+                {{ ragRebuild.done }} / {{ ragRebuild.total }} · {{ ragRebuild.current || '准备中' }}
+              </div>
+            </div>
+            <div v-else-if="ragRebuild.finishedAt" class="rag-progress-text">
+              上次重建：{{ ragRebuild.failed ? `${ragRebuild.failed} 篇失败` : '全部成功' }}
+              （{{ ragRebuild.done }} / {{ ragRebuild.total }}）
+            </div>
+          </div>
+          <span class="hint">向量维度与集合不一致时，上传新文档会失败；重建会从原始文件重新生成全部索引</span>
         </div>
         <div class="field">
           <label>Embedding 模型来源</label>
@@ -658,13 +704,14 @@
 </template>
 
 <script setup>
-import { reactive, ref, computed, onMounted, nextTick, watch } from 'vue'
+import { reactive, ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAgentSocket } from '../composables/useAgentSocket'
 import { useRestartState } from '../composables/useRestartState'
 import { useModelDownloadState } from '../composables/useModelDownloadState'
 import { useTTS } from '../composables/useTTS'
 import { downloadEmbeddingModel } from '../api/embeddingModelDownload'
+import { getRagHealth, getRebuildStatus, rebuildKbIndex } from '../api/kb'
 import AppIcon from '../components/AppIcon.vue'
 
 const { connect, send, on } = useAgentSocket()
@@ -682,6 +729,75 @@ const activeProfile = ref('default')
 const profiles = ref({})
 const activeAgentProfile = ref('default')
 const agentProfiles = ref({})
+
+// ---- RAG 索引健康 / 全量重建 ----
+const ragHealth = ref(null)
+const ragHealthLoading = ref(false)
+const ragRebuild = reactive({
+  running: false, total: 0, done: 0, failed: 0, current: '', finishedAt: null,
+})
+let ragPollTimer = null
+const ragRebuildPercent = computed(() => {
+  if (!ragRebuild.total) return ragRebuild.running ? 3 : 0
+  return Math.min(100, Math.round((ragRebuild.done / ragRebuild.total) * 100))
+})
+
+function shortError(text, max = 140) {
+  const s = String(text || '')
+  return s.length > max ? s.slice(0, max) + '…' : s
+}
+
+async function loadRagHealth() {
+  ragHealthLoading.value = true
+  try {
+    const res = await getRagHealth()
+    ragHealth.value = res
+    if (res.rebuild) Object.assign(ragRebuild, res.rebuild)
+    if (ragRebuild.running) startRagPoll()
+  } catch (e) {
+    ragHealth.value = { error: e.message }
+  } finally {
+    ragHealthLoading.value = false
+  }
+}
+
+function stopRagPoll() {
+  if (ragPollTimer) {
+    clearInterval(ragPollTimer)
+    ragPollTimer = null
+  }
+}
+
+function startRagPoll() {
+  if (ragPollTimer) return
+  ragPollTimer = setInterval(async () => {
+    try {
+      const state = await getRebuildStatus()
+      Object.assign(ragRebuild, state)
+      if (!state.running) {
+        stopRagPoll()
+        await loadRagHealth()
+      }
+    } catch {
+      // 轮询失败不弹窗；下一轮继续尝试
+    }
+  }, 1200)
+}
+
+async function startRagRebuild() {
+  if (ragRebuild.running) return
+  const ok = window.confirm(
+    '重建全部知识库索引？\n\n会先清空现有向量，再按原始文件重新 OCR / 分块 / embedding。\n源文件已丢失的文档会被标记为失败。'
+  )
+  if (!ok) return
+  try {
+    const state = await rebuildKbIndex()
+    Object.assign(ragRebuild, state)
+    startRagPoll()
+  } catch (e) {
+    window.alert('启动重建失败：' + e.message)
+  }
+}
 // 主 Agent 当前激活 LLM 摘要：dsh 勾选「复用主 Agent」时用于提示实际生效的连接
 const mainLlmSummary = computed(() => {
   const p = profiles.value[activeProfile.value] || {}
@@ -1435,6 +1551,7 @@ function togglePreview() {
 
 onMounted(() => {
   loadConfig()
+  loadRagHealth()
   connect()
   // 知识库页「前往下载模型」跳转过来时，滚动定位到模型下载区域
   if (route.hash === '#rag-model') {
@@ -1456,6 +1573,10 @@ onMounted(() => {
   api.getShortcutStatus?.().then((p) => {
     if (p && p.success && p.shortcut) hotkeyStatus.value = { ok: true, text: `✓ ${p.shortcut} 已生效` }
   })
+})
+
+onBeforeUnmount(() => {
+  stopRagPoll()
 })
 </script>
 
@@ -1628,9 +1749,95 @@ onMounted(() => {
   animation: spin 0.75s linear infinite;
 }
 
+/* ===== RAG 索引健康 ===== */
+.rag-health {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+}
+
+.rag-health.bad {
+  border-color: rgba(233, 119, 110, 0.28);
+  background: rgba(233, 119, 110, 0.045);
+}
+
+.rag-health-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+
+.rh-item {
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rh-label {
+  margin-right: 5px;
+  color: var(--text-4);
+  font-size: 10.5px;
+}
+
+.rag-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--coral-400);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.rag-warn :deep(svg) {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.rag-health-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rag-health-tip {
+  color: var(--text-4);
+  font-size: 10.5px;
+}
+
+.rag-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rag-progress-bar {
+  height: 5px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+}
+
+.rag-progress-bar span {
+  display: block;
+  height: 100%;
+  background: var(--amber-grad);
+  border-radius: inherit;
+  transition: width 0.3s ease;
+}
+
+.rag-progress-text {
+  color: var(--text-4);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ===== 卡片 ===== */
-.card {
-  position: relative;
+.card {  position: relative;
   background: linear-gradient(180deg, var(--ink-850), var(--ink-800));
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);

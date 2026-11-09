@@ -18,6 +18,8 @@
       <kbd class="tb-kbd">{{ isMac ? '⌘ K' : 'Ctrl K' }}</kbd>
     </button>
 
+    <NotificationCenter class="tb-bell" />
+
     <div v-if="!isMac" class="tb-controls" @dblclick.stop>
       <button class="tb-btn" type="button" title="最小化" aria-label="最小化" @click="minimize">
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
@@ -48,6 +50,7 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { appConfig } from '../appConfig'
 import AppIcon from './AppIcon.vue'
+import NotificationCenter from './NotificationCenter.vue'
 import logoUrl from '../../assets/icon.png'
 
 defineEmits(['open-search'])

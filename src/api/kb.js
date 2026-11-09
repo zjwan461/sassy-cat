@@ -87,6 +87,21 @@ export function searchKb(kbId, query, k = 8, hybrid = null) {
   })
 }
 
+/** 索引健康：向量维度、集合状态、文档/分块数、缺失文件 */
+export function getRagHealth() {
+  return request('/api/kb/health')
+}
+
+/** 启动全量索引重建（后台任务） */
+export function rebuildKbIndex() {
+  return request('/api/kb/rebuild', { method: 'POST' })
+}
+
+/** 轮询全量重建进度 */
+export function getRebuildStatus() {
+  return request('/api/kb/rebuild/status')
+}
+
 /**
  * 分页查询知识库文档分块（信息流滚动加载）。
  * @param {string} kbId 知识库 ID

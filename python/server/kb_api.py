@@ -10,6 +10,7 @@
 import asyncio
 import logging
 import os
+import time
 from typing import Optional
 from uuid import uuid4
 
@@ -18,7 +19,9 @@ from pydantic import BaseModel
 
 from agent.rag.rag_service import get_rag_service
 from ocr.ocr_engine import do_ocr
+from server.bus import hub
 from server.db import kb_repository as kb_repo
+from server.protocol import envelope
 import paths
 import utils
 
@@ -27,6 +30,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/kb", tags=["knowledge-base"])
 
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB，与 OCR 接口保持一致
+
+
+# ==================== 索引重建任务状态（进程内单任务） ====================
+_REBUILD_STATE: dict = {
+    "running": False,
+    "total": 0,
+    "done": 0,
+    "failed": 0,
+    "current": "",
+    "startedAt": None,
+    "finishedAt": None,
+    "errors": [],
+}
+_rebuild_task: asyncio.Task | None = None
 
 
 class KbPayload(BaseModel):
@@ -51,6 +68,146 @@ class KbSearchPayload(BaseModel):
 async def list_kbs():
     """列出全部知识库"""
     return {"items": await kb_repo.list_kbs()}
+
+
+# ==================== 索引健康 / 全量重建 ====================
+
+@router.get("/health")
+async def rag_health():
+    """索引健康检查：当前 embedding 模型维度 vs 集合维度、分块/文档数与缺失源文件。"""
+    rag = get_rag_service()
+    info = await asyncio.to_thread(rag.health)
+    docs = await kb_repo.list_all_documents()
+    missing = [
+        d.get("fileName", "")
+        for d in docs
+        if not d.get("filePath") or not os.path.isfile(d.get("filePath"))
+    ]
+    info.update({
+        "documentCount": len(docs),
+        "kbCount": len(await kb_repo.list_kbs()),
+        "missingFileCount": len(missing),
+        "missingFiles": missing[:8],
+        "rebuild": dict(_REBUILD_STATE),
+    })
+    return info
+
+
+@router.get("/rebuild/status")
+async def rebuild_status():
+    """轮询全量重建进度。"""
+    return dict(_REBUILD_STATE)
+
+
+async def _run_rebuild() -> None:
+    """按 SQLite 中的原始文件重跑全部 OCR / 分块 / embedding。
+
+    先删除并重建向量集合（清理维度不一致的旧索引），再逐篇回灌；
+    缺失源文件的文档标记为 error 并计入 failed，不会阻塞其它文档。
+    """
+    started_at = _REBUILD_STATE.get("startedAt") or int(time.time() * 1000)
+    errors: list[str] = []
+    try:
+        docs = await kb_repo.list_all_documents()
+        _REBUILD_STATE.update(total=len(docs), done=0, failed=0, errors=[])
+
+        rag = get_rag_service()
+        await asyncio.to_thread(rag.reset_collection)
+
+        for doc in docs:
+            doc_id = doc["id"]
+            name = doc.get("fileName") or doc_id
+            _REBUILD_STATE["current"] = name
+            path = doc.get("filePath") or ""
+            try:
+                if not path or not os.path.isfile(path):
+                    raise FileNotFoundError("原始文件不存在，请重新上传")
+
+                def _read_file() -> bytes:
+                    with open(path, "rb") as f:
+                        return f.read()
+
+                file_bytes = await asyncio.to_thread(_read_file)
+                await kb_repo.set_document_status(doc_id, "processing")
+
+                ocr_result = await do_ocr("rag", name, file_bytes)
+                content = (ocr_result or {}).get("page_content", "")
+                if not content or not content.strip():
+                    raise ValueError("文档解析结果为空")
+
+                metadata = {
+                    "kb_id": doc["kbId"],
+                    "doc_id": doc_id,
+                    "source": name,
+                }
+                ids = await asyncio.to_thread(rag.save_document, content, metadata)
+                if not ids:
+                    raise ValueError("文档分块后无有效内容")
+                await kb_repo.set_document_status(doc_id, "done", chunk_count=len(ids))
+                _REBUILD_STATE["done"] += 1
+            except Exception as e:
+                logger.warning(f"重建索引领失败: doc={doc_id}, file={name}, err={e}")
+                _REBUILD_STATE["failed"] += 1
+                errors.append(f"{name}: {e}")
+                _REBUILD_STATE["errors"] = errors[:10]
+                try:
+                    await kb_repo.set_document_status(doc_id, "error", error=str(e))
+                except Exception:
+                    logger.exception(f"回写文档状态失败: doc={doc_id}")
+                # 处理失败也计入进度，前端进度条不会永远停住
+                _REBUILD_STATE["done"] += 1
+    except Exception as e:
+        logger.exception("全量重建索引失败")
+        _REBUILD_STATE["failed"] += 1
+        errors.append(f"重建失败: {e}")
+        _REBUILD_STATE["errors"] = errors[:10]
+    finally:
+        _REBUILD_STATE["running"] = False
+        _REBUILD_STATE["current"] = ""
+        _REBUILD_STATE["finishedAt"] = int(time.time() * 1000)
+        _REBUILD_STATE["errors"] = errors[:10]
+        summary = {
+            "status": "success" if _REBUILD_STATE["failed"] == 0 else "partial",
+            "total": _REBUILD_STATE["total"],
+            "done": _REBUILD_STATE["done"],
+            "failed": _REBUILD_STATE["failed"],
+            "errors": _REBUILD_STATE["errors"][:5],
+            "durationMs": int(time.time() * 1000) - int(started_at),
+        }
+        try:
+            await hub.publish_all(envelope("kb.rebuild.done", summary))
+        except Exception:
+            logger.exception("广播索引重建结果失败")
+        logger.info(
+            f"索引重建完成: total={summary['total']}, failed={summary['failed']}"
+        )
+
+
+@router.post("/rebuild")
+async def rebuild_index():
+    """启动全量索引重建（后台任务）；重复调用时返回当前运行状态。"""
+    global _rebuild_task
+    if _rebuild_task and not _rebuild_task.done():
+        return {"status": "running", **dict(_REBUILD_STATE)}
+
+    # 重建会先清空向量；Embedding 不可用时拒绝启动，避免"删了旧索引又灌不进新索引"
+    rag = get_rag_service()
+    dim = await asyncio.to_thread(rag._probe_embedding_dim)
+    if not dim:
+        detail = rag._embedding_error or "Embedding 模型不可用"
+        raise HTTPException(status_code=400, detail=f"已取消重建：{detail}")
+    _REBUILD_STATE.update({
+        "running": True,
+        "total": 0,
+        "done": 0,
+        "failed": 0,
+        "current": "",
+        "startedAt": int(time.time() * 1000),
+        "finishedAt": None,
+        "errors": [],
+    })
+    _rebuild_task = asyncio.create_task(_run_rebuild(), name="kb-rebuild")
+    return {"status": "started", **dict(_REBUILD_STATE)}
 
 
 @router.post("")

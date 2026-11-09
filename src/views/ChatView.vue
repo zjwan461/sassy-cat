@@ -24,6 +24,25 @@
     </header>
 
     <section class="card chat-card">
+      <!-- 会话内搜索（Ctrl/Cmd+F） -->
+      <div v-if="convSearchOpen" class="conv-search">
+        <AppIcon name="search" :size="14" />
+        <input
+          ref="convSearchInput"
+          v-model="convSearchQuery"
+          type="text"
+          placeholder="在当前对话中搜索…"
+          @keydown.enter.prevent="nextConvMatch($event.shiftKey)"
+          @keydown.esc.prevent="closeConvSearch"
+        />
+        <span class="conv-search-count">{{ convSearchCount }}</span>
+        <button class="conv-search-nav" type="button" title="上一处" :disabled="!convMatches.length" @click="prevConvMatch">↑</button>
+        <button class="conv-search-nav" type="button" title="下一处" :disabled="!convMatches.length" @click="nextConvMatch(false)">↓</button>
+        <button class="conv-search-close" type="button" title="关闭" @click="closeConvSearch">
+          <AppIcon name="x" :size="13" />
+        </button>
+      </div>
+
       <!-- 上半区：会话侧栏 + 消息流并排 -->
       <div class="chat-body">
       <!-- 会话侧栏：历史对话列表 + 新建 -->
@@ -97,7 +116,7 @@
           <p class="empty-title">喵？有什么事就说吧</p>
           <p class="empty-sub">本喵听着呢 · 可以粘贴或拖入图片、文档</p>
         </div>
-        <div v-for="m in messages" :key="m.id" class="msg" :class="m.role">
+        <div v-for="m in messages" :key="m.id" class="msg" :class="[m.role, { 'search-hit': m.id === convSearchActiveId }]" :data-msg-id="m.id">
           <div class="msg-avatar" :class="m.role">
             <img v-if="isAssistant(m)" :src="logoUrl" alt="" />
             <span v-else>你</span>
@@ -462,6 +481,89 @@ const fileInputRef = ref(null)
 const isDragOver = ref(false)
 const composerFocused = ref(false)
 const previewImageUrl = ref(null)
+
+// ---------- 会话内搜索（Ctrl/Cmd + F） ----------
+const convSearchOpen = ref(false)
+const convSearchQuery = ref('')
+const convSearchInput = ref(null)
+const convSearchIndex = ref(0)
+
+function messageSearchText(m) {
+  const parts = [m.content || '']
+  for (const t of m.tools || []) {
+    if (t.args) parts.push(t.args)
+    if (t.result) parts.push(t.result)
+  }
+  return parts.join('\n')
+}
+
+const convMatches = computed(() => {
+  const q = convSearchQuery.value.trim().toLowerCase()
+  if (!q) return []
+  return messages.value
+    .filter((m) => messageSearchText(m).toLowerCase().includes(q))
+    .map((m) => m.id)
+})
+
+const convSearchActiveId = computed(() => convMatches.value[convSearchIndex.value] || null)
+const convSearchCount = computed(() =>
+  convMatches.value.length ? `${convSearchIndex.value + 1} / ${convMatches.value.length}` : '0 / 0'
+)
+
+async function scrollToConvMatch() {
+  await nextTick()
+  const id = convSearchActiveId.value
+  const list = listRef.value
+  if (!id || !list) return
+  const el = list.querySelector(`[data-msg-id="${CSS.escape(String(id))}"]`)
+  if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  stickToBottom.value = false
+}
+
+function nextConvMatch(reverse = false) {
+  const total = convMatches.value.length
+  if (!total) return
+  convSearchIndex.value = reverse
+    ? (convSearchIndex.value - 1 + total) % total
+    : (convSearchIndex.value + 1) % total
+  scrollToConvMatch()
+}
+
+function prevConvMatch() {
+  nextConvMatch(true)
+}
+
+function openConvSearch() {
+  convSearchOpen.value = true
+  convSearchIndex.value = 0
+  nextTick(() => convSearchInput.value?.focus())
+}
+
+function closeConvSearch() {
+  convSearchOpen.value = false
+  convSearchQuery.value = ''
+  convSearchIndex.value = 0
+}
+
+function onConvSearchHotkey(e) {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    if (convSearchOpen.value) closeConvSearch()
+    else openConvSearch()
+  }
+}
+
+watch(convSearchQuery, () => {
+  convSearchIndex.value = 0
+  scrollToConvMatch()
+})
+
+watch(convMatches, (list) => {
+  if (convSearchIndex.value >= list.length) {
+    convSearchIndex.value = Math.max(0, list.length - 1)
+  }
+})
+
 // 是否紧贴底部：用户手动上翻看历史时置 false（暂停自动滚动并显示浮动按钮），重新到达底部或点击按钮后恢复 true
 const stickToBottom = ref(true)
 
@@ -1011,12 +1113,14 @@ onMounted(() => {
   if (window.electronAPI?.onConfigChanged) {
     offConfigChanged = window.electronAPI.onConfigChanged(() => { loadLlmProfiles() })
   }
+  window.addEventListener('keydown', onConvSearchHotkey)
 })
 
 onUnmounted(() => {
   clearTimeout(modelNoticeTimer)
   if (typeof offConfigChanged === 'function') offConfigChanged()
   offConfigChanged = null
+  window.removeEventListener('keydown', onConvSearchHotkey)
 })
 </script>
 
@@ -1201,6 +1305,77 @@ onUnmounted(() => {
   border-radius: var(--r-lg);
   overflow: hidden;
   box-shadow: var(--hairline), 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* ===== 会话内搜索 ===== */
+.conv-search {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  color: var(--text-4);
+  background: rgba(255, 255, 255, 0.025);
+  border-bottom: 1px solid var(--line-1);
+}
+
+.conv-search input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0;
+  color: var(--text-1);
+  font-size: 12.5px;
+  font-family: inherit;
+  background: transparent;
+  border: none;
+  outline: none;
+}
+
+.conv-search input::placeholder { color: var(--text-4); }
+
+.conv-search-count {
+  flex-shrink: 0;
+  min-width: 46px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.conv-search-nav,
+.conv-search-close {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.conv-search-nav:hover:not(:disabled),
+.conv-search-close:hover {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.conv-search-nav:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* 命中消息：整条消息描边 + 淡琥珀底色，不破坏原排版 */
+.msg.search-hit {
+  border-radius: 12px;
+  background: rgba(239, 168, 76, 0.055);
+  box-shadow: 0 0 0 1px var(--amber-a35), 0 0 0 4px rgba(239, 168, 76, 0.06);
+  transition: background 0.2s ease, box-shadow 0.2s ease;
 }
 
 .chat-body {
