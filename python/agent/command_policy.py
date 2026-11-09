@@ -40,7 +40,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from agent.constant import SKILLS_DIR, WORK_DIR
+from agent.constant import SKILLS_DIR
+from agent.workspace import resolve_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,8 @@ def is_auto_approved(command: str) -> bool:
     if any(ch in _DENY_CHARS for ch in command):
         return False
 
-    work_dir = Path(WORK_DIR)
+    # cwd 跟随当前工作区（设置页可切换），技能目录固定在应用数据目录下
+    work_dir = Path(resolve_workspace())
     cwd = work_dir.resolve()
 
     segments = [segment.strip() for segment in _STATEMENT_SPLIT_RE.split(command) if segment.strip()]

@@ -40,7 +40,8 @@ from agent.tools.rag_tools import search_from_kb
 from agent.tools.subagent_tool import call_dsh
 from agent.tools.mcp_tools import get_mcp_tools
 from agent.command_policy import apply_execute_allowlist
-from agent.constant import DB_URL, WORK_DIR
+from agent.constant import DB_URL
+from agent.workspace import resolve_workspace
 from agent.middlewares import (
     trim_messages,
     trim_media_history,
@@ -249,7 +250,12 @@ class AgentHolder:
         cfg = config_loader.current()
         profile = cfg.active_llm_profile()
         llm = build_chat_llm(profile)
-        system_prompt = build_system_prompt(cfg.active_agent_config().get("persona", ""))
+        # 工作区：设置页可选（agent.workspace），为空回退应用内部 runtime。
+        # 每次重建 agent 都重新解析，配置热重载后下一轮即可生效。
+        workspace = resolve_workspace(cfg)
+        system_prompt = build_system_prompt(
+            cfg.active_agent_config().get("persona", ""), workspace=workspace
+        )
         # 高危工具人工确认策略（agent.interruptOn，可在设置页配置）：
         # true = 执行前打断等待用户确认；false = 直接放行
         # execute 的免确认白名单（仅技能脚本）由 _resolve_interrupt_on 统一决定。
@@ -282,8 +288,8 @@ class AgentHolder:
             tools=tools,
             interrupt_on=interrupt_on,
             # 平台原生 shell：Windows 走 PowerShell（pwsh 优先，5.1 回退），
-            # macOS/Linux 走 /bin/sh。工作区根目录即 WORK_DIR，命令默认在此执行。
-            backend=create_shell_backend(WORK_DIR),
+            # macOS/Linux 走 /bin/sh。命令默认在工作区根目录执行。
+            backend=create_shell_backend(workspace),
             checkpointer=get_checkpointer(),
             system_prompt=system_prompt,
             store=get_store(),

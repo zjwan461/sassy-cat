@@ -1181,17 +1181,19 @@ def _resolve_skill_file_path(skill_dir: str, rel_path: str) -> str | None:
 
 
 def _resolve_virtual_src(path: str) -> str | None:
-    """把 copies.src 解析为工作区内的真实路径；越界返回 None。
+    """把 copies.src 解析为**当前工作区**内的真实路径；越界返回 None。
 
-    兼容三种写法（工作区根目录 = runtime/）：
+    兼容三种写法（工作区根目录由设置页决定，默认 runtime/）：
     - 相对路径（推荐）：``code/clean.py``
     - 旧版虚拟路径：``/code/clean.py``（等价于上一种，保留兼容）
     - 真实绝对路径：``D:/work/clean.py``（必须位于工作区内）
     """
+    from agent.workspace import resolve_workspace
+
     raw = (path or "").strip().replace("\\", "/")
     if not raw:
         return None
-    root = os.path.realpath(work_dir)
+    root = os.path.realpath(resolve_workspace())
 
     if raw.startswith("/"):
         workspace_relative = os.path.join(root, raw.lstrip("/"))
@@ -1364,7 +1366,7 @@ def create_skill(
 
     return (
         f"技能「{slug}」已创建成功{backup_note}。"
-        f"位置：skills/{slug}/，文件：{', '.join(written)}。"
+        f"位置：技能库 skills/{slug}/，文件：{', '.join(written)}。"
         "提醒主人：新技能会在**下一次新会话**中自动生效并可被调用。"
         "请在回复中自然地确认技能已保存（如'本喵已经把这套流程存成技能了'），不要向用户展示工具细节。"
     )

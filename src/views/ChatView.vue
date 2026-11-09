@@ -5,9 +5,22 @@
         <h1 class="page-title">唠嗑</h1>
         <p class="page-subtitle">与本喵说说话，什么都可以聊</p>
       </div>
-      <span class="conn" :class="connClass">
-        <span class="conn-dot"></span>{{ connText }}
-      </span>
+      <div class="page-head-right">
+        <label v-if="llmOptions.length" class="model-picker" title="切换模型：下一条消息生效">
+          <AppIcon name="cpu" :size="13" />
+          <select
+            :value="activeLlmProfile"
+            :disabled="switchingModel"
+            @change="onSwitchModel($event.target.value)"
+          >
+            <option v-for="p in llmOptions" :key="p.name" :value="p.name">{{ p.optionLabel }}</option>
+          </select>
+          <span v-if="modelNotice" class="model-notice" :class="{ bad: modelNotice.error }">{{ modelNotice.text }}</span>
+        </label>
+        <span class="conn" :class="connClass">
+          <span class="conn-dot"></span>{{ connText }}
+        </span>
+      </div>
     </header>
 
     <section class="card chat-card">
@@ -357,6 +370,7 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useChatStore } from '../composables/useChatStore'
+import { useAgentSocket } from '../composables/useAgentSocket'
 import { useFileUpload } from '../composables/useFileUpload'
 import { useTTS } from '../composables/useTTS'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
@@ -374,6 +388,68 @@ const { chat, conv, pinnedConvs, historyConvs, socketState, submitMessage, stopG
 const { hasAttachments, isProcessing, handleFiles, buildAttachments, clearAllAttachments } = useFileUpload()
 // 语音朗读（TTS）：播放状态（模块级，跨 tab 存活）+ 播放/停止/切换
 const { speaking, playMessage, loadConfig: loadTtsConfig } = useTTS()
+
+// ---------- 聊天页模型切换 ----------
+// 模型配置存在 config.user.json 的 llm.profiles 里，切换只改 activeProfile：
+// 1) 经 Electron IPC 落盘；2) 通过 WS 通知 Python 热重建 agent；3) 下一条消息生效。
+const { send: sendSocket } = useAgentSocket()
+const llmOptions = ref([])
+const activeLlmProfile = ref('')
+const switchingModel = ref(false)
+const modelNotice = ref(null)
+let modelNoticeTimer = null
+let offConfigChanged = null
+
+function optionLabel(name, profile) {
+  const label = profile?.label || name
+  return profile?.model ? `${label} · ${profile.model}` : label
+}
+
+async function loadLlmProfiles() {
+  const api = window.electronAPI
+  if (!api?.getConfig) return
+  try {
+    const res = await api.getConfig()
+    if (!res.success) return
+    const llm = res.config?.llm || {}
+    const profiles = llm.profiles || {}
+    llmOptions.value = Object.entries(profiles).map(([name, p]) => ({
+      name,
+      model: p?.model || '',
+      optionLabel: optionLabel(name, p),
+    }))
+    activeLlmProfile.value = llm.activeProfile || 'default'
+  } catch {
+    // 配置读取失败不影响聊天，隐藏选择器即可
+    llmOptions.value = []
+  }
+}
+
+function flashModelNotice(text, error = false) {
+  modelNotice.value = { text, error }
+  clearTimeout(modelNoticeTimer)
+  modelNoticeTimer = setTimeout(() => { modelNotice.value = null }, 2800)
+}
+
+async function onSwitchModel(name) {
+  if (!name || name === activeLlmProfile.value || switchingModel.value) return
+  const api = window.electronAPI
+  if (!api?.setConfig) return
+  switchingModel.value = true
+  try {
+    const res = await api.setConfig('llm.activeProfile', name)
+    if (!res.success) {
+      flashModelNotice('切换失败：' + (res.message || '未知错误'), true)
+      return
+    }
+    activeLlmProfile.value = name
+    // Python 侧 reload_config + holder.invalidate：下一轮用新模型重建 agent
+    sendSocket('config.invalidate', { paths: ['llm'] })
+    flashModelNotice('已切换，下一条消息生效')
+  } finally {
+    switchingModel.value = false
+  }
+}
 
 // 当前激活会话的消息列表（chat 为多会话视图代理，切换会话时底层数组引用会变化，
 // 故用 computed 让模板/监听始终读取最新引用）
@@ -930,6 +1006,17 @@ onMounted(() => {
   forceScrollBottom()
   // 刷新语音配置（用户在设置页可能改过自动朗读/语音等，回到聊天页即时生效）
   loadTtsConfig()
+  // 模型列表：设置页改配置后同步刷新（onConfigChanged 返回取消订阅函数）
+  loadLlmProfiles()
+  if (window.electronAPI?.onConfigChanged) {
+    offConfigChanged = window.electronAPI.onConfigChanged(() => { loadLlmProfiles() })
+  }
+})
+
+onUnmounted(() => {
+  clearTimeout(modelNoticeTimer)
+  if (typeof offConfigChanged === 'function') offConfigChanged()
+  offConfigChanged = null
 })
 </script>
 
@@ -968,6 +1055,83 @@ onMounted(() => {
   align-items: baseline;
   gap: 10px;
   min-width: 0;
+}
+
+.page-head-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+/* 模型切换：聊天页头部的紧凑胶囊选择器 */
+.model-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-full);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-3);
+  font-size: 11.5px;
+  transition: border-color var(--dur-fast), color var(--dur-fast);
+}
+
+.model-picker:hover {
+  border-color: var(--line-3);
+  color: var(--text-2);
+}
+
+.model-picker select {
+  appearance: none;
+  -webkit-appearance: none;
+  max-width: 200px;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.model-picker select:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.model-picker select option {
+  background: var(--ink-800);
+  color: var(--text-1);
+}
+
+.model-notice {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  z-index: 20;
+  padding: 3px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xs);
+  background: rgba(9, 12, 17, 0.94);
+  box-shadow: var(--shadow-2);
+  color: var(--jade-400);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.model-notice.bad {
+  color: var(--coral-400);
+}
+
+@media (max-width: 760px) {
+  .model-picker select {
+    max-width: 120px;
+  }
 }
 
 .page-title {

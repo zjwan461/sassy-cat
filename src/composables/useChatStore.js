@@ -573,8 +573,21 @@ export function approveAllInterrupt(msgId) {
  * 后端返回的消息按 created_at DESC 排序（最新的在前），
  * 前端需要按时间正序显示（旧的在上、新的在下），所以加载后要反转。
  */
-function transformMessage(item) {
-  // 构建工具调用列表（合并 toolCalls、toolCallArgs、toolCallResult）
+// 兼容两种字段形态：已解码的数组，或旧数据里的 JSON 字符串
+function toArray(value) {
+  if (Array.isArray(value)) return value
+  if (typeof value === 'string' && value) {
+    try {
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
+function transformMessage(item) {  // 构建工具调用列表（合并 toolCalls、toolCallArgs、toolCallResult）
   // toolCalls 现在是对象数组（[{tool_call_id, tool_name}]），与 toolCallArgs 一一对应
   const tools = []
   if (item.toolCalls && Array.isArray(item.toolCalls)) {
@@ -623,14 +636,16 @@ function transformMessage(item) {
     .map((a) => `data:${a.mimeType || 'image/png'};base64,${a.base64Data}`)
 
   // 转换interruptActions
-  const interruptActions = (JSON.parse(item.interruptActions || 'null') || []).map((item) => ({
-    name: item.name,
-    argsText: item.args,
+  // 后端已统一在仓储层把 JSON 字段解码成数组/对象；历史版本/旧库里仍是字符串。
+  // 这里两种都兼容，避免对数组再 JSON.parse 抛 "[object Object]" 错误。
+  const interruptActions = toArray(item.interruptActions).map((action) => ({
+    name: action.name,
+    argsText: action.args,
   }))
 
   // 转换interruptDecisions：decisions 只含已送出轮次，可能短于累积的
   // actions，补齐 undefined 槽位保证等长（待确认项才能正常渲染按钮）
-  const interruptDecisions = (JSON.parse(item.interruptDecisions || 'null') || [])
+  const interruptDecisions = toArray(item.interruptDecisions)
   while (interruptDecisions.length < interruptActions.length) interruptDecisions.push(undefined)
 
   return {

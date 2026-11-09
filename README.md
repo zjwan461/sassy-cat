@@ -294,7 +294,7 @@ The root [`config.json`](config.json) is the template layer (updated with the ap
 
 | Section | Description |
 | :-- | :-- |
-| `agent` | Memory window, recursion limit, OCR toggle & engine, dangerous-action confirmation |
+| `agent` | Workspace directory, memory window, recursion limit, OCR toggle & engine, dangerous-action confirmation |
 | `dsh` | Subagent model source, maxTokens, reasoning effort |
 | `rag` | Embedding model (local/remote), auto-embedding, document parse engine |
 | `pet` | Pet toggle, quick-ask shortcut, reminder polling and bubble duration |

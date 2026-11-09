@@ -48,7 +48,7 @@ DeepSeekHarness(env={"DSH_SYSTEM_PROMPT": ...}) -> 子进程环境变量 -> sdk-
     硬套只会让它编造不存在的工具调用；
   - 它要求高危操作等用户确认，而这条链路是单向事件流，没有回执通道；
   - 它要求文件建在 /tmp、/data 这类虚拟路径，而 dsh 的工作目录是真实目录
-    （runtime/.dsh/workspace），shell 必须用当前平台的原生路径。
+    （跟随设置页选择的工作区，默认 runtime/），shell 必须用当前平台的原生路径。
 """
 
 from __future__ import annotations
@@ -147,7 +147,6 @@ DEFAULT_SYSTEM_PROMPT = """你是「优墨」的动手子代理，跑在一个�
 # llm.profiles.<name>.extraParams.maxTokens 覆盖。
 FALLBACK_MAX_TOKENS = 131072
 
-WORKSPACE = os.path.join(WORK_DIR, ".dsh", "workspace")
 DSH_HOME = os.path.join(WORK_DIR, ".dsh", "home")
 PATCH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "editor.patch.yml")
 # 主 Agent 的技能库根目录（runtime/skills）。其结构 <name>/SKILL.md 与 dsh
@@ -287,7 +286,12 @@ def load_llm_settings(config_path: str) -> dict[str, Any]:
 
 def build_harness(settings: dict[str, Any]) -> DeepSeekHarness:
     """组装 harness。所有取值都来自上面的配置读取，不在本函数里写死连接参数。"""
-    os.makedirs(WORKSPACE, exist_ok=True)
+    # 工作区跟随设置页选择（与主 Agent 共用同一个根目录）；dsh 的内部 home
+    # 始终留在应用数据目录，避免把 harness 运行态写进用户项目。
+    from agent.workspace import resolve_workspace
+
+    workspace = resolve_workspace()
+    os.makedirs(workspace, exist_ok=True)
     os.makedirs(DSH_HOME, exist_ok=True)
 
     return DeepSeekHarness(
@@ -295,7 +299,7 @@ def build_harness(settings: dict[str, Any]) -> DeepSeekHarness:
         model=settings["model"],
         reasoning_effort=settings["reasoning_effort"],
         max_tokens=settings["max_tokens"],
-        cwd=WORKSPACE,
+        cwd=workspace,
         dsh_home=DSH_HOME,
         profile=DSH_PROFILE,
         # 必须是 tuple：DeepSeekHarnessConfig.patches 是 tuple[str, ...]，

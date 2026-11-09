@@ -665,8 +665,7 @@ ipcMain.handle('get-logs', () => {
 });
 
 // 导出日志为文件（系统保存对话框）
-ipcMain.handle('logs:export', async (event, logs) => {
-  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+ipcMain.handle('logs:export', async (event, logs) => {  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const { canceled, filePath } = await dialog.showSaveDialog(parent, {
     title: '导出日志',
@@ -695,6 +694,24 @@ ipcMain.handle('logs:export', async (event, logs) => {
 });
 
 // ---------- 配置系统 IPC ----------
+// 选择工作区目录（设置页使用）：只返回路径，落盘由渲染层调 config:set，
+// 保持配置写入只有一个入口（便于统一广播 config:changed）。
+ipcMain.handle('dialog:pick-directory', async (event, opts = {}) => {
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  const defaultPath =
+    typeof opts?.defaultPath === 'string' && opts.defaultPath ? opts.defaultPath : undefined;
+  const result = await dialog.showOpenDialog(parent, {
+    title: '选择工作区目录',
+    defaultPath,
+    properties: ['openDirectory', 'createDirectory'],
+    buttonLabel: '选择此文件夹'
+  });
+  if (result.canceled || !result.filePaths || !result.filePaths.length) {
+    return { success: false, canceled: true };
+  }
+  return { success: true, path: result.filePaths[0] };
+});
+
 ipcMain.handle('config:get', () => {
   if (!configStore) return { success: false, message: '配置未初始化' };
   return { success: true, config: configStore.getMasked() };

@@ -271,6 +271,36 @@
       </div>
     </section>
 
+    <!-- 工作区 -->
+    <section class="card wide">
+      <div class="card-header">
+        <span class="card-icon"><AppIcon name="folder" :size="15" /></span>
+        <div class="card-head-main">
+          <div class="card-title">工作区</div>
+          <div class="card-sub">Agent 读写文件、执行命令的根目录</div>
+        </div>
+      </div>
+      <div class="card-body form">
+        <div class="field">
+          <label>当前工作区</label>
+          <div class="workspace-row">
+            <input :value="workspaceDisplay" readonly class="mono workspace-path" />
+            <button class="btn" type="button" @click="pickWorkspace">
+              <AppIcon name="folder" :size="14" />选择目录
+            </button>
+            <button class="btn" type="button" @click="resetWorkspace" :disabled="!form.workspace">恢复默认</button>
+          </div>
+          <span class="hint">
+            文件工具（ls / read_file / write_file / edit_file / glob / grep）与 shell 都以此目录为根，
+            相对路径相对它解析；留空则使用应用内部 runtime 目录。
+          </span>
+          <span class="hint">
+            技能库与任务清单始终留在应用数据目录，不受工作区影响；正在生成的那一轮仍使用旧工作区，下一条消息起生效。
+          </span>
+        </div>
+      </div>
+    </section>
+
     <!-- dsh 子代理（DeepSeek Harness） -->
     <section class="card wide">
       <div class="card-header">
@@ -653,6 +683,8 @@ const mainLlmSummary = computed(() => {
   const p = profiles.value[activeProfile.value] || {}
   return `${p.model || '未设置模型'} · ${p.baseUrl || '未设置 Base URL'}`
 })
+// 工作区展示：未设置时说明回退到应用内部目录
+const workspaceDisplay = computed(() => form.workspace || '默认：应用内部 runtime 目录')
 // 提醒气泡显示时长可选值（秒），范围 3~30
 const reminderDurationOptions = [3, 5, 8, 10, 15, 20, 30]
 // 主 Agent LLM 上下文窗口（token）：范围与默认值与 config_loader.DEFAULTS 保持一致
@@ -710,6 +742,8 @@ const form = reactive({
   // 媒体守卫（同样随当前 LLM 配置档保存；不受上面的自动压缩开关影响）
   contextMediaKeep: DEFAULT_MEDIA_KEEP, contextMediaMaxKB: DEFAULT_MEDIA_MAX_KB, contextMediaMaxPx: DEFAULT_MEDIA_MAX_PX, contextMediaJpegQuality: DEFAULT_MEDIA_JPEG_QUALITY,
   persona: '', memoryWindow: 50, recursionLimit: 100, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
+  // 工作区（agent.workspace，空=应用内部 runtime；切换即时保存，不随配置档保存）
+  workspace: '',
   petEnabled: true,
   quickAskShortcut: 'Alt+Shift+Q',
   reminderPoll: 5, reminderDuration: 8,
@@ -849,6 +883,7 @@ async function loadConfig() {
   activeAgentProfile.value = cfg.agent?.activeProfile || 'default'
   fillFormFromProfile()
   form.idleEnabled = cfg.pet?.idleReminder?.enabled !== false
+  form.workspace = cfg.agent?.workspace || ''
   form.idleThreshold = cfg.pet?.idleReminder?.thresholdMinutes ?? 30
   form.idleQuiet = cfg.pet?.idleReminder?.quietPeriodMinutes ?? 10
   form.petEnabled = cfg.pet?.enabled !== false
@@ -1010,6 +1045,30 @@ async function switchProfile(name) {
   activeProfile.value = name
   await api.setConfig('llm.activeProfile', name)
   fillFormFromProfile()
+}
+
+// ---------- 工作区 ----------
+// 工作区是顶层 agent.workspace，不是 Agent 配置档的一部分：选择后立即落盘并热重载，
+// 不依赖「保存设置」；这样切换目录和切换模型一样是即时动作。
+async function pickWorkspace() {
+  if (!api?.pickDirectory) return showToast('当前环境不支持目录选择')
+  const picked = await api.pickDirectory({ defaultPath: form.workspace || undefined })
+  if (!picked || picked.canceled) return
+  if (!picked.success) return showToast('选择目录失败: ' + (picked.message || ''))
+  const res = await api.setConfig('agent.workspace', picked.path)
+  if (!res.success) return showToast('保存工作区失败: ' + (res.message || ''))
+  form.workspace = picked.path
+  send('config.invalidate', { paths: ['agent'] })
+  showToast('工作区已切换，下一条消息生效 ✓')
+}
+
+async function resetWorkspace() {
+  if (!form.workspace) return
+  const res = await api.setConfig('agent.workspace', '')
+  if (!res.success) return showToast('保存工作区失败: ' + (res.message || ''))
+  form.workspace = ''
+  send('config.invalidate', { paths: ['agent'] })
+  showToast('已恢复默认工作区')
 }
 
 async function switchAgentProfile(name) {
@@ -1965,6 +2024,23 @@ input[type='range']:disabled {
 .key-row input {
   flex: 1;
   min-width: 0;
+}
+
+/* 工作区：路径占满剩余宽度，按钮与 36px 输入框对齐 */
+.workspace-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.workspace-row .workspace-path {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.workspace-row .btn {
+  height: 36px;
 }
 
 .mini {

@@ -66,6 +66,9 @@ DEFAULTS = {
             }
         },
         # 保留顶层字段作为兼容旧配置的 fallback
+        # 工作区根目录（绝对路径）：文件工具与 shell 的根目录，可在设置页选择；
+        # 留空 = 使用应用内部 runtime 目录（见 agent/workspace.py）
+        "workspace": "",
         "skillsEnabled": True,
         "maxToolRounds": 10,
         "tavilyApiKey": "",  # Tavily 网络搜索 API Key

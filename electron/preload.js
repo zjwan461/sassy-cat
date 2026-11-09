@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 配置系统
   getConfig: () => ipcRenderer.invoke('config:get'),
+  // 选择工作区目录（系统文件夹选择框）：{ success, path } 或 { canceled: true }
+  pickDirectory: (opts) => ipcRenderer.invoke('dialog:pick-directory', opts),
   // 模板层默认值（只读）：设置页「恢复默认」按钮取内置默认文本用
   getConfigTemplate: () => ipcRenderer.invoke('config:get-template'),
   setConfig: (path, value) => ipcRenderer.invoke('config:set', { path, value }),
@@ -42,7 +44,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onMetricsUpdate: (callback) => ipcRenderer.on('metrics-update', (event, metrics) => callback(metrics)),
   onSysinfoUpdate: (callback) => ipcRenderer.on('sysinfo-update', (event, info) => callback(info)),
   onAgentReady: (callback) => ipcRenderer.on('agent-ready', (event, info) => callback(info)),
-  onConfigChanged: (callback) => ipcRenderer.on('config:changed', (event, data) => callback(data)),
+  onConfigChanged: (callback) => {
+    const handler = (event, data) => callback(data)
+    ipcRenderer.on('config:changed', handler)
+    // 返回取消订阅函数：组件卸载时移除监听，避免路由来回切换后重复累积
+    return () => ipcRenderer.removeListener('config:changed', handler)
+  },
   onActivityPing: (callback) => ipcRenderer.on('activity-ping', (event, data) => callback(data)),
   onShortcutStatus: (callback) => ipcRenderer.on('shortcut-status', (event, data) => callback(data)),
 
