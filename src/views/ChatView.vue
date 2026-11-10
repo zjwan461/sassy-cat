@@ -143,7 +143,7 @@
                 @scroll="onReasoningScroll(m, $event)"
               >{{ m.reasoning }}</div>
             </details>
-            <div v-if="m.content || m.images?.length || docAttachments(m).length" class="msg-content" :class="{ 'md-mode': isAssistant(m) }">
+            <div v-if="m.content || m.images?.length || docAttachments(m).length" class="msg-content" :class="{ 'md-mode': isAssistant(m) }" @click="onContentClick(m, $event)">
               <!-- 用户消息的图片附件 -->
               <div v-if="m.images && m.images.length" class="msg-images">
                 <img v-for="(img, i) in m.images" :key="i" :src="img" class="msg-image" @click="openImagePreview(img)" />
@@ -174,15 +174,30 @@
                         <span class="sub-agent-name">{{ agentLabel(seg.agent) }}</span>
                       </div>
                       <div class="sub-agent-body">
-                        <MarkdownRenderer :content="seg.text" :done="!m.streaming" @rendered="onMDRendered" />
+                        <MarkdownRenderer :content="seg.text" :done="!m.streaming" @rendered="onMDRendered(m)" />
                       </div>
                     </template>
-                    <MarkdownRenderer v-else :content="seg.text" :done="!m.streaming" @rendered="onMDRendered" />
+                    <MarkdownRenderer v-else :content="seg.text" :done="!m.streaming" @rendered="onMDRendered(m)" />
                   </div>
                 </template>
-                <MarkdownRenderer v-else :content="m.content" :done="!m.streaming" @rendered="onMDRendered" />
+                <MarkdownRenderer v-else :content="m.content" :done="!m.streaming" @rendered="onMDRendered(m)" />
               </template>
               <template v-else>{{ m.content }}</template>
+            </div>
+            <!-- 知识库参考来源：正文 [n] 与这里的 chip 都可点开分块内容 -->
+            <div v-if="m.citations?.length" class="kb-cites">
+              <span class="kb-cites-title">参考来源</span>
+              <button
+                v-for="c in m.citations"
+                :key="c.index + c.source"
+                type="button"
+                class="kb-cite-chip"
+                :title="c.content.slice(0, 160)"
+                @click.stop="openCitation(c)"
+              >
+                <span class="kb-cite-index">[{{ c.index }}]</span>
+                {{ c.source }}
+              </button>
             </div>
             <!-- present 工具产出的文件卡片：正文下方、工具步骤上方 -->
             <PresentedFiles v-if="m.presentation" :data="m.presentation" />
@@ -384,6 +399,20 @@
       <div v-if="previewImageUrl" class="image-modal" @click="closeImagePreview">
         <img :src="previewImageUrl" class="image-modal-img" />
       </div>
+
+      <!-- 知识库引用分块预览 -->
+      <div v-if="citationView" class="citation-modal" @click.self="citationView = null">
+        <div class="citation-panel">
+          <div class="citation-head">
+            <span class="citation-index">[{{ citationView.index }}]</span>
+            <span class="citation-source" :title="citationView.source">{{ citationView.source }}</span>
+            <button class="citation-close" type="button" title="关闭" @click="citationView = null">
+              <AppIcon name="x" :size="14" />
+            </button>
+          </div>
+          <pre class="citation-body">{{ citationView.content }}</pre>
+        </div>
+      </div>
     </section>
   </div>
 </template>
@@ -484,6 +513,7 @@ const fileInputRef = ref(null)
 const isDragOver = ref(false)
 const composerFocused = ref(false)
 const previewImageUrl = ref(null)
+const citationView = ref(null)
 
 // ---------- 会话内搜索（Ctrl/Cmd + F） ----------
 const convSearchOpen = ref(false)
@@ -679,8 +709,70 @@ function scrollListToBottom() {
 
 // 由 MarkdownRenderer 的 rendered 事件驱动：此刻本帧 DOM 已更新、浏览器尚未绘制，
 // 在同一帧内贴底，不会出现"先滚到底、内容随后长高"的抖动
-function onMDRendered() {
+function onMDRendered(m) {
   if (stickToBottom.value) scrollListToBottom()
+  if (m) enhanceCitations(m)
+}
+
+// 把正文里对应参考来源的 [n] 包成可点击的 <a.cite-ref>
+function enhanceCitations(m) {
+  if (!m?.citations?.length || !m.id) return
+  const root = document.querySelector(`[data-msg-id="${CSS.escape(String(m.id))}"]`)
+  if (!root) return
+  const known = new Set(m.citations.map((c) => c.index))
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue || !node.nodeValue.includes('[')) return NodeFilter.FILTER_REJECT
+      const parent = node.parentElement
+      if (!parent || parent.closest('pre, code, a')) return NodeFilter.FILTER_REJECT
+      return NodeFilter.FILTER_ACCEPT
+    },
+  })
+  const nodes = []
+  while (walker.nextNode()) nodes.push(walker.currentNode)
+
+  for (const node of nodes) {
+    const text = node.nodeValue
+    const re = /\[(\d+)\]/g
+    let match
+    let last = 0
+    let fragment = null
+    while ((match = re.exec(text)) !== null) {
+      const index = Number(match[1])
+      if (!known.has(index)) continue
+      if (!fragment) fragment = document.createDocumentFragment()
+      if (match.index > last) fragment.appendChild(document.createTextNode(text.slice(last, match.index)))
+      const link = document.createElement('a')
+      link.href = '#'
+      link.className = 'cite-ref'
+      link.dataset.cite = String(index)
+      link.textContent = match[0]
+      fragment.appendChild(link)
+      last = match.index + match[0].length
+    }
+    if (fragment) {
+      if (last < text.length) fragment.appendChild(document.createTextNode(text.slice(last)))
+      node.parentNode.replaceChild(fragment, node)
+    }
+  }
+}
+
+function openCitation(citation) {
+  if (!citation) return
+  citationView.value = {
+    index: citation.index,
+    source: citation.source,
+    content: citation.content,
+  }
+}
+
+function onContentClick(m, event) {
+  const link = event.target.closest?.('.cite-ref')
+  if (!link) return
+  event.preventDefault()
+  const index = Number(link.dataset.cite)
+  const citation = (m.citations || []).find((c) => c.index === index)
+  if (citation) openCitation(citation)
 }
 
 function scrollBottom() {
@@ -2459,6 +2551,144 @@ onUnmounted(() => {
 }
 
 /* ===== 图片放大预览 ===== */
+/* ===== 知识库引用 ===== */
+.kb-cites {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 8px;
+}
+
+.kb-cites-title {
+  color: var(--text-4);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-right: 2px;
+}
+
+.kb-cite-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  padding: 2px 8px;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 10.5px;
+  background: rgba(239, 168, 76, 0.06);
+  border: 1px solid var(--amber-a20);
+  border-radius: 999px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-cite-chip:hover {
+  color: var(--amber-200);
+  border-color: var(--amber-a55);
+  background: var(--amber-a12);
+}
+
+.kb-cite-index {
+  color: var(--amber-300);
+  flex-shrink: 0;
+}
+
+.cite-ref {
+  color: var(--amber-300);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--amber-a55);
+  cursor: pointer;
+  font-size: 0.92em;
+}
+
+.cite-ref:hover {
+  color: var(--amber-200);
+  border-bottom-style: solid;
+}
+
+.citation-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(3, 5, 8, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.citation-panel {
+  width: min(640px, calc(100vw - 48px));
+  max-height: min(72vh, 620px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: linear-gradient(180deg, #121721 0%, #0D1118 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.85);
+}
+
+.citation-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--line-1);
+}
+
+.citation-index {
+  flex-shrink: 0;
+  color: var(--amber-300);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.citation-source {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.citation-close {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.citation-close:hover { color: var(--text-1); background: rgba(255, 255, 255, 0.05); }
+
+.citation-body {
+  margin: 0;
+  padding: 13px;
+  overflow-y: auto;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .image-modal {
   position: fixed;
   inset: 0;

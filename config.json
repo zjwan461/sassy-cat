@@ -44,7 +44,9 @@
     "ocrEngine": "docling",
     "retrieval": {
       "hybrid": true,
-      "candidateMultiplier": 4
+      "candidateMultiplier": 4,
+      "chunkSize": 1000,
+      "chunkOverlap": 200
     }
   },
   "pet": {

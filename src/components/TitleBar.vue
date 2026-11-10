@@ -1,5 +1,5 @@
 <template>
-  <header class="titlebar" :class="{ 'is-mac': isMac }" @dblclick="onDoubleClick">
+  <header class="titlebar" :class="{ 'is-mac': isMac, collapsed }" @dblclick="onDoubleClick">
     <div class="tb-brand">
       <div class="tb-logo">
         <img :src="logoUrl" alt="优墨" />
@@ -54,6 +54,9 @@ import NotificationCenter from './NotificationCenter.vue'
 import logoUrl from '../../assets/icon.png'
 
 defineEmits(['open-search'])
+defineProps({
+  collapsed: { type: Boolean, default: false },
+})
 
 const api = window.electronAPI
 const isMac = api?.platform === 'darwin'
@@ -157,6 +160,16 @@ onBeforeUnmount(() => {
   align-items: baseline;
   gap: 7px;
   min-width: 0;
+}
+
+/* 侧栏收起时标题栏只留品牌图标，宽度与 64px 侧栏对齐 */
+.titlebar.collapsed .tb-brand {
+  justify-content: center;
+  padding: 0;
+}
+
+.titlebar.collapsed .tb-brand-text {
+  display: none;
 }
 
 .tb-name {
@@ -265,6 +278,14 @@ onBeforeUnmount(() => {
 .titlebar.is-mac .tb-brand {
   width: calc(var(--sidebar-w) - 76px);
   border-right: none;
+}
+
+.titlebar.is-mac.collapsed {
+  padding-left: 76px;
+}
+
+.titlebar.is-mac.collapsed .tb-brand {
+  width: auto;
 }
 
 @media (max-width: 900px) {

@@ -1,7 +1,7 @@
 <template>
-  <div class="layout">
+  <div class="layout" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
     <!-- 自绘标题栏（替代 Electron 原生标题栏/菜单栏）：品牌、全局搜索入口与窗口控制 -->
-    <TitleBar @open-search="searchOpen = true" />
+    <TitleBar :collapsed="sidebarCollapsed" @open-search="searchOpen = true" />
 
     <div class="app-body">
       <!-- 左侧导航 -->
@@ -15,6 +15,7 @@
               :to="item.path"
               class="nav-item"
               :class="{ disabled: item.disabled, active: !item.disabled && isMenuActive(item.path) }"
+              :title="item.label"
             >
               <AppIcon :name="item.icon" :size="17" class="nav-icon" />
               <span class="nav-label">{{ item.label }}</span>
@@ -22,12 +23,37 @@
           </div>
         </nav>
 
+        <!-- 最近会话快捷区：切 tab 时不用先回聊天页翻列表 -->
+        <div v-if="!sidebarCollapsed && recentConvs.length" class="recent-block">
+          <div class="recent-title">最近会话</div>
+          <button
+            v-for="c in recentConvs"
+            :key="c.id"
+            type="button"
+            class="recent-item"
+            :class="{ active: c.id === convId }"
+            :title="c.title || '未命名对话'"
+            @click="openRecent(c.id)"
+          >
+            <AppIcon name="chat" :size="12" />
+            <span class="recent-label">{{ c.title || '未命名对话' }}</span>
+          </button>
+        </div>
+
         <div class="rail-foot">
           <div class="rail-status">
             <span class="status-dot" :class="connClass"></span>
             <span class="status-text">{{ connText }}</span>
           </div>
           <span class="rail-version">v{{ appConfig.version }}</span>
+          <button
+            class="rail-toggle"
+            type="button"
+            :title="sidebarCollapsed ? '展开侧栏（Ctrl+B）' : '收起侧栏（Ctrl+B）'"
+            @click="toggleSidebar"
+          >
+            <AppIcon :name="sidebarCollapsed ? 'chevron-right' : 'chevron-left'" :size="13" />
+          </button>
         </div>
       </aside>
 
@@ -57,6 +83,7 @@
 
     <!-- 全局搜索 / 命令面板（Ctrl/Cmd + K） -->
     <GlobalSearch :open="searchOpen" @close="searchOpen = false" />
+    <ShortcutHelp :open="shortcutHelpOpen" @close="shortcutHelpOpen = false" />
   </div>
 </template>
 
@@ -65,11 +92,13 @@ import { onMounted, onBeforeUnmount, watch, computed, ref, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { appConfig } from './appConfig'
 import { useAgentSocket } from './composables/useAgentSocket'
+import { useChatStore } from './composables/useChatStore'
 import { useKbUploadState } from './composables/useKbUploadState'
 import { addNotification } from './composables/useNotifications'
 import AppIcon from './components/AppIcon.vue'
 import TitleBar from './components/TitleBar.vue'
 import GlobalSearch from './components/GlobalSearch.vue'
+import ShortcutHelp from './components/ShortcutHelp.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -77,7 +106,25 @@ const { state: socketState, connect, send, on, setPort } = useAgentSocket()
 
 // 全局搜索 / 命令面板
 const searchOpen = ref(false)
+const shortcutHelpOpen = ref(false)
 const contentEl = ref(null)
+
+// 侧栏收起 + 最近会话：收起状态持久化到 localStorage
+const sidebarCollapsed = ref(localStorage.getItem('sassy.sidebarCollapsed') === '1')
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  localStorage.setItem('sassy.sidebarCollapsed', sidebarCollapsed.value ? '1' : '0')
+}
+
+const { conv, chat, switchConversation } = useChatStore()
+const recentConvs = computed(() => (conv.list || []).slice(0, 5))
+const convId = computed(() => chat.convId)
+
+function openRecent(id) {
+  if (!id) return
+  if (chat.convId !== id) switchConversation(id)
+  router.push('/chat')
+}
 
 // 路由切换后内容区回到顶部：SPA 默认会保留上一个页面的滚动位置，
 // 从长页面（设置/知识库）切到新页面时会停在半截。
@@ -87,10 +134,33 @@ watch(() => route.fullPath, async () => {
 })
 function onGlobalKeydown(e) {
   const mod = e.ctrlKey || e.metaKey
+  const target = e.target
+  const typing = target instanceof HTMLElement && (
+    target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+  )
+
+  if (e.key === 'Escape' && shortcutHelpOpen.value) {
+    e.preventDefault()
+    shortcutHelpOpen.value = false
+    return
+  }
   if (mod && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) {
     e.preventDefault()
     searchOpen.value = !searchOpen.value
+  } else if (mod && !e.shiftKey && !e.altKey && (e.key === 'b' || e.key === 'B')) {
+    e.preventDefault()
+    toggleSidebar()
+  } else if (mod && !e.shiftKey && !e.altKey && e.key === '/') {
+    e.preventDefault()
+    shortcutHelpOpen.value = !shortcutHelpOpen.value
+  } else if (!mod && !typing && e.key === '?') {
+    e.preventDefault()
+    shortcutHelpOpen.value = true
   }
+}
+
+function openShortcutHelp() {
+  shortcutHelpOpen.value = true
 }
 
 // 知识库上传状态（模块级单例，与详情页共享）
@@ -162,6 +232,7 @@ let offRebuildDone = null
 onMounted(() => {
   connect()
   window.addEventListener('keydown', onGlobalKeydown)
+  window.addEventListener('sassy:shortcuts', openShortcutHelp)
   offProactiveReminder = on('proactive.reminder', (p) => {
     requestSystemNotify(p, true)
     addNotification({
@@ -219,6 +290,7 @@ onBeforeUnmount(() => {
   clearTimeout(loadingTimer)
   stopWatch()
   window.removeEventListener('keydown', onGlobalKeydown)
+  window.removeEventListener('sassy:shortcuts', openShortcutHelp)
   offProactiveReminder?.()
   offProactiveMessage?.()
   offRebuildDone?.()
@@ -282,6 +354,108 @@ const connText = computed(() => ({
   display: flex;
   position: relative;
   z-index: 1;
+}
+
+/* ===== 侧栏收起 ===== */
+.layout.sidebar-collapsed {
+  --sidebar-w: 64px;
+}
+
+.sidebar-collapsed .nav-label,
+.sidebar-collapsed .nav-group-title,
+.sidebar-collapsed .recent-block,
+.sidebar-collapsed .rail-version,
+.sidebar-collapsed .status-text {
+  display: none;
+}
+
+.sidebar-collapsed .nav-item {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar-collapsed .nav-item.active::before {
+  left: 0;
+}
+
+.sidebar-collapsed .rail-foot {
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0;
+}
+
+/* ===== 最近会话 ===== */
+.recent-block {
+  flex-shrink: 0;
+  max-height: 190px;
+  overflow-y: auto;
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--line-1);
+}
+
+.recent-title {
+  padding: 4px 8px 6px;
+  color: var(--text-4);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.recent-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 8px;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.recent-item:hover {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.recent-item.active {
+  color: var(--amber-200);
+  background: rgba(239, 168, 76, 0.09);
+}
+
+.recent-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-toggle {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-4);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.rail-toggle:hover {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--line-2);
 }
 
 /* 颗粒噪点：极低透明度，经屏幕后几乎看不见，但能消除大面积渐变的"塑料感" */

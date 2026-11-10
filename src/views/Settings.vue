@@ -387,6 +387,24 @@
           <span class="hint">默认开启：向量语义召回 + BM25 关键词召回，再用 RRF 融合；对编号、专有名词、代码标识符更稳。关闭后回到纯向量 top-k</span>
         </div>
         <div class="field">
+          <label>分块与召回参数</label>
+          <div class="rag-retrieval-row">
+            <label class="rag-num">
+              分块大小
+              <input type="number" v-model.number="form.ragChunkSize" min="100" max="8000" step="100" />
+            </label>
+            <label class="rag-num">
+              重叠
+              <input type="number" v-model.number="form.ragChunkOverlap" min="0" max="4000" step="50" />
+            </label>
+            <label class="rag-num">
+              候选倍数
+              <input type="number" v-model.number="form.ragCandidateMultiplier" min="1" max="10" step="1" />
+            </label>
+          </div>
+          <span class="hint">分块大小/重叠单位为字符；候选倍数用于混合检索（实际召回数 = k × 倍数）。修改分块参数后需要重建索引才会应用到已有文档</span>
+        </div>
+        <div class="field">
           <label>索引健康</label>
           <div class="rag-health" :class="{ bad: ragHealth && !ragHealth.dimensionMatch && !ragHealth.empty }">
             <div class="rag-health-grid">
@@ -872,7 +890,7 @@ const form = reactive({
   interruptOn: defaultInterruptOn(),
   // 技能脚本免确认（execute 白名单，见 python/agent/command_policy.py）
   autoApproveSkillScripts: true,
-  ragAutoEmbedding: true, ragHybrid: true, ragEmbedType: 'local', ragEmbedModel: 'BAAI/bge-small-zh-v1.5',
+  ragAutoEmbedding: true, ragHybrid: true, ragChunkSize: 1000, ragChunkOverlap: 200, ragCandidateMultiplier: 4, ragEmbedType: 'local', ragEmbedModel: 'BAAI/bge-small-zh-v1.5',
   ragEmbedBaseUrl: '', ragEmbedApiKey: '', ragOcrEngine: 'docling',
   ragLocalDownloaded: false,
   proxyEnabled: false, proxyHttp: '', proxyHttps: '', proxyNoProxy: '',
@@ -1042,6 +1060,9 @@ async function loadConfig() {
   // 知识库（RAG）
   form.ragAutoEmbedding = cfg.rag?.autoEmbedding !== false
   form.ragHybrid = cfg.rag?.retrieval?.hybrid !== false
+  form.ragChunkSize = Number(cfg.rag?.retrieval?.chunkSize) || 1000
+  form.ragChunkOverlap = Number(cfg.rag?.retrieval?.chunkOverlap) || 0
+  form.ragCandidateMultiplier = Number(cfg.rag?.retrieval?.candidateMultiplier) || 4
   form.ragEmbedType = cfg.rag?.embeddingModel?.type === 'remote' ? 'remote' : 'local'
   form.ragEmbedModel = cfg.rag?.embeddingModel?.model || ''
   // 本地模型已下载状态（下载成功后由本页面写入配置，切换回来即不再显示下载按钮）
@@ -1337,6 +1358,9 @@ async function saveAll() {
     { path: 'agent.autoApproveSkillScripts', value: !!form.autoApproveSkillScripts },
     { path: 'rag.autoEmbedding', value: !!form.ragAutoEmbedding },
     { path: 'rag.retrieval.hybrid', value: !!form.ragHybrid },
+    { path: 'rag.retrieval.chunkSize', value: Math.max(100, Math.min(8000, Number(form.ragChunkSize) || 1000)) },
+    { path: 'rag.retrieval.chunkOverlap', value: Math.max(0, Math.min(4000, Number(form.ragChunkOverlap) || 0)) },
+    { path: 'rag.retrieval.candidateMultiplier', value: Math.max(1, Math.min(10, Number(form.ragCandidateMultiplier) || 4)) },
     { path: 'rag.embeddingModel.type', value: form.ragEmbedType === 'remote' ? 'remote' : 'local' },
     { path: 'rag.embeddingModel.baseUrl', value: form.ragEmbedBaseUrl.trim() },
     { path: 'rag.ocrEngine', value: form.ragOcrEngine === 'markitdown' ? 'markitdown' : 'docling' },
@@ -1750,6 +1774,28 @@ onBeforeUnmount(() => {
 }
 
 /* ===== RAG 索引健康 ===== */
+.rag-retrieval-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.rag-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.rag-num input {
+  width: 86px;
+  height: 32px;
+  padding: 0 8px;
+}
+
 .rag-health {
   display: flex;
   flex-direction: column;

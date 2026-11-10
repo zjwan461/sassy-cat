@@ -138,6 +138,8 @@ DEFAULTS = {
         "retrieval": {
             "hybrid": True,
             "candidateMultiplier": 4,  # 各路召回候选数 = k * multiplier，再融合取前 k
+            "chunkSize": 1000,  # 分块大小（字符）
+            "chunkOverlap": 200,  # 相邻分块重叠（字符）
         },
     },
 }

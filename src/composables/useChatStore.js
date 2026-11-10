@@ -15,6 +15,7 @@ import { computed, reactive } from 'vue'
 import { useAgentSocket } from './useAgentSocket'
 import { fetchMessages } from '../api/messages'
 import { extractPresentation } from '../utils/presentation'
+import { extractKbCitations } from '../utils/citations'
 
 const { state: socketState, connect, send, on } = useAgentSocket()
 
@@ -329,6 +330,8 @@ function ensureStarted() {
       t.result = prettyArgs(p.text || '')
       // present 工具：实时解析结构化结果，立即渲染文件卡片
       if (t.name === 'present') m.presentation = extractPresentation(m.tools)
+      // 知识库检索：提取参考来源，供正文 [n] 与来源列表点击查看
+      if (t.name === 'search_from_kb') m.citations = extractKbCitations(m.tools)
     }
   })
   on('agent.usage', (p) => {
@@ -660,6 +663,7 @@ function transformMessage(item) {  // 构建工具调用列表（合并 toolCall
     thinking: false,
     tools,
     presentation: extractPresentation(tools),
+    citations: extractKbCitations(tools),
     attachments,
     images: images.length ? images : undefined,
     interruptActions: interruptActions,

@@ -716,6 +716,21 @@ class RAGService:
         self._invalidate_keyword_cache()
         return result
     
+    def _split_defaults(self) -> tuple[int, int]:
+        """读取分块参数（设置页可调），并保证 overlap < chunk_size。"""
+        cfg = config_loader.current().get("rag.retrieval", {}) or {}
+        try:
+            size = int(cfg.get("chunkSize", 1000))
+        except (TypeError, ValueError):
+            size = 1000
+        try:
+            overlap = int(cfg.get("chunkOverlap", 200))
+        except (TypeError, ValueError):
+            overlap = 200
+        size = max(100, min(8000, size))
+        overlap = max(0, min(size - 1, overlap))
+        return size, overlap
+
     def save_document(
         self,
         content: str,
@@ -728,12 +743,21 @@ class RAGService:
         Args:
             content: 文档内容
             metadata: 文档元数据
-            **split_kwargs: 传递给 split_document 的参数
+            **split_kwargs: 传递给 split_document 的参数（不传则用设置页的分块参数）
             
         Returns:
             文档 ID 列表
         """
-        # 分块
+        # 分块：显式参数优先，否则使用 rag.retrieval 的全局分块配置
+        if "chunk_size" not in split_kwargs or "chunk_overlap" not in split_kwargs:
+            default_size, default_overlap = self._split_defaults()
+            split_kwargs.setdefault("chunk_size", default_size)
+            if "chunk_overlap" not in split_kwargs:
+                try:
+                    size_value = int(split_kwargs["chunk_size"])
+                except (TypeError, ValueError):
+                    size_value = default_size
+                split_kwargs["chunk_overlap"] = min(default_overlap, max(0, size_value - 1))
         all_splits = self.split_document(content, metadata, **split_kwargs)
         
         if not all_splits:

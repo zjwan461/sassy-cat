@@ -113,6 +113,14 @@ const ACTIONS = computed(() => [
     },
   },
   {
+    title: '快捷键帮助',
+    desc: '查看全部键盘快捷键',
+    icon: 'key',
+    hint: '操作',
+    keywords: 'keyboard shortcut 快捷键 help 帮助',
+    run: () => window.dispatchEvent(new Event('sassy:shortcuts')),
+  },
+  {
     title: '重启 Agent 服务',
     desc: 'Python 后端重连，适用于改完配置后',
     icon: 'refresh',
