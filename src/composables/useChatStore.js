@@ -14,6 +14,7 @@
 import { computed, reactive } from 'vue'
 import { useAgentSocket } from './useAgentSocket'
 import { fetchMessages } from '../api/messages'
+import { extractPresentation } from '../utils/presentation'
 
 const { state: socketState, connect, send, on } = useAgentSocket()
 
@@ -326,6 +327,8 @@ function ensureStarted() {
       t.done = true
       t.status = 'success'
       t.result = prettyArgs(p.text || '')
+      // present 工具：实时解析结构化结果，立即渲染文件卡片
+      if (t.name === 'present') m.presentation = extractPresentation(m.tools)
     }
   })
   on('agent.usage', (p) => {
@@ -656,6 +659,7 @@ function transformMessage(item) {  // 构建工具调用列表（合并 toolCall
     reasoningOpen: false,
     thinking: false,
     tools,
+    presentation: extractPresentation(tools),
     attachments,
     images: images.length ? images : undefined,
     interruptActions: interruptActions,

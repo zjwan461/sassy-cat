@@ -810,6 +810,19 @@ ipcMain.handle('open-external', async (event, url) => {
   }
   return { success: false, message: '无效的链接地址' };
 });
+
+// 用系统默认程序打开本地文件（present 文件卡片点击）
+ipcMain.handle('shell:open-path', async (event, target) => {
+  if (typeof target !== 'string' || !target.trim()) {
+    return { success: false, message: '无效的文件路径' };
+  }
+  const resolved = path.resolve(target);
+  if (!fs.existsSync(resolved)) {
+    return { success: false, message: '文件不存在' };
+  }
+  const error = await shell.openPath(resolved);
+  return error ? { success: false, message: error } : { success: true };
+});
 // ---------- HTML 预览：落盘 + 应用内 Electron 窗口打开 ----------
 // 预览目录：开发环境用项目 runtime/preview（agent sandbox 工作区）；
 // 打包后 resources 可能只读，回退到 userData/preview

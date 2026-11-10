@@ -37,6 +37,7 @@ from agent.tools.reminder_tools import (
     cancel_reminder,
 )
 from agent.tools.rag_tools import search_from_kb
+from agent.tools.present_tool import present
 from agent.tools.subagent_tool import call_dsh
 from agent.tools.mcp_tools import get_mcp_tools
 from agent.command_policy import apply_execute_allowlist
@@ -276,6 +277,7 @@ class AgentHolder:
             complete_reminder,
             cancel_reminder,
             search_from_kb,
+            present,
             call_dsh,
         ] + get_mcp_tools()
         # 共享持久层单例：未显式 init_db 时惰性初始化（如 CLI 调试入口）

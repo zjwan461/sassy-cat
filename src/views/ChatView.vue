@@ -184,6 +184,8 @@
               </template>
               <template v-else>{{ m.content }}</template>
             </div>
+            <!-- present 工具产出的文件卡片：正文下方、工具步骤上方 -->
+            <PresentedFiles v-if="m.presentation" :data="m.presentation" />
             <!-- 操作条：朗读 + 复制按钮（豆包风格图标按钮），助手消息流式期间隐藏 -->
             <div v-if="isAssistant(m) ? (!m.streaming && (m.content || m.reasoning)) : !!m.content" class="msg-actions">
               <button
@@ -393,6 +395,7 @@ import { useAgentSocket } from '../composables/useAgentSocket'
 import { useFileUpload } from '../composables/useFileUpload'
 import { useTTS } from '../composables/useTTS'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
+import PresentedFiles from '../components/PresentedFiles.vue'
 import FilePreview from '../components/FilePreview.vue'
 import DocumentAttachment from '../components/DocumentAttachment.vue'
 import ConversationItem from '../components/ConversationItem.vue'

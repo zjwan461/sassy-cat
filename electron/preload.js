@@ -72,6 +72,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 用系统默认浏览器打开外部链接
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  // 用系统默认程序打开本地文件（present 文件卡片）
+  openPath: (target) => ipcRenderer.invoke('shell:open-path', target),
 
   // 系统通知：主进程按桌宠可见性裁决（桌宠可见则丢弃，不可见则弹原生通知）
   showNotification: (payload) => ipcRenderer.invoke('notify:show', payload),
