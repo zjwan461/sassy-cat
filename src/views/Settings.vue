@@ -507,6 +507,43 @@
       </div>
     </section>
 
+    <!-- 数据与备份 -->
+    <section class="card wide">
+      <div class="card-header">
+        <span class="card-icon"><AppIcon name="package" :size="15" /></span>
+        <div class="card-head-main">
+          <div class="card-title">数据与备份</div>
+          <div class="card-sub">导出配置、对话与向量库，方便换机迁移</div>
+        </div>
+      </div>
+      <div class="card-body form">
+        <div class="field">
+          <label>导出备份</label>
+          <div class="actions">
+            <button class="btn primary" type="button" :disabled="backupBusy" @click="exportBackupAction">
+              <span v-if="backupBusy" class="btn-spinner"></span>
+              {{ backupBusy ? '正在导出…' : '选择目录并导出' }}
+            </button>
+            <span class="hint">会生成独立的 sassy-cat-backup-日期-时间 目录</span>
+          </div>
+          <span class="hint">
+            包含 config.user.json、messages.sqlite（一致性快照）、Chroma 向量库、上传文件、MCP 服务器配置与技能库；
+            不包含体积通常很大的 checkpoints.sqlite（Agent 现场）。备份内含 API Key 等敏感配置，请妥善保管。
+          </span>
+          <div v-if="backupError" class="bad-text backup-result">{{ backupError }}</div>
+          <div v-if="backupResult" class="backup-result">
+            <span class="ok">
+              <AppIcon name="check" :size="13" />
+              已导出 {{ backupResult.items?.length || 0 }} 项 · {{ formatBytes(backupResult.totalSize) }}
+            </span>
+            <code class="backup-path" :title="backupResult.path">{{ backupResult.path }}</code>
+            <button class="mini" type="button" @click="openBackupFolder">打开文件夹</button>
+          </div>
+          <span class="hint">迁移：退出优墨后，把备份目录内容覆盖到新机器的 userData 目录（Windows 默认 %APPDATA%\sassy-cat）</span>
+        </div>
+      </div>
+    </section>
+
     <!-- 网络代理 -->
     <section class="card">
       <div class="card-header">
@@ -730,6 +767,7 @@ import { useModelDownloadState } from '../composables/useModelDownloadState'
 import { useTTS } from '../composables/useTTS'
 import { downloadEmbeddingModel } from '../api/embeddingModelDownload'
 import { getRagHealth, getRebuildStatus, rebuildKbIndex } from '../api/kb'
+import { exportBackup } from '../api/backup'
 import AppIcon from '../components/AppIcon.vue'
 
 const { connect, send, on } = useAgentSocket()
@@ -751,6 +789,45 @@ const agentProfiles = ref({})
 // ---- RAG 索引健康 / 全量重建 ----
 const ragHealth = ref(null)
 const ragHealthLoading = ref(false)
+
+// ---- 数据备份 ----
+const backupBusy = ref(false)
+const backupResult = ref(null)
+const backupError = ref('')
+
+function formatBytes(bytes) {
+  const n = Number(bytes || 0)
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+async function exportBackupAction() {
+  if (backupBusy.value) return
+  const picked = await api?.pickDirectory?.({
+    title: '选择备份保存位置',
+    buttonLabel: '保存到此目录',
+  })
+  if (!picked || picked.canceled) return
+  if (!picked.success) {
+    backupError.value = '选择目录失败：' + (picked.message || '')
+    return
+  }
+  backupBusy.value = true
+  backupError.value = ''
+  try {
+    backupResult.value = await exportBackup(picked.path)
+  } catch (e) {
+    backupError.value = `导出失败：${e.message}`
+  } finally {
+    backupBusy.value = false
+  }
+}
+
+function openBackupFolder() {
+  if (backupResult.value?.path) api?.openPath?.(backupResult.value.path)
+}
 const ragRebuild = reactive({
   running: false, total: 0, done: 0, failed: 0, current: '', finishedAt: null,
 })
@@ -1194,7 +1271,10 @@ async function switchProfile(name) {
 // 不依赖「保存设置」；这样切换目录和切换模型一样是即时动作。
 async function pickWorkspace() {
   if (!api?.pickDirectory) return showToast('当前环境不支持目录选择')
-  const picked = await api.pickDirectory({ defaultPath: form.workspace || undefined })
+  const picked = await api.pickDirectory({
+    title: '选择工作区目录',
+    defaultPath: form.workspace || undefined,
+  })
   if (!picked || picked.canceled) return
   if (!picked.success) return showToast('选择目录失败: ' + (picked.message || ''))
   const res = await api.setConfig('agent.workspace', picked.path)
@@ -1773,9 +1853,31 @@ onBeforeUnmount(() => {
   animation: spin 0.75s linear infinite;
 }
 
-/* ===== RAG 索引健康 ===== */
-.rag-retrieval-row {
+/* ===== 数据备份 ===== */
+.backup-result {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 11.5px;
+}
+
+.backup-path {
+  max-width: min(100%, 520px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 7px;
+  color: var(--text-3);
+  font-size: 10.5px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xs);
+}
+
+/* ===== RAG 索引健康 ===== */
+.rag-retrieval-row {  display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 16px;

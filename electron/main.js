@@ -736,11 +736,14 @@ ipcMain.handle('dialog:pick-directory', async (event, opts = {}) => {
   const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
   const defaultPath =
     typeof opts?.defaultPath === 'string' && opts.defaultPath ? opts.defaultPath : undefined;
+  const title = typeof opts?.title === 'string' && opts.title ? opts.title : '选择目录';
+  const buttonLabel =
+    typeof opts?.buttonLabel === 'string' && opts.buttonLabel ? opts.buttonLabel : '选择此文件夹';
   const result = await dialog.showOpenDialog(parent, {
-    title: '选择工作区目录',
+    title,
     defaultPath,
     properties: ['openDirectory', 'createDirectory'],
-    buttonLabel: '选择此文件夹'
+    buttonLabel
   });
   if (result.canceled || !result.filePaths || !result.filePaths.length) {
     return { success: false, canceled: true };
