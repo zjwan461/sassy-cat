@@ -1,5 +1,5 @@
 <template>
-  <div class="pet-root">
+  <div class="pet-root" :style="{ '--pet-scale': petScale }">
     <!-- 气泡 / 快捷输入 -->
     <div v-if="bubbleText || inputOpen" ref="bubbleWrapRef" class="bubble-wrap">
       <div
@@ -43,7 +43,7 @@
     <div
       ref="spriteRef"
       class="pet-sprite"
-      :class="{ flip: facingLeft, spritesheet: isSpritesheet, hovered, 'trick-flip': trick === 'flip' }"
+      :class="{ flip: facingLeft, spritesheet: isSpritesheet, hovered, 'trick-flip': trick === 'flip', 'trick-roll': trick === 'roll' }"
       @mousedown="onMouseDown"
       @click="onClick"
       @dblclick="onDoubleClick"
@@ -108,9 +108,26 @@ const clickCount = ref(0)
 const hovered = ref(false)
 // idle 时的随机小动作：look | stretch | groom | yawn（纯 CSS 动画，不改变 state）
 const idleAction = ref('')
-// 表演类动作（与状态机解耦）：目前支持 flip=翻跟斗
+// 表演类动作（与状态机解耦）：目前支持 flip=翻跟斗 / roll=打滚
 const trick = ref('')
 let trickTimer = null
+// 外观：整体缩放 + 勿扰状态（主进程推送，渲染层只做展示）
+const petScale = ref(1)
+const dndActive = ref(false)
+let offAppearance = null
+let appearanceTimer = null
+
+function applyAppearance(data) {
+  if (!data) return
+  if (Number.isFinite(Number(data.size))) {
+    petScale.value = Math.min(1.3, Math.max(0.75, Number(data.size)))
+  }
+  dndActive.value = !!data.dndActive
+  if (dndActive.value && bubbleKind.value !== 'local') {
+    typewriteStop()
+    hideBubble()
+  }
+}
 // 主窗口是否处于前台激活（由主进程推送 / 挂载时查询）：
 // 激活时桌宠不再用气泡复述聊天内容，避免与主窗口重复、干扰正常使用
 const mainActive = ref(false)
@@ -175,9 +192,9 @@ function scheduleIdleAction() {
   const wait = 8000 + Math.random() * 10000
   idleTimer = setTimeout(() => {
     if (state.value === 'idle' && !hovered.value && !bubbleText.value && !inputOpen.value && !dragging) {
-      // 偶尔不满足于小动作，直接翻个跟斗
+      // 偶尔不满足于小动作，直接翻个跟斗或打个滚
       if (Math.random() < 0.12) {
-        performTrick('flip')
+        performTrick(Math.random() < 0.5 ? 'flip' : 'roll')
       } else {
         const action = IDLE_ACTIONS[Math.floor(Math.random() * IDLE_ACTIONS.length)]
         idleAction.value = action
@@ -220,7 +237,9 @@ function performTrick(name = 'flip') {
     trick.value = name
     trickTimer = setTimeout(() => { trick.value = '' }, 1150)
   }, 16)
-  if (Math.random() < 0.6) showBubble('看本喵翻个跟斗！ 🤸', 2200)
+  if (Math.random() < 0.6) {
+    showBubble(name === 'roll' ? '看本喵打个滚！ 🎪' : '看本喵翻个跟斗！ 🤸', 2200)
+  }
 }
 
 function onPetEnter() {
@@ -356,6 +375,7 @@ function onContextMenu() {
     { label: inputOpen.value ? '收起输入框' : '⌨️ 快速提问', action: 'input' },
     { label: '🐾 散散步', action: 'walk' },
     { label: '🤸 翻个跟斗', action: 'flip' },
+    { label: '🎪 打个滚', action: 'roll' },
     { label: state.value === 'sleep' ? '☀️ 叫醒它' : '😴 打个盹', action: 'sleep' },
     { label: '🙈 隐藏桌宠', action: 'hide' }
   ])
@@ -371,6 +391,7 @@ function onMenuAction({ action }) {
   else if (action === 'input') inputOpen.value ? closeInput() : openInput()
   else if (action === 'walk') { maybeWander() }
   else if (action === 'flip') { performTrick('flip') }
+  else if (action === 'roll') { performTrick('roll') }
   else if (action === 'sleep') {
     if (state.value === 'sleep') wake()
     else { clearIdleAction(); setState('sleep') }
@@ -472,6 +493,8 @@ function hideBubble() {
 }
 
 function showBubble(text, ms = 5000, kind = 'local') {
+  // 勿扰时段只拦截提醒/聊天类气泡；用户主动交互（local）仍然响应
+  if (dndActive.value && kind !== 'local') return
   // 记录气泡来源：chat（聊天内容，主窗口前台时不展示）| reminder（提醒，始终展示）| local（桌宠本地互动）
   bubbleKind.value = kind
   wake()
@@ -503,6 +526,12 @@ let typer = null
 // 当前展示内容的来源：chat | reminder | local（见 showBubble / onMainWindowStateChanged）
 const bubbleKind = ref('local')
 function typewriteStart() {
+  // 勿扰时段：聊天/提醒内容不进入打字机，避免绕过 showBubble 守卫
+  if (dndActive.value && bubbleKind.value !== 'local') {
+    streamBuf = ''
+    streamTarget = ''
+    return
+  }
   streamBuf = ''; streamTarget = ''
   clearInterval(typer)
   typer = setInterval(() => {
@@ -651,6 +680,17 @@ function applyDebugParams() {
 
 onMounted(async () => {
   setState('idle')
+  // 外观：尺寸 / 勿扰状态由主进程配置决定
+  try {
+    applyAppearance(await window.petAPI?.getAppearance?.())
+  } catch { /* 浏览器预览环境没有外观 API */ }
+  if (window.petAPI?.onAppearance) offAppearance = window.petAPI.onAppearance(applyAppearance)
+  // 勿扰时段会随时间自然进入/退出，定时刷新一次主进程计算出的状态
+  appearanceTimer = setInterval(async () => {
+    try {
+      applyAppearance(await window.petAPI?.getAppearance?.())
+    } catch { /* 忽略刷新失败 */ }
+  }, 60000)
   document.addEventListener('mousemove', onDocMouseMove)
   scheduleIdleAction()
   scheduleWander()
@@ -752,6 +792,8 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  if (typeof offAppearance === 'function') offAppearance()
+  clearInterval(appearanceTimer)
   if (dragging) { dragging = false; window.petAPI && window.petAPI.dragEnd() }
   Object.values(timers).forEach((t) => { clearInterval(t); clearTimeout(t) })
   clearTimeout(bubbleTimer)
@@ -769,40 +811,58 @@ onBeforeUnmount(() => {
 <style scoped>
 .pet-root { position: relative; width: 100vw; height: 100vh; background: transparent; }
 .pet-sprite {
-  position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
+  position: absolute; bottom: 4px; left: 50%;
+  transform: translateX(-50%) scale(var(--pet-scale, 1));
+  transform-origin: 50% 88%;
   cursor: grab;
   transition: transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1), filter 0.22s ease;
   filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.28));
 }
-.pet-sprite.hovered { transform: translateX(-50%) scale(1.025); filter: drop-shadow(0 9px 18px rgba(0, 0, 0, 0.34)); }
+.pet-sprite.hovered {
+  transform: translateX(-50%) scale(calc(var(--pet-scale, 1) * 1.025));
+  filter: drop-shadow(0 9px 18px rgba(0, 0, 0, 0.34));
+}
 .pet-sprite.drag { cursor: grabbing; }
-.pet-sprite.flip { transform: translateX(-50%) scaleX(-1); }
-.pet-sprite.flip.hovered { transform: translateX(-50%) scaleX(-1) scale(1.025); }
+.pet-sprite.flip { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)); }
+.pet-sprite.flip.hovered { transform: translateX(-50%) scaleX(-1) scale(calc(var(--pet-scale, 1) * 1.025)); }
 
-/* 翻跟斗：整只猫腾空旋转一周，落地回到原位 */
+/* 表演：翻跟斗 / 打滚（整只猫，尺寸随 --pet-scale 缩放） */
 .pet-sprite.trick-flip { animation: pet-somersault 1.05s cubic-bezier(0.3, 0.7, 0.4, 1); }
 .pet-sprite.flip.trick-flip { animation: pet-somersault-flipped 1.05s cubic-bezier(0.3, 0.7, 0.4, 1); }
+.pet-sprite.trick-roll { animation: pet-roll 1.15s cubic-bezier(0.3, 0.7, 0.4, 1); }
+.pet-sprite.flip.trick-roll { animation: pet-roll-flipped 1.15s cubic-bezier(0.3, 0.7, 0.4, 1); }
 
 @keyframes pet-somersault {
-  0%   { transform: translateX(-50%) translateY(0) rotate(0deg) scale(1, 1); }
-  18%  { transform: translateX(-50%) translateY(4px) rotate(0deg) scale(1.08, 0.9); }
-  45%  { transform: translateX(-50%) translateY(-30px) rotate(180deg) scale(0.98, 1.02); }
-  72%  { transform: translateX(-50%) translateY(-10px) rotate(330deg) scale(1.02, 0.98); }
-  90%  { transform: translateX(-50%) translateY(2px) rotate(360deg) scale(1.06, 0.94); }
-  100% { transform: translateX(-50%) translateY(0) rotate(360deg) scale(1, 1); }
+  0%   { transform: translateX(-50%) scale(var(--pet-scale, 1)) translateY(0) rotate(0deg); }
+  45%  { transform: translateX(-50%) scale(var(--pet-scale, 1)) translateY(-30px) rotate(180deg); }
+  90%  { transform: translateX(-50%) scale(var(--pet-scale, 1)) translateY(2px) rotate(360deg); }
+  100% { transform: translateX(-50%) scale(var(--pet-scale, 1)) translateY(0) rotate(360deg); }
 }
 
 @keyframes pet-somersault-flipped {
-  0%   { transform: translateX(-50%) scaleX(-1) translateY(0) rotate(0deg); }
-  18%  { transform: translateX(-50%) scaleX(-1) translateY(4px) rotate(0deg) scale(1.08, 0.9); }
-  45%  { transform: translateX(-50%) scaleX(-1) translateY(-30px) rotate(-180deg) scale(0.98, 1.02); }
-  72%  { transform: translateX(-50%) scaleX(-1) translateY(-10px) rotate(-330deg) scale(1.02, 0.98); }
-  90%  { transform: translateX(-50%) scaleX(-1) translateY(2px) rotate(-360deg) scale(1.06, 0.94); }
-  100% { transform: translateX(-50%) scaleX(-1) translateY(0) rotate(-360deg) scale(1, 1); }
+  0%   { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) translateY(0) rotate(0deg); }
+  45%  { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) translateY(-30px) rotate(-180deg); }
+  90%  { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) translateY(2px) rotate(-360deg); }
+  100% { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) translateY(0) rotate(-360deg); }
+}
+
+@keyframes pet-roll {
+  0%   { transform: translateX(-50%) scale(var(--pet-scale, 1)) translateY(0) rotate(0deg); }
+  45%  { transform: translateX(-50%) scale(var(--pet-scale, 1)) translateY(-10px) rotate(200deg); }
+  75%  { transform: translateX(-50%) scale(var(--pet-scale, 1)) translateY(0) rotate(360deg); }
+  100% { transform: translateX(-50%) scale(var(--pet-scale, 1)) translateY(0) rotate(360deg); }
+}
+
+@keyframes pet-roll-flipped {
+  0%   { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) translateY(0) rotate(0deg); }
+  45%  { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) translateY(-10px) rotate(-200deg); }
+  75%  { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) translateY(0) rotate(-360deg); }
+  100% { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) translateY(0) rotate(-360deg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pet-sprite.trick-flip { animation: none; }
+  .pet-sprite.trick-flip,
+  .pet-sprite.trick-roll { animation: none; }
 }
 /* 说明：状态/心情的 CSS 关键帧动画与 overlay 动效已内聚到对应渲染器组件
    （见 sprite/SvgSpriteRenderer.vue、sprite/SpriteOverlay.vue），

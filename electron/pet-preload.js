@@ -8,6 +8,13 @@ contextBridge.exposeInMainWorld('petAPI', {
   dragStart: () => ipcRenderer.send('pet:drag-start'),
   dragEnd: () => ipcRenderer.send('pet:drag-end'),
   getPosition: () => ipcRenderer.invoke('pet:get-position'),
+  // 外观：尺寸缩放、窗口透明度、勿扰状态
+  getAppearance: () => ipcRenderer.invoke('pet:appearance'),
+  onAppearance: (cb) => {
+    const handler = (event, data) => cb(data);
+    ipcRenderer.on('pet:appearance', handler);
+    return () => ipcRenderer.removeListener('pet:appearance', handler);
+  },
   // 桌宠自主走动：按增量移动窗口（主进程按屏幕工作区钳制，返回 { moved, x, y }）
   moveBy: (delta) => ipcRenderer.invoke('pet:move-by', delta),
   // 动态调整窗口高度（快捷输入展开/收起）

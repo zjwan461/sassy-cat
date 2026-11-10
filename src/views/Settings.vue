@@ -702,6 +702,30 @@
           </span>
           <span v-if="hotkeyStatus" :class="hotkeyStatus.ok ? 'ok' : 'bad-text'">{{ hotkeyStatus.text }}</span>
         </div>
+        <div class="field">
+          <label>桌宠大小与透明度</label>
+          <div class="pet-style-row">
+            <label class="pet-range">
+              大小
+              <input type="range" v-model.number="form.petSize" min="0.75" max="1.3" step="0.05" />
+              <span class="pet-range-val">{{ Number(form.petSize).toFixed(2) }}×</span>
+            </label>
+            <label class="pet-range">
+              透明度
+              <input type="range" v-model.number="form.petOpacity" min="0.35" max="1" step="0.05" />
+              <span class="pet-range-val">{{ Math.round(Number(form.petOpacity) * 100) }}%</span>
+            </label>
+          </div>
+          <span class="hint">保存后桌宠即时缩放 / 变透明，不影响气泡与主窗口</span>
+        </div>
+        <div class="field">
+          <label class="check"><input type="checkbox" v-model="form.dndEnabled" /> 勿扰时段</label>
+          <div v-if="form.dndEnabled" class="pet-style-row">
+            <label class="rag-num">开始 <input type="time" v-model="form.dndStart" /></label>
+            <label class="rag-num">结束 <input type="time" v-model="form.dndEnd" /></label>
+          </div>
+          <span class="hint">勿扰时段内不弹提醒气泡与系统通知；支持跨午夜（如 22:00 → 08:00）</span>
+        </div>
       </div>
     </section>
     </div>
@@ -960,6 +984,7 @@ const form = reactive({
   // 工作区（agent.workspace，空=应用内部 runtime；切换即时保存，不随配置档保存）
   workspace: '',
   petEnabled: true,
+  petSize: 1, petOpacity: 1, dndEnabled: false, dndStart: '22:00', dndEnd: '08:00',
   quickAskShortcut: 'Alt+Shift+Q',
   reminderPoll: 5, reminderDuration: 8,
   tavilyApiKey: '',
@@ -1102,6 +1127,11 @@ async function loadConfig() {
   form.idleThreshold = cfg.pet?.idleReminder?.thresholdMinutes ?? 30
   form.idleQuiet = cfg.pet?.idleReminder?.quietPeriodMinutes ?? 10
   form.petEnabled = cfg.pet?.enabled !== false
+  form.petSize = Number(cfg.pet?.appearance?.size) || 1
+  form.petOpacity = Number(cfg.pet?.appearance?.opacity) || 1
+  form.dndEnabled = cfg.pet?.doNotDisturb?.enabled === true
+  form.dndStart = cfg.pet?.doNotDisturb?.start || '22:00'
+  form.dndEnd = cfg.pet?.doNotDisturb?.end || '08:00'
   form.quickAskShortcut = cfg.pet?.quickAsk?.shortcut ?? 'Alt+Shift+Q'
   // 提醒事项
   form.reminderPoll = cfg.pet?.reminders?.pollIntervalSeconds ?? 5
@@ -1418,6 +1448,11 @@ async function saveAll() {
     { path: 'pet.idleReminder.thresholdMinutes', value: form.idleThreshold },
     { path: 'pet.idleReminder.quietPeriodMinutes', value: form.idleQuiet },
     { path: 'pet.enabled', value: !!form.petEnabled },
+    { path: 'pet.appearance.size', value: Math.max(0.75, Math.min(1.3, Number(form.petSize) || 1)) },
+    { path: 'pet.appearance.opacity', value: Math.max(0.35, Math.min(1, Number(form.petOpacity) || 1)) },
+    { path: 'pet.doNotDisturb.enabled', value: !!form.dndEnabled },
+    { path: 'pet.doNotDisturb.start', value: form.dndStart || '22:00' },
+    { path: 'pet.doNotDisturb.end', value: form.dndEnd || '08:00' },
     { path: 'pet.reminders.pollIntervalSeconds', value: Number(form.reminderPoll) || 5 },
     { path: 'pet.reminders.bubbleDurationMs', value: (Number(form.reminderDuration) || 8) * 1000 },
     { path: 'pet.quickAsk.shortcut', value: form.quickAskShortcut },
@@ -1854,6 +1889,33 @@ onBeforeUnmount(() => {
 }
 
 /* ===== 数据备份 ===== */
+.pet-style-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+}
+
+.pet-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.pet-range input[type='range'] {
+  width: 140px;
+  accent-color: var(--amber-400);
+}
+
+.pet-range-val {
+  min-width: 42px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
 .backup-result {
   display: flex;
   align-items: center;

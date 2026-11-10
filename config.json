@@ -54,6 +54,15 @@
     "quickAsk": {
       "shortcut": "Alt+Shift+Q"
     },
+    "appearance": {
+      "size": 1.0,
+      "opacity": 1.0
+    },
+    "doNotDisturb": {
+      "enabled": false,
+      "start": "22:00",
+      "end": "08:00"
+    },
     "reminders": {
       "pollIntervalSeconds": 5,
       "bubbleDurationMs": 8000

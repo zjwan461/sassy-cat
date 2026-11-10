@@ -120,6 +120,17 @@ DEFAULTS = {
             "pollIntervalSeconds": 5,  # 提醒轮询间隔（秒），3~30，默认 5
             "bubbleDurationMs": 8000,  # 提醒气泡显示时长（毫秒），3000~30000，默认 8000
         },
+        # 桌宠外观：size 为整体缩放（0.75~1.3），opacity 为窗口透明度（0.35~1）
+        "appearance": {
+            "size": 1.0,
+            "opacity": 1.0,
+        },
+        # 勿扰时段：启用后该时间段内不弹提醒气泡 / 系统通知
+        "doNotDisturb": {
+            "enabled": False,
+            "start": "22:00",
+            "end": "08:00",
+        },
     },
     "rag": {
         "autoEmbedding": True,  # 普通聊天上传文件自动embedding到默认知识库（异步）

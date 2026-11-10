@@ -45,6 +45,10 @@ function initConfigStore() {
       applyPetEnabled(diff['pet.enabled'] !== false);
       updateTrayMenu();
     }
+    // 桌宠外观 / 勿扰时段变更 -> 即时应用透明度并同步渲染层
+    if (Object.keys(diff).some((k) => k.startsWith('pet.appearance') || k.startsWith('pet.doNotDisturb'))) {
+      applyPetAppearance();
+    }
     // 网络代理配置变更 -> 热更新 Electron 会话代理（Python 侧需重启服务进程生效）
     if (Object.keys(diff).some((k) => k.startsWith('network.proxy'))) {
       applyNetworkProxy().catch((e) => console.warn('[proxy] 应用失败:', e.message));
@@ -1107,6 +1111,60 @@ function broadcastShortcutStatus(result) {
 const PET_W = 220;
 const PET_H = 150;
 
+function clampNumber(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function minutesOfDay(value) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(value || ''));
+  if (!m) return null;
+  const h = Number(m[1]), min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+// 勿扰时段判断：支持跨午夜（22:00 → 08:00）
+function isDndActive(dnd) {
+  if (!dnd || dnd.enabled !== true) return false;
+  const start = minutesOfDay(dnd.start);
+  const end = minutesOfDay(dnd.end);
+  if (start === null || end === null || start === end) return false;
+  const now = new Date();
+  const current = now.getHours() * 60 + now.getMinutes();
+  return start < end
+    ? current >= start && current < end
+    : current >= start || current < end;
+}
+
+function getPetAppearance() {
+  const pet = (configStore && configStore.merged.pet) || {};
+  const appearance = pet.appearance || {};
+  const dnd = pet.doNotDisturb || {};
+  return {
+    size: clampNumber(appearance.size, 0.75, 1.3, 1),
+    opacity: clampNumber(appearance.opacity, 0.35, 1, 1),
+    dnd: {
+      enabled: dnd.enabled === true,
+      start: dnd.start || '22:00',
+      end: dnd.end || '08:00',
+    },
+    dndActive: isDndActive(dnd),
+  };
+}
+
+function applyPetAppearance() {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  const appearance = getPetAppearance();
+  try {
+    petWindow.setOpacity(appearance.opacity);
+  } catch { /* 某些平台不支持透明度 */ }
+  if (!petWindow.webContents.isDestroyed()) {
+    petWindow.webContents.send('pet:appearance', appearance);
+  }
+}
+
 function createPetWindow() {
   if (petWindow && !petWindow.isDestroyed()) {
     petWindow.show();
@@ -1142,8 +1200,15 @@ function createPetWindow() {
   } else {
     petWindow.loadFile(path.join(__dirname, '..', 'dist', 'pet', 'pet.html'));
   }
+  // 透明度在窗口创建后立即应用；尺寸/主题等在 did-finish-load 后推给渲染层
+  try {
+    petWindow.setOpacity(getPetAppearance().opacity);
+  } catch { /* 平台不支持时忽略 */ }
   // 桌宠页面加载完成后同步一次主窗口激活状态（渲染层也会主动查询，双保险）
-  petWindow.webContents.on('did-finish-load', notifyMainWindowState);
+  petWindow.webContents.on('did-finish-load', () => {
+    notifyMainWindowState();
+    applyPetAppearance();
+  });
   // 移动（拖动/走动）后防抖持久化位置
   let posTimer = null;
   petWindow.on('moved', () => {
@@ -1234,6 +1299,9 @@ ipcMain.handle('pet:get-position', () => {
   return { x, y };
 });
 
+// 桌宠外观（尺寸 / 透明度 / 勿扰状态）
+ipcMain.handle('pet:appearance', () => getPetAppearance());
+
 // 桌宠自主走动：按增量移动窗口（渲染层只负责决定方向与节奏）。
 // 位移必须由主进程执行：渲染层的 screenX 会随窗口一起漂移，自己算增量会抖动。
 // 这里按窗口中心所在显示器的工作区钳制，并返回 moved 供渲染层判断是否到边。
@@ -1314,6 +1382,8 @@ function applyPetEnabled(enabled) {
 // 否则（设置关闭 / 临时隐藏）-> 弹系统原生通知。
 // 调用方（主窗口渲染层收到 proactive.reminder / proactive.message 时）无需关心桌宠状态。
 ipcMain.handle('notify:show', (event, { title, body }) => {
+  // 勿扰时段：不弹桌宠气泡，也不弹系统通知
+  if (getPetAppearance().dndActive) return { success: true, suppressed: true, reason: 'dnd' };
   const petVisible = petWindow && !petWindow.isDestroyed() && petWindow.isVisible() && !petWindow.isMinimized();
   if (petVisible) return { success: true, suppressed: true };
   if (!Notification.isSupported()) return { success: false, message: '系统不支持通知' };

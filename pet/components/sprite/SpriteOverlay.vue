@@ -19,8 +19,8 @@
     <!-- 提醒：琥珀色感叹号 -->
     <div v-if="state === 'remind'" class="ov-remind">!</div>
 
-    <!-- 翻跟斗：落地时的小星星 -->
-    <div v-if="trick === 'flip'" class="ov-sparkles">
+    <!-- 表演动作（翻跟斗 / 打滚）：小星星 -->
+    <div v-if="trick" class="ov-sparkles">
       <span class="spark s-1">✦</span>
       <span class="spark s-2">✧</span>
       <span class="spark s-3">✦</span>
