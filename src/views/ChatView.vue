@@ -610,9 +610,20 @@ function fmtStatDuration(ms) {
   return `${Math.floor(v / 60000)}m${Math.round((v % 60000) / 1000)}s`
 }
 
+let statsPollTimer = null
+let statsLoading = false
+let statsQueued = false
+let statsRetryTimers = []
+
 async function loadSessionStats() {
   const id = chat.convId || socketState.sessionId
   if (!id) return
+  // 轮询与「完成后的补偿刷新」可能重叠，合并成一次请求
+  if (statsLoading) {
+    statsQueued = true
+    return
+  }
+  statsLoading = true
   try {
     const data = await fetchSessionStats(id)
     if (chat.convId === id || (!chat.convId && socketState.sessionId === id)) {
@@ -620,7 +631,23 @@ async function loadSessionStats() {
     }
   } catch (e) {
     console.warn('[chat] 会话统计加载失败:', e)
+  } finally {
+    statsLoading = false
+    if (statsQueued) {
+      statsQueued = false
+      loadSessionStats()
+    }
   }
+}
+
+// chat.completed 事件到达时数据库落库任务可能还没写完，单次刷新会读到旧值；
+// 在几个时间点补偿刷新，保证每轮结束后统计能自己更新
+function refreshStatsSoon() {
+  statsRetryTimers.forEach((t) => clearTimeout(t))
+  statsRetryTimers = []
+  ;[250, 900, 2200].forEach((ms) => {
+    statsRetryTimers.push(setTimeout(loadSessionStats, ms))
+  })
 }
 
 // ---------- 会话内搜索（Ctrl/Cmd + F） ----------
@@ -1310,20 +1337,25 @@ async function onLoadMore() {
 watch(
   () => chat.convId,
   () => {
+    statsRetryTimers.forEach((t) => clearTimeout(t))
+    statsRetryTimers = []
     sessionStats.value = null
     loadSessionStats()
   },
   { immediate: true }
 )
-// 一轮结束后落库完成，刷新底部统计
+// 一轮结束后数据库落库是异步的：稍后多点补偿刷新，同时常驻轮询兜底
 watch(
   () => chat.generating,
   (generating) => {
-    if (!generating) loadSessionStats()
+    if (generating) loadSessionStats()
+    else refreshStatsSoon()
   }
 )
 
 onMounted(() => {
+  // 底部统计常驻轮询：长会话/多窗口切换时不依赖 generating 边沿事件
+  statsPollTimer = setInterval(loadSessionStats, 3000)
   // 回到页面时若仍处于流式轮次，恢复滚动位置（进入页面默认贴底并恢复自动跟随）
   forceScrollBottom()
   // 刷新语音配置（用户在设置页可能改过自动朗读/语音等，回到聊天页即时生效）
@@ -1337,6 +1369,9 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  clearInterval(statsPollTimer)
+  statsRetryTimers.forEach((t) => clearTimeout(t))
+  statsRetryTimers = []
   clearTimeout(modelNoticeTimer)
   if (typeof offConfigChanged === 'function') offConfigChanged()
   offConfigChanged = null

@@ -254,23 +254,45 @@ function onPetLeave() {
 // 只做水平小步移动：窗口位移交给主进程（渲染层 screenX 会随窗口漂移，不能自己算），
 // 主进程负责按当前显示器工作区钳制，返回 moved=false 说明到边了，立即停下。
 let wanderStepTimer = null
-async function maybeWander() {
+async function maybeWander(force = false) {
   if (wandering) return
-  if (state.value !== 'idle' || hovered.value || bubbleText.value || inputOpen.value || dragging) return
+  // 主动点「散散步」时右键菜单还开着、鼠标仍悬在猫身上，不能沿用自动散步的 hover 守卫
+  if (force) {
+    if (dragging || state.value === 'drag') return
+  } else if (state.value !== 'idle' || hovered.value || bubbleText.value || inputOpen.value || dragging) {
+    return
+  }
+  if (inputOpen.value) return
   if (!window.petAPI || typeof window.petAPI.moveBy !== 'function') return
+
   wandering = true
+  if (force) hideBubble()
+  wake()
   const dir = Math.random() < 0.5 ? -1 : 1
   facingLeft.value = dir < 0
   setState('walk')
-  const steps = 16
+  // 主动散步走得更远一些；自动散步保持轻量
+  const steps = force ? 56 : 16
+  const delay = force ? 48 : 62
+  if (force && Math.random() < 0.7) showBubble('本喵去散散步～ 🐾', 1800)
+  let reversed = false
   for (let i = 0; i < steps; i++) {
     let res = null
     try {
       res = await window.petAPI.moveBy({ dx: dir * 3, dy: 0 })
     } catch { /* 移动失败就停在原地，不影响其它逻辑 */ }
-    if (!res || res.moved === false) break
-    await new Promise((r) => { wanderStepTimer = setTimeout(r, 62) })
-    if (state.value !== 'walk' || dragging || hovered.value) break
+    if (!res || res.moved === false) {
+      // 贴边时第一次朝外走不动：掉头再试，避免「点了散步没反应」
+      if (!reversed) {
+        reversed = true
+        dir = -dir
+        facingLeft.value = dir < 0
+        continue
+      }
+      break
+    }
+    await new Promise((r) => { wanderStepTimer = setTimeout(r, delay) })
+    if (state.value !== 'walk' || dragging || (!force && hovered.value)) break
   }
   clearTimeout(wanderStepTimer)
   if (state.value === 'walk') setState('idle')
@@ -389,7 +411,7 @@ function onQuickAskHotkey() {
 function onMenuAction({ action }) {
   if (action === 'chat') window.petAPI.showChat()
   else if (action === 'input') inputOpen.value ? closeInput() : openInput()
-  else if (action === 'walk') { maybeWander() }
+  else if (action === 'walk') { maybeWander(true) }
   else if (action === 'flip') { performTrick('flip') }
   else if (action === 'roll') { performTrick('roll') }
   else if (action === 'sleep') {
@@ -846,18 +868,21 @@ onBeforeUnmount(() => {
   100% { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) translateY(0) rotate(-360deg); }
 }
 
+/* 打滚：贴地侧向翻滚（3D Y 轴），与腾空 360° 的翻跟斗明确区分 */
 @keyframes pet-roll {
-  0%   { transform: translateX(-50%) scale(var(--pet-scale, 1)) translateY(0) rotate(0deg); }
-  45%  { transform: translateX(-50%) scale(var(--pet-scale, 1)) translateY(-10px) rotate(200deg); }
-  75%  { transform: translateX(-50%) scale(var(--pet-scale, 1)) translateY(0) rotate(360deg); }
-  100% { transform: translateX(-50%) scale(var(--pet-scale, 1)) translateY(0) rotate(360deg); }
+  0%   { transform: translateX(-50%) scale(var(--pet-scale, 1)) perspective(420px) rotateY(0deg) translateY(0); }
+  25%  { transform: translateX(-50%) scale(var(--pet-scale, 1)) perspective(420px) rotateY(90deg) translateY(-3px); }
+  50%  { transform: translateX(-50%) scale(var(--pet-scale, 1)) perspective(420px) rotateY(180deg) translateY(-5px); }
+  75%  { transform: translateX(-50%) scale(var(--pet-scale, 1)) perspective(420px) rotateY(270deg) translateY(-3px); }
+  100% { transform: translateX(-50%) scale(var(--pet-scale, 1)) perspective(420px) rotateY(360deg) translateY(0); }
 }
 
 @keyframes pet-roll-flipped {
-  0%   { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) translateY(0) rotate(0deg); }
-  45%  { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) translateY(-10px) rotate(-200deg); }
-  75%  { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) translateY(0) rotate(-360deg); }
-  100% { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) translateY(0) rotate(-360deg); }
+  0%   { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) perspective(420px) rotateY(0deg) translateY(0); }
+  25%  { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) perspective(420px) rotateY(-90deg) translateY(-3px); }
+  50%  { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) perspective(420px) rotateY(-180deg) translateY(-5px); }
+  75%  { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) perspective(420px) rotateY(-270deg) translateY(-3px); }
+  100% { transform: translateX(-50%) scaleX(-1) scale(var(--pet-scale, 1)) perspective(420px) rotateY(-360deg) translateY(0); }
 }
 
 @media (prefers-reduced-motion: reduce) {
