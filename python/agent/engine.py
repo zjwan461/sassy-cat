@@ -10,12 +10,9 @@ import logging
 import threading
 
 import aiosqlite
-from deepagents import create_deep_agent
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite.aio import AsyncSqliteStore
-
-from agent.shell_backend import create_shell_backend
 
 
 import config_loader
@@ -248,6 +245,11 @@ class AgentHolder:
         self._agent = None
 
     def _build(self):
+        # 延迟导入：deepagents + shell backend 会拉起较大的依赖树，
+        # 只在真正构建 Agent（首轮聊天/配置热重建）时加载，避免拖慢后端启动。
+        from deepagents import create_deep_agent
+        from agent.shell_backend import create_shell_backend
+
         cfg = config_loader.current()
         profile = cfg.active_llm_profile()
         llm = build_chat_llm(profile)

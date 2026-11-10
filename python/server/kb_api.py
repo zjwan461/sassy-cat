@@ -17,7 +17,6 @@ from uuid import uuid4
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
-from agent.rag.rag_service import get_rag_service
 from ocr.ocr_engine import do_ocr
 from server.bus import hub
 from server.db import kb_repository as kb_repo
@@ -26,6 +25,14 @@ import paths
 import utils
 
 logger = logging.getLogger(__name__)
+
+
+def get_rag_service(*args, **kwargs):
+    """延迟加载 RAG 服务：避免后端启动时导入 torch / sentence-transformers。"""
+    from agent.rag.rag_service import get_rag_service as _get_rag_service
+
+    return _get_rag_service(*args, **kwargs)
+
 
 router = APIRouter(prefix="/api/kb", tags=["knowledge-base"])
 

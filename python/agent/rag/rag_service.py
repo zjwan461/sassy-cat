@@ -5,7 +5,6 @@ RAG 服务：文档分块、写入知识库、语义查询
 from typing import List, Optional, Dict, Any
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
     MarkdownHeaderTextSplitter,
@@ -21,7 +20,6 @@ import logging
 import os
 import re
 import time
-import torch
 
 import paths
 import config_loader
@@ -85,6 +83,10 @@ class RAGService:
         emb_type = emb_cfg.get("type", "local")
         
         if emb_type == "local":
+            # 延迟导入：远程 embedding 配置无需加载 torch / sentence-transformers
+            import torch
+            from langchain_huggingface import HuggingFaceEmbeddings
+
             # 优先使用「智能下载」写入配置的本地模型目录（离线秒加载，不走网络）；
             # 未下载时回退为 HuggingFace 仓库名（首次使用会触发在线下载）
             local_path = emb_cfg.get("localPath") or ""

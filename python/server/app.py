@@ -16,7 +16,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from agent import engine as agent_engine
 from agent.tools import mcp_tools
 from agent.rag import model_download
-from agent.rag.rag_service import get_rag_service
 from ocr.ocr_engine import do_ocr
 from proactive import reminder_runner, scheduler
 from server.ws_agent import ws_agent_endpoint, drain_background_tasks, _spawn
@@ -164,6 +163,9 @@ def create_app() -> FastAPI:
                 "doc_id": doc_id,
                 "source": file_name,
             }
+            # 延迟导入：RAG 依赖 torch / sentence-transformers，仅在真正入库时加载
+            from agent.rag.rag_service import get_rag_service
+
             rag = get_rag_service()
             ids = await asyncio.to_thread(rag.save_document, content, metadata)
             if not ids:

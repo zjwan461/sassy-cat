@@ -7,8 +7,6 @@
 
 from langchain.tools import tool
 
-from agent.rag.rag_service import get_rag_service
-
 
 @tool(description="从知识库中搜索（混合检索：向量语义 + BM25 关键词）")
 def search_from_kb(kb_ids: list[str] | str, query: str, k: int = 4) -> str:
@@ -28,6 +26,9 @@ def search_from_kb(kb_ids: list[str] | str, query: str, k: int = 4) -> str:
     返回命中的分块内容，每块附带来源（源文件名或文档 ID）与相关度；
     未命中时返回提示，可尝试换一种问法或调整关键词后重试。
     """
+    # 延迟导入：RAG 服务会拉起 sentence-transformers / torch，放到首次检索时再加载
+    from agent.rag.rag_service import get_rag_service
+
     rag_service = get_rag_service()
 
     # 构造 Chroma where 过滤条件：单 ID 用等值，多 ID 用 $in，"all" 不过滤

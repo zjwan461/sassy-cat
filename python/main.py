@@ -22,6 +22,10 @@ import logging
 import os
 import socket
 import sys
+import time
+
+# 进程启动计时：用于日志里观察优化后的冷启动耗时（含 Python 导入）
+_BOOT_STARTED = time.perf_counter()
 
 # 确保以任意工作目录启动时都能导入本目录下的包
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -61,6 +65,8 @@ def _find_free_port(preferred: int) -> int:
 
 
 def _emit_ready(port: int):
+    elapsed = time.perf_counter() - _BOOT_STARTED
+    logger.info(f"后端就绪，启动耗时 {elapsed:.1f}s，端口 {port}")
     print(f'[READY] {json.dumps({"port": port})}', flush=True)
 
 

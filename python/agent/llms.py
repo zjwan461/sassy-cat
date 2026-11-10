@@ -1,5 +1,3 @@
-from langchain_openai import ChatOpenAI
-from langchain_deepseek import ChatDeepSeek
 import logging
 
 logger = logging.getLogger(__name__)
@@ -64,7 +62,9 @@ def _resolve_max_tokens(profile_cfg: dict, default: int = 8192) -> int | None:
 
 
 def build_openai_chat_llm(profile_cfg: dict):
-    # 默认使用 OpenAI 兼容模式
+    # 默认使用 OpenAI 兼容模式；延迟导入避免后端启动加载 langchain_openai
+    from langchain_openai import ChatOpenAI
+
     logger.info("构建provider=openai类型的llm")
     extra = dict(profile_cfg.get("extraParams") or {})
     return ChatOpenAI(
@@ -79,11 +79,12 @@ def build_openai_chat_llm(profile_cfg: dict):
 
 def build_ds_chat_llm(profile_cfg: dict):
     """由配置构建 ChatDeepSeek实例。reasonging放在reasoning_content中。
-
     profile_cfg 结构（来自 config.user.json 的 llm.profiles.*）：
      { baseUrl, apiKey, model, temperature, maxTokens, extraParams }
     """
     logger.info("构建provider=deepseek类型的llm")
+    from langchain_deepseek import ChatDeepSeek
+
     extra = dict(profile_cfg.get("extraParams") or {})
     return ChatDeepSeek(
         base_url=profile_cfg.get("baseUrl") or "http://localhost:8080/v1",
