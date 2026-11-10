@@ -1,68 +1,70 @@
 /* =========================================================
-   浅色主题：「宣纸 · 琥珀」
+   浅色主题：「霜白 · 墨青」
+   冷白纸面 + 石墨文字 + 深青强调色；不沿用深色主题的琥珀色。
    通过 html[data-theme="light"] 覆盖令牌，再对少量硬编码深色面板做定向修正。
    ========================================================= */
 
 html[data-theme='light'] {
   color-scheme: light;
 
-  --ink-1000: #FFFDF9;
-  --ink-950: #F6F4EF;
-  --ink-900: #EFEDE7;
-  --ink-850: #FCFBF8;
-  --ink-800: #F6F4EF;
-  --ink-750: #F0EEE8;
-  --ink-700: #E8E5DD;
-  --ink-600: #D8D3C8;
+  --ink-1000: #FFFFFF;
+  --ink-950: #F3F5F5;
+  --ink-900: #F8FAFA;
+  --ink-850: #FFFFFF;
+  --ink-800: #FBFCFC;
+  --ink-750: #F0F3F3;
+  --ink-700: #E7EBEA;
+  --ink-600: #D7DEDC;
 
-  --line-1: rgba(48, 42, 32, 0.075);
-  --line-2: rgba(48, 42, 32, 0.12);
-  --line-3: rgba(48, 42, 32, 0.19);
-  --line-4: rgba(48, 42, 32, 0.28);
+  --line-1: rgba(15, 39, 34, 0.075);
+  --line-2: rgba(15, 39, 34, 0.12);
+  --line-3: rgba(15, 39, 34, 0.19);
+  --line-4: rgba(15, 39, 34, 0.28);
 
-  --text-1: #26241F;
-  --text-2: #5E584D;
-  --text-3: #7E776B;
-  --text-4: #A09A8E;
-  --text-5: #C0BAAF;
+  --text-1: #0F1C1A;
+  --text-2: #44524F;
+  --text-3: #6C7A76;
+  --text-4: #93A09C;
+  --text-5: #B9C3C0;
 
-  --amber-100: #7A4A10;
-  --amber-200: #8D5817;
-  --amber-300: #A76A1D;
-  --amber-400: #C0842B;
-  --amber-500: #A66A1B;
-  --amber-600: #7D4E12;
-  --amber-ink: #FFF9ED;
-  --amber-a08: rgba(192, 132, 43, 0.09);
-  --amber-a12: rgba(192, 132, 43, 0.13);
-  --amber-a20: rgba(192, 132, 43, 0.2);
-  --amber-a35: rgba(192, 132, 43, 0.35);
-  --amber-a55: rgba(192, 132, 43, 0.55);
-  --amber-grad: linear-gradient(135deg, #E3AD58 0%, #C98C2E 52%, #B47820 100%);
+  /* 语义仍沿用 amber-* 变量名，浅色主题下映射为「墨青」强调色 */
+  --amber-100: #06463C;
+  --amber-200: #0A5648;
+  --amber-300: #0D6958;
+  --amber-400: #127A66;
+  --amber-500: #0B5F50;
+  --amber-600: #06483D;
+  --amber-ink: #FFFFFF;
+  --amber-a08: rgba(18, 122, 102, 0.08);
+  --amber-a12: rgba(18, 122, 102, 0.12);
+  --amber-a20: rgba(18, 122, 102, 0.2);
+  --amber-a35: rgba(18, 122, 102, 0.35);
+  --amber-a55: rgba(18, 122, 102, 0.55);
+  --amber-grad: linear-gradient(135deg, #1C8A74 0%, #127A66 55%, #0B5F50 100%);
 
-  --jade-400: #2F7D55;
-  --jade-a12: rgba(47, 125, 85, 0.12);
-  --coral-400: #B8493F;
-  --coral-a12: rgba(184, 73, 63, 0.12);
-  --azure-400: #396A9D;
-  --azure-a12: rgba(57, 106, 157, 0.12);
-  --lilac-400: #70559A;
-  --lilac-a12: rgba(112, 85, 154, 0.12);
-  --warn-400: #9A7417;
-  --warn-a12: rgba(154, 116, 23, 0.12);
+  --jade-400: #1F7A4D;
+  --jade-a12: rgba(31, 122, 77, 0.12);
+  --coral-400: #B64A44;
+  --coral-a12: rgba(182, 74, 68, 0.12);
+  --azure-400: #2E6F8E;
+  --azure-a12: rgba(46, 111, 142, 0.12);
+  --lilac-400: #6B5B95;
+  --lilac-a12: rgba(107, 91, 149, 0.12);
+  --warn-400: #946A12;
+  --warn-a12: rgba(148, 106, 18, 0.12);
 
-  --chart-1: #C0842B;
-  --chart-2: #4B7FB3;
-  --chart-3: #3A8C62;
-  --chart-4: #7A5FA8;
-  --chart-5: #C0574D;
-  --chart-6: #A98A4E;
+  --chart-1: #127A66;
+  --chart-2: #3E7FA3;
+  --chart-3: #2F8A5B;
+  --chart-4: #6B5B95;
+  --chart-5: #B64A44;
+  --chart-6: #8C7A55;
 
-  --shadow-1: 0 1px 2px rgba(70, 52, 28, 0.08);
-  --shadow-2: 0 10px 24px -12px rgba(70, 52, 28, 0.22);
-  --shadow-3: 0 28px 64px -24px rgba(70, 52, 28, 0.3);
-  --shadow-amber: 0 12px 30px -12px rgba(192, 132, 43, 0.24);
-  --hairline: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --shadow-1: 0 1px 2px rgba(16, 42, 36, 0.06);
+  --shadow-2: 0 12px 28px -14px rgba(16, 42, 36, 0.2);
+  --shadow-3: 0 32px 70px -26px rgba(16, 42, 36, 0.28);
+  --shadow-amber: 0 12px 30px -12px rgba(18, 122, 102, 0.24);
+  --hairline: inset 0 1px 0 rgba(255, 255, 255, 0.85);
 
   --bg-app: var(--ink-950);
   --bg-panel: var(--ink-900);
@@ -78,54 +80,57 @@ html[data-theme='light'] body {
 
 /* ---------- 顶栏 / 侧栏 ---------- */
 html[data-theme='light'] .titlebar {
-  background: linear-gradient(180deg, #FBFAF6 0%, #F2F0EA 100%);
+  background: rgba(255, 255, 255, 0.92);
   border-bottom-color: var(--line-2);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
 html[data-theme='light'] .tb-search {
-  background: rgba(255, 253, 248, 0.72);
-  border-color: var(--line-2);
+  background: #F3F5F5;
+  border-color: transparent;
 }
 
 html[data-theme='light'] .tb-search:hover {
-  background: #FFFDF8;
-  border-color: var(--line-3);
+  background: #FFFFFF;
+  border-color: var(--line-2);
 }
 
 html[data-theme='light'] .tb-btn:hover,
 html[data-theme='light'] .rail-toggle:hover {
-  background: rgba(62, 46, 24, 0.06);
+  background: rgba(15, 39, 34, 0.055);
 }
 
 html[data-theme='light'] .sidebar {
-  background: linear-gradient(180deg, #F3F1EC 0%, #ECE9E2 100%);
+  background: linear-gradient(180deg, #F8FAFA 0%, #F2F5F4 100%);
   border-right-color: var(--line-2);
 }
 
 html[data-theme='light'] .nav-item:hover {
-  background: rgba(62, 46, 24, 0.045);
+  background: rgba(15, 39, 34, 0.045);
 }
 
 html[data-theme='light'] .nav-item.active {
   background: var(--amber-a12);
   border-color: var(--amber-a20);
+  box-shadow: inset 2px 0 0 var(--amber-400);
 }
 
 html[data-theme='light'] .recent-item:hover {
-  background: rgba(62, 46, 24, 0.05);
+  background: rgba(15, 39, 34, 0.05);
 }
 
 /* ---------- 内容区 / 卡片 ---------- */
 html[data-theme='light'] .content {
   background:
-    radial-gradient(900px 500px at 18% -10%, rgba(192, 132, 43, 0.06), transparent 65%),
+    radial-gradient(1000px 520px at 16% -12%, rgba(18, 122, 102, 0.055), transparent 60%),
     var(--ink-950);
 }
 
 html[data-theme='light'] .page-header {
-  background: rgba(246, 244, 239, 0.9);
+  background: rgba(255, 255, 255, 0.88);
   border-bottom-color: var(--line-2);
+  backdrop-filter: blur(16px) saturate(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
 }
 
 html[data-theme='light'] .page-header .page-title {
@@ -134,29 +139,35 @@ html[data-theme='light'] .page-header .page-title {
 
 html[data-theme='light'] .card {
   border-color: var(--line-2);
-  box-shadow: 0 1px 2px rgba(70, 52, 28, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  box-shadow:
+    0 1px 2px rgba(16, 42, 36, 0.04),
+    0 8px 24px -20px rgba(16, 42, 36, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
 html[data-theme='light'] .composer {
-  background: #FFFDF8;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8);
+  background: #FFFFFF;
+  border-color: var(--line-2);
+  box-shadow:
+    0 1px 2px rgba(16, 42, 36, 0.04),
+    0 10px 28px -22px rgba(16, 42, 36, 0.2);
 }
 
 html[data-theme='light'] .queue-item {
-  background: rgba(255, 253, 248, 0.82);
+  background: rgba(255, 255, 255, 0.88);
 }
 
 html[data-theme='light'] .queue-panel {
-  background: linear-gradient(180deg, rgba(192, 132, 43, 0.09), rgba(192, 132, 43, 0.035));
+  background: linear-gradient(180deg, rgba(18, 122, 102, 0.075), rgba(18, 122, 102, 0.028));
 }
 
 html[data-theme='light'] .conv-panel {
-  background: rgba(62, 46, 24, 0.035);
+  background: rgba(15, 39, 34, 0.028);
   border-right-color: var(--line-2);
 }
 
 html[data-theme='light'] .cs-pill:hover {
-  background: rgba(48, 42, 32, 0.05);
+  background: rgba(15, 39, 34, 0.05);
 }
 
 html[data-theme='light'] .cs-ring::after {
@@ -164,7 +175,12 @@ html[data-theme='light'] .cs-ring::after {
 }
 
 html[data-theme='light'] .conv-item:hover {
-  background: rgba(62, 46, 24, 0.045);
+  background: rgba(15, 39, 34, 0.045);
+}
+
+html[data-theme='light'] .conv-item.active {
+  background: linear-gradient(90deg, rgba(18, 122, 102, 0.12), rgba(18, 122, 102, 0.015));
+  box-shadow: inset 0 0 0 1px rgba(18, 122, 102, 0.14);
 }
 
 html[data-theme='light'] .chat-main,
@@ -172,11 +188,24 @@ html[data-theme='light'] .msg-list {
   background: var(--ink-950);
 }
 
+html[data-theme='light'] .input-area {
+  background: #F6F8F7;
+  border-top-color: var(--line-2);
+}
+
+html[data-theme='light'] .msg.user .msg-content {
+  color: var(--text-1);
+  background:
+    linear-gradient(155deg, rgba(18, 122, 102, 0.1), rgba(18, 122, 102, 0.025)),
+    #FFFFFF;
+  border-color: rgba(18, 122, 102, 0.16);
+}
+
 /* ---------- 浮层：命令面板 / 快捷键 / 通知 / 引用 ---------- */
 html[data-theme='light'] .gs-overlay,
 html[data-theme='light'] .sk-overlay,
 html[data-theme='light'] .nc-overlay {
-  background: rgba(54, 40, 22, 0.28);
+  background: rgba(10, 26, 22, 0.3);
 }
 
 html[data-theme='light'] .gs-panel,
@@ -185,9 +214,9 @@ html[data-theme='light'] .nc-panel,
 html[data-theme='light'] .citation-panel,
 html[data-theme='light'] .modal,
 html[data-theme='light'] .md-preview-panel {
-  background: linear-gradient(180deg, #FFFDF8 0%, #FBF5EA 100%);
+  background: #FFFFFF;
   border-color: var(--line-2);
-  box-shadow: 0 30px 80px -24px rgba(70, 52, 28, 0.35);
+  box-shadow: 0 30px 80px -24px rgba(16, 42, 36, 0.32);
 }
 
 html[data-theme='light'] .gs-input-row,
@@ -209,24 +238,24 @@ html[data-theme='light'] .gs-item.active {
 html[data-theme='light'] .gs-kbd,
 html[data-theme='light'] .sk-keys kbd,
 html[data-theme='light'] .tb-kbd {
-  background: rgba(62, 46, 24, 0.06);
+  background: rgba(15, 39, 34, 0.055);
   border-color: var(--line-2);
   color: var(--text-3);
 }
 
 /* ---------- Markdown 代码块：浅色主题下保留深色代码底 ---------- */
 html[data-theme='light'] .markdown-body pre {
-  background: #1A1F28;
+  background: #111A18;
   border-color: rgba(255, 255, 255, 0.08);
 }
 
 html[data-theme='light'] .markdown-body :not(pre) > code {
-  color: #7A4A10;
-  background: rgba(192, 132, 43, 0.13);
+  color: #0A5648;
+  background: rgba(18, 122, 102, 0.1);
 }
 
 html[data-theme='light'] .markdown-body blockquote {
-  background: rgba(192, 132, 43, 0.06);
+  background: rgba(18, 122, 102, 0.055);
   border-left-color: var(--amber-a55);
 }
 
@@ -235,18 +264,18 @@ html[data-theme='light'] input,
 html[data-theme='light'] textarea,
 html[data-theme='light'] select {
   color: var(--text-1);
-  background-color: #FFFDF8;
+  background-color: #FFFFFF;
 }
 
 html[data-theme='light'] ::selection {
-  background: rgba(192, 132, 43, 0.24);
+  background: rgba(18, 122, 102, 0.2);
   color: var(--text-1);
 }
 
 html[data-theme='light'] ::-webkit-scrollbar-thumb {
-  background: rgba(62, 46, 24, 0.18);
+  background: rgba(15, 39, 34, 0.16);
 }
 
 html[data-theme='light'] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(62, 46, 24, 0.28);
+  background: rgba(15, 39, 34, 0.26);
 }

@@ -32,7 +32,7 @@
         <span class="card-icon"><AppIcon name="sun" :size="15" /></span>
         <div class="card-head-main">
           <div class="card-title">外观主题</div>
-          <div class="card-sub">墨夜琥珀 / 宣纸琥珀，切换立即生效</div>
+          <div class="card-sub">墨夜琥珀 / 霜白墨青，切换立即生效</div>
         </div>
       </div>
       <div class="card-body form">

@@ -439,12 +439,12 @@
             <span>{{ sessionStats.turns }} 轮 {{ sessionStats.steps }} 步</span>
             <template v-if="sessionStats.tokensPerSecond != null">
               <span class="cs-sep">·</span>
-              <span>{{ sessionStats.tokensPerSecond }} tok/s</span>
+              <span>{{ sessionStats.estimated ? '≈' : '' }}{{ sessionStats.tokensPerSecond }} tok/s</span>
             </template>
           </div>
           <div v-if="sessionStats.totalTokens" class="cs-pill" :title="`输入 ${fmtStatInt(sessionStats.inputTokens)} · 输出 ${fmtStatInt(sessionStats.outputTokens)}`">
             <AppIcon name="database" :size="14" />
-            <span>{{ fmtStatTokens(sessionStats.totalTokens) }} tok</span>
+            <span>{{ sessionStats.estimated ? '≈' : '' }}{{ fmtStatTokens(sessionStats.totalTokens) }} tok</span>
             <template v-if="sessionStats.cacheHitRate != null">
               <span class="cs-sep">·</span>
               <span>缓存命中 {{ Math.round(sessionStats.cacheHitRate * 100) }}%</span>
@@ -453,7 +453,7 @@
           <div
             v-if="sessionStats.contextPercent"
             class="cs-context"
-            :title="`上下文 ${fmtStatInt(sessionStats.contextTokens)} / ${fmtStatInt(sessionStats.contextWindow)}`"
+            :title="`${sessionStats.estimated ? '估算 ' : ''}上下文 ${fmtStatInt(sessionStats.contextTokens)} / ${fmtStatInt(sessionStats.contextWindow)}`"
           >
             <span
               class="cs-ring"

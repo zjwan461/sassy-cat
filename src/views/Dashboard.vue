@@ -199,6 +199,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } fr
 import { useRouter } from 'vue-router'
 import { fetchDashboardStats, fetchUsageStats } from '../api/stats'
 import { useAgentSocket } from '../composables/useAgentSocket'
+import { useTheme } from '../composables/useTheme'
 import { switchConversation } from '../composables/useChatStore'
 import AppIcon from '../components/AppIcon.vue'
 
@@ -215,7 +216,7 @@ echarts.use([
 ])
 
 // ---------- 主题色：与 tokens.css 的「墨夜 · 琥珀」保持一致 ----------
-const COLOR = {
+const DARK_COLORS = {
   text: '#7B8392',
   textStrong: '#EBE9E4',
   axis: 'rgba(255,255,255,0.10)',
@@ -229,6 +230,29 @@ const COLOR = {
   coral: '#E9776E',
   lilac: '#C0A6E8',
   track: 'rgba(255,255,255,0.055)',
+}
+
+const LIGHT_COLORS = {
+  text: '#6C7A76',
+  textStrong: '#0F1C1A',
+  axis: 'rgba(15,39,34,0.12)',
+  split: 'rgba(15,39,34,0.06)',
+  tooltipBg: 'rgba(255,255,255,0.98)',
+  tooltipBorder: 'rgba(15,39,34,0.12)',
+  amber: '#127A66',
+  amberDeep: '#0A5648',
+  azure: '#3E7FA3',
+  jade: '#2F8A5B',
+  coral: '#B64A44',
+  lilac: '#6B5B95',
+  track: 'rgba(15,39,34,0.07)',
+}
+
+const COLOR = { ...DARK_COLORS }
+const { resolved: chartTheme } = useTheme()
+
+function applyChartColors() {
+  Object.assign(COLOR, chartTheme.value === 'light' ? LIGHT_COLORS : DARK_COLORS)
 }
 
 // ---------- 数据状态 ----------
@@ -388,6 +412,7 @@ function emptyGraphic(text) {
 }
 
 function initCharts() {
+  applyChartColors()
   disposeCharts()
   const d = stats.value || baseEmpty
   const list = []
@@ -575,6 +600,11 @@ function initCharts() {
 
   charts.value = list
 }
+
+// 主题切换后重建图表，让坐标轴/提示框/色板跟随浅色主题
+watch(chartTheme, () => {
+  if (charts.value.length) initCharts()
+})
 
 const handleResize = () => charts.value.forEach((c) => c.resize())
 

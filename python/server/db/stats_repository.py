@@ -312,8 +312,24 @@ async def usage_stats(session_limit: int = 8) -> dict:
     }
 
 
+def _estimate_tokens(text: str | None) -> int:
+    """没有 provider usage 时的粗略 token 估算：CJK 约 1.5 字/token，其余约 4 字符/token。"""
+    if not text:
+        return 0
+    cjk = 0
+    for ch in text:
+        if "\u4e00" <= ch <= "\u9fff" or "\u3040" <= ch <= "\u30ff":
+            cjk += 1
+    other = len(text) - cjk
+    return int(cjk / 1.5 + other / 4)
+
+
 async def session_stats(session_id: str) -> dict:
-    """当前会话底部统计：轮次/步数、Token、缓存命中、输出速度与上下文占用。"""
+    """当前会话底部统计：轮次/步数、Token、缓存命中、输出速度与上下文占用。
+
+    部分 OpenAI-compatible 服务不返回 usage；此时按正文字符估算并标记 estimated，
+    保证速度/上下文至少可用，前端会加 ≈ 提示。
+    """
     async with get_session() as session:
         rows = (
             await session.execute(
@@ -321,6 +337,10 @@ async def session_stats(session_id: str) -> dict:
                     Message.role,
                     Message.usage_metadata,
                     Message.tool_calls,
+                    Message.tool_call_args,
+                    Message.tool_call_result,
+                    Message.content,
+                    Message.reasoning,
                     Message.duration_ms,
                     Message.model,
                     Message.created_at,
@@ -338,12 +358,33 @@ async def session_stats(session_id: str) -> dict:
     duration_ms = 0
     latest_usage: dict = {}
     latest_model = None
+    estimated_context = 0
+    estimated_output = 0
+    last_output_tokens = 0
+    last_duration_ms = 0
 
-    for role, usage_text, tool_calls_text, row_duration, model, _created_at in rows:
+    for (
+        role,
+        usage_text,
+        tool_calls_text,
+        tool_args_text,
+        tool_result_text,
+        content,
+        reasoning,
+        row_duration,
+        model,
+        _created_at,
+    ) in rows:
+        text_for_context = "\n".join(
+            x for x in (content, reasoning, tool_args_text, tool_result_text) if x
+        )
+        estimated_context += _estimate_tokens(text_for_context)
+
         if role == "user":
             turns += 1
         if role != "assistant":
             continue
+
         steps += 1
         try:
             calls = json.loads(tool_calls_text) if tool_calls_text else []
@@ -351,10 +392,17 @@ async def session_stats(session_id: str) -> dict:
                 steps += len(calls)
         except (TypeError, ValueError):
             pass
+
+        estimated_output += _estimate_tokens("\n".join(x for x in (content, reasoning) if x))
+
         try:
             usage = json.loads(usage_text) if usage_text else {}
         except (TypeError, ValueError):
             usage = {}
+        last_output_tokens = int(usage.get("output_tokens") or 0) if usage else 0
+        if not last_output_tokens:
+            last_output_tokens = _estimate_tokens("\n".join(x for x in (content, reasoning) if x))
+        last_duration_ms = int(row_duration or 0)
         if usage:
             latest_usage = usage
             input_tokens += int(usage.get("input_tokens") or 0)
@@ -376,12 +424,22 @@ async def session_stats(session_id: str) -> dict:
     except Exception:
         pass
 
-    context_tokens = int(latest_usage.get("total_tokens") or 0)
-    speed = (
-        round(output_tokens / (duration_ms / 1000), 1)
-        if duration_ms > 300 and output_tokens > 0
-        else None
+    estimated = input_tokens == 0 and output_tokens == 0 and estimated_output > 0
+    if estimated:
+        # 加上系统提示词/工具 schema 的大致固定开销，避免上下文百分比低得不真实
+        input_tokens = estimated_context + 3000
+        output_tokens = estimated_output
+
+    context_tokens = (
+        int(latest_usage.get("total_tokens") or 0)
+        if not estimated
+        else estimated_context + 3000
     )
+    speed = None
+    if last_duration_ms > 300 and last_output_tokens > 0:
+        speed = round(last_output_tokens / (last_duration_ms / 1000), 1)
+    elif duration_ms > 300 and output_tokens > 0:
+        speed = round(output_tokens / (duration_ms / 1000), 1)
     return {
         "sessionId": session_id,
         "turns": turns,
@@ -390,7 +448,7 @@ async def session_stats(session_id: str) -> dict:
         "outputTokens": output_tokens,
         "totalTokens": input_tokens + output_tokens,
         "cacheReadTokens": cache_read,
-        "cacheHitRate": round(cache_read / input_tokens, 4) if input_tokens else None,
+        "cacheHitRate": round(cache_read / input_tokens, 4) if input_tokens and not estimated else None,
         "durationMs": duration_ms,
         "tokensPerSecond": speed,
         "contextTokens": context_tokens,
@@ -399,4 +457,5 @@ async def session_stats(session_id: str) -> dict:
             round(context_tokens / context_window * 100, 1) if context_window else None
         ),
         "model": latest_model,
+        "estimated": estimated,
     }
