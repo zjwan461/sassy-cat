@@ -43,6 +43,23 @@ def main():
             check("相对路径正确", item.get("path") == "demo.txt", str(item.get("path")))
             check("行数统计正确", item.get("lines") == 3, str(item.get("lines")))
 
+            # execute/shell 命令创建的文件同样必须能展示：present 不关心文件由哪个工具写入
+            from agent.shell_backend import create_shell_backend
+
+            shell = create_shell_backend(ws)
+            cmd = (
+                "Set-Content -LiteralPath 'cmd-created.txt' -Value 'from execute' -Encoding utf8"
+                if os.name == "nt"
+                else "printf 'from execute\\n' > cmd-created.txt"
+            )
+            result = shell.execute(cmd)
+            check("execute 创建文件成功", result.exit_code == 0, result.output[:120])
+
+            raw = present.invoke({"files": ["cmd-created.txt"], "title": "命令产物"})
+            data = json.loads(raw)
+            names = [f.get("name") for f in data.get("files", [])]
+            check("execute 创建的文件可被 present", names == ["cmd-created.txt"], str(names))
+
             outside_file = os.path.join(outside, "outside.txt")
             with open(outside_file, "w", encoding="utf-8") as f:
                 f.write("outside")

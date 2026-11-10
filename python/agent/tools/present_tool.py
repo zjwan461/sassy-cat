@@ -84,12 +84,13 @@ def _git_stats(root: Path, target: Path, lines: int) -> dict[str, Any]:
         return {}
 
 
-@tool(description="把本轮新建或修改的文件展示给用户（聊天中渲染文件卡片）。")
+@tool(description="把本轮新建或修改的文件展示给用户（聊天中渲染文件卡片），包括 execute/shell 命令产生的文件。")
 def present(files: list[str] | str, title: str = "", summary: str = "") -> str:
     """展示本轮产出/修改的文件。
 
-    触发场景：只要本轮用 write_file / edit_file 新建或修改了文件，**收尾时必须调用**
-    本工具，把相关文件展示给主人；纯问答、只读检索、只运行命令且未改文件时不要调用。
+    触发场景：只要本轮**新建或修改了文件**——无论通过 write_file / edit_file，
+    还是通过 execute 执行 shell 命令、脚本、构建产生——**收尾时必须调用**本工具，
+    把相关文件展示给主人；纯问答、只读检索、只运行命令且没有文件落盘时不要调用。
 
     参数：
     - files: 文件路径列表（相对当前工作区；也接受绝对路径，但必须在工作区内）。
