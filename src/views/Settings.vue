@@ -26,8 +26,38 @@
     </header>
 
     <div class="settings-grid">
+    <!-- 外观主题 -->
+    <section class="card wide">
+      <div class="card-header">
+        <span class="card-icon"><AppIcon name="sun" :size="15" /></span>
+        <div class="card-head-main">
+          <div class="card-title">外观主题</div>
+          <div class="card-sub">墨夜琥珀 / 宣纸琥珀，切换立即生效</div>
+        </div>
+      </div>
+      <div class="card-body form">
+        <div class="field">
+          <label>主题模式</label>
+          <div class="theme-picker">
+            <button
+              v-for="opt in themeOptions"
+              :key="opt.value"
+              type="button"
+              class="theme-option"
+              :class="{ active: themeMode === opt.value }"
+              @click="setTheme(opt.value)"
+            >
+              <AppIcon :name="opt.icon" :size="16" />
+              <span>{{ opt.label }}</span>
+            </button>
+          </div>
+          <span class="hint">「跟随系统」会随操作系统的浅色/深色外观自动切换；选择保存在本机</span>
+        </div>
+      </div>
+    </section>
+
     <!-- 模型连接 -->
-    <section class="card">
+    <section class="card wide">
       <div class="card-header">
         <span class="card-icon"><AppIcon name="plug" :size="15" /></span>
         <div class="card-head-main">
@@ -174,7 +204,7 @@
     </section>
 
     <!-- Agent 配置 -->
-    <section class="card">
+    <section class="card wide">
       <div class="card-header">
         <span class="card-icon"><AppIcon name="brain" :size="15" /></span>
         <div class="card-head-main">
@@ -789,6 +819,7 @@ import { useAgentSocket } from '../composables/useAgentSocket'
 import { useRestartState } from '../composables/useRestartState'
 import { useModelDownloadState } from '../composables/useModelDownloadState'
 import { useTTS } from '../composables/useTTS'
+import { useTheme } from '../composables/useTheme'
 import { downloadEmbeddingModel } from '../api/embeddingModelDownload'
 import { getRagHealth, getRebuildStatus, rebuildKbIndex } from '../api/kb'
 import { exportBackup } from '../api/backup'
@@ -796,6 +827,12 @@ import AppIcon from '../components/AppIcon.vue'
 
 const { connect, send, on } = useAgentSocket()
 const api = window.electronAPI
+const { mode: themeMode, setTheme } = useTheme()
+const themeOptions = [
+  { value: 'dark', label: '深色', icon: 'moon' },
+  { value: 'light', label: '浅色', icon: 'sun' },
+  { value: 'system', label: '跟随系统', icon: 'monitor' },
+]
 const route = useRoute()
 // 语音朗读（TTS）：中文语音枚举、试听、配置刷新
 const { getZhVoices, testVoice, loadConfig: loadTtsConfig, ttsState, speaking } = useTTS()
@@ -1735,13 +1772,8 @@ onBeforeUnmount(() => {
   .settings-grid {
     grid-template-columns: 1fr 1fr;
   }
-  /* 模型连接和 Agent 配置占满整行（内容较多） */
-  .settings-grid .card:nth-child(1),
-  .settings-grid .card:nth-child(2) {
-    grid-column: 1 / -1;
-  }
 }
-/* 内容较长的卡片（如 dsh 子代理）显式占满整行，不依赖 nth-child 位置 */
+/* 内容较长的卡片（主题/模型/Agent/备份等）显式占满整行，不依赖 nth-child 位置 */
 .settings-grid .card.wide {
   grid-column: 1 / -1;
 }
@@ -1886,6 +1918,43 @@ onBeforeUnmount(() => {
   border-top-color: currentColor;
   border-radius: 50%;
   animation: spin 0.75s linear infinite;
+}
+
+/* ===== 主题选择 ===== */
+.theme-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.theme-option {
+  flex: 1;
+  min-width: 120px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 38px;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
+}
+
+.theme-option:hover {
+  color: var(--text-1);
+  border-color: var(--line-3);
+}
+
+.theme-option.active {
+  color: var(--amber-200);
+  background: var(--amber-a12);
+  border-color: var(--amber-a35);
 }
 
 /* ===== 数据备份 ===== */

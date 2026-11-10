@@ -33,6 +33,8 @@ class Message(Base):
     interrupt_decisions = Column(Text)                 # 人工审核的工具记录
     tool_call_result = Column(Text)                    # 工具调用结果
     usage_metadata = Column(Text)                      # token 用量 JSON，如 {"input_tokens":..,"output_tokens":..,"total_tokens":..} (仅 assistant)
+    model = Column(String)                             # 本轮使用的模型名（用于用量面板按模型统计）
+    duration_ms = Column(Integer)                      # 本轮生成耗时（毫秒，含工具/中断续跑累计）
     error = Column(Text)                               # 生成失败提示文案（为空表示正常完成，仅 assistant）
     subagent_name = Column(String)                     # 子 agent 来源标识（如 'dsh'；主 agent 自身产出为 NULL）(仅 assistant)
     segments = Column(Text)                            # 分段来源 JSON，如 [{"agent":"dsh","text":"..."}]，仅含子 agent 产出时写入

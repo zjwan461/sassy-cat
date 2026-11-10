@@ -34,6 +34,17 @@ from server.db import (
 
 logger = logging.getLogger(__name__)
 
+
+def _active_model_name() -> str:
+    """当前激活配置档的模型名，用于用量统计；取不到时回退到配置档名。"""
+    try:
+        llm = config_loader.current().get("llm") or {}
+        active = llm.get("activeProfile") or "default"
+        profile = (llm.get("profiles") or {}).get(active) or {}
+        return str(profile.get("model") or active or "未知模型")
+    except Exception:
+        return "未知模型"
+
 # 每个 session 的运行态：当前取消事件
 _session_cancel: dict[str, threading.Event] = {}
 
@@ -235,6 +246,8 @@ async def _save_or_update_assistant_message_sage(
     interrupt_actions: list | None = None,
     tool_call_result: list | None = None,
     usage_metadata: dict | None = None,
+    model: str | None = None,
+    duration_ms: int | None = None,
     error: str | None = None,
     subagent_name: str | None = None,
     segments: list | None = None,
@@ -259,6 +272,9 @@ async def _save_or_update_assistant_message_sage(
             usage_metadata = (message.get("usageMetadata") or {}) | (
                 usage_metadata or {}
             )
+            # 多轮续跑（工具确认/重试）累计耗时；模型取最新一轮
+            duration_ms = (message.get("durationMs") or 0) + (duration_ms or 0)
+            model = model or message.get("model")
             # 分段来源跨轮次累积（与 content 的拼接语义一致）；None 表示不改动
             if segments is not None:
                 segments = _merge_agent_segments(message.get("segments"), segments)
@@ -273,6 +289,8 @@ async def _save_or_update_assistant_message_sage(
                 interrupt_actions=interrupt_actions,
                 tool_call_result=tool_call_result,
                 usage_metadata=usage_metadata,
+                model=model,
+                duration_ms=duration_ms,
                 error=error,
                 subagent_name=subagent_name,
                 segments=segments,
@@ -291,6 +309,8 @@ async def _save_or_update_assistant_message_sage(
                 interrupt_actions=interrupt_actions,
                 tool_call_result=tool_call_result,
                 usage_metadata=usage_metadata,
+                model=model,
+                duration_ms=duration_ms,
                 error=error,
                 subagent_name=subagent_name,
                 segments=segments,
@@ -311,6 +331,9 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
 
     global _running_turns
     _running_turns += 1
+
+    turn_started = time.monotonic()
+    turn_model = _active_model_name()
 
     buffer = []
     buffer_agent = None  # 当前 buffer 的来源：None=主 agent 自己，'dsh'=子 agent 产出
@@ -348,6 +371,8 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 interrupt_actions=interrupt_actions if interrupt_actions else None,
                 tool_call_result=tool_call_result if tool_call_result else None,
                 usage_metadata=usage_metadata,
+                model=turn_model,
+                duration_ms=int((time.monotonic() - turn_started) * 1000),
                 error=error,
                 subagent_name=subagent_name,
                 segments=subagent_segments if subagent_name else None,

@@ -64,6 +64,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { conv, loadConversations, newConversation, switchConversation } from '../composables/useChatStore'
 import { useFocusTrap } from '../composables/useFocusTrap'
+import { useTheme } from '../composables/useTheme'
 import AppIcon from './AppIcon.vue'
 
 const props = defineProps({
@@ -74,6 +75,7 @@ const emit = defineEmits(['close'])
 const router = useRouter()
 const inputEl = ref(null)
 const panelEl = ref(null)
+const { resolved: themeResolved, toggleTheme } = useTheme()
 useFocusTrap(panelEl, computed(() => props.open))
 const query = ref('')
 const activeIndex = ref(0)
@@ -115,6 +117,14 @@ const ACTIONS = computed(() => [
       const res = await api.setConfig('pet.enabled', next)
       if (res?.success) petEnabled.value = next
     },
+  },
+  {
+    title: '切换浅色 / 深色主题',
+    desc: themeResolved.value === 'light' ? '当前浅色，切到深色' : '当前深色，切到浅色',
+    icon: themeResolved.value === 'light' ? 'moon' : 'sun',
+    hint: '操作',
+    keywords: 'theme 主题 浅色 深色 dark light',
+    run: () => toggleTheme(),
   },
   {
     title: '快捷键帮助',

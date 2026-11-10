@@ -12,6 +12,9 @@ import Settings from './views/Settings.vue'
 import KnowledgeBase from './views/KnowledgeBase.vue'
 import KnowledgeBaseDetail from './views/KnowledgeBaseDetail.vue'
 import './styles.css'
+import { initTheme } from './composables/useTheme'
+
+initTheme()
 
 const routes = [
   { path: '/', component: Dashboard },

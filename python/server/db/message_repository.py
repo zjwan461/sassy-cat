@@ -45,6 +45,8 @@ def _message_to_dict(msg: Message) -> dict:
         "interruptDecisions": _load_json(msg.interrupt_decisions),
         "toolCallResult": _load_json(msg.tool_call_result),
         "usageMetadata": _load_json(msg.usage_metadata),
+        "model": msg.model,
+        "durationMs": msg.duration_ms,
         "error": msg.error,
         "subagentName": msg.subagent_name,
         "segments": _load_json(msg.segments),
@@ -77,6 +79,8 @@ async def save_message(
     interrupt_decisions: Optional[list] = None,
     tool_call_result: Optional[list] = None,
     usage_metadata: Optional[dict] = None,
+    model: Optional[str] = None,
+    duration_ms: Optional[int] = None,
     error: Optional[str] = None,
     subagent_name: Optional[str] = None,
     segments: Optional[list] = None,
@@ -116,6 +120,8 @@ async def save_message(
                 interrupt_decisions=json.dumps(interrupt_decisions, ensure_ascii=False) if interrupt_decisions else None,
                 tool_call_result=json.dumps(tool_call_result, ensure_ascii=False) if tool_call_result else None,
                 usage_metadata=json.dumps(usage_metadata, ensure_ascii=False) if usage_metadata else None,
+                model=model,
+                duration_ms=duration_ms,
                 error=error,
                 subagent_name=subagent_name,
                 segments=json.dumps(segments, ensure_ascii=False) if segments else None,
@@ -145,6 +151,8 @@ async def update_message(
     interrupt_decisions: Optional[list] = None,
     tool_call_result: Optional[list] = None,
     usage_metadata: Optional[dict] = None,
+    model: Optional[str] = None,
+    duration_ms: Optional[int] = None,
     error: Optional[str] = None,
     subagent_name: Optional[str] = None,
     segments: Optional[list] = None,
@@ -191,6 +199,10 @@ async def update_message(
             values["tool_call_result"] = json.dumps(tool_call_result, ensure_ascii=False)
         if usage_metadata is not None:
             values["usage_metadata"] = json.dumps(usage_metadata, ensure_ascii=False)
+        if model is not None:
+            values["model"] = model
+        if duration_ms is not None:
+            values["duration_ms"] = duration_ms
         if error is not None:
             values["error"] = error
         if subagent_name is not None:

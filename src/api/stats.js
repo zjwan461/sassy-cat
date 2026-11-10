@@ -33,3 +33,36 @@ export async function fetchDashboardStats(trendDays = 7) {
   }
   return response.json()
 }
+
+/** 按模型/会话的用量统计（Token、平均耗时、失败率） */
+export async function fetchUsageStats(sessionLimit = 8) {
+  const url = `${baseUrl()}/api/stats/usage?session_limit=${sessionLimit}`
+  let response
+  try {
+    response = await fetch(url)
+  } catch (e) {
+    throw new Error(`连不上本地服务 ${url}（${e.message}）`)
+  }
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }))
+    throw new Error(err.detail || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+/** 当前会话底部统计 */
+export async function fetchSessionStats(sessionId) {
+  if (!sessionId) return null
+  const url = `${baseUrl()}/api/stats/session?session_id=${encodeURIComponent(sessionId)}`
+  let response
+  try {
+    response = await fetch(url)
+  } catch (e) {
+    throw new Error(`连不上本地服务 ${url}（${e.message}）`)
+  }
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }))
+    throw new Error(err.detail || `HTTP ${response.status}`)
+  }
+  return response.json()
+}

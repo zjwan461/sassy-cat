@@ -76,6 +76,94 @@
         <div ref="trendRef" class="chart-box" style="height: 292px"></div>
       </section>
 
+      <!-- 用量与成本：按模型 / 会话 -->
+      <section class="card usage-card">
+        <div class="card-header">
+          <div class="card-head-main">
+            <span class="card-title">用量与成本</span>
+            <span class="card-sub">按模型与会话统计 Token、平均耗时和失败率；模型与耗时从本版本开始记录</span>
+          </div>
+          <span v-if="usageLoading" class="usage-loading"><span class="ui-spinner"></span></span>
+        </div>
+
+        <div v-if="usage?.summary" class="usage-summary">
+          <div v-for="s in usageSummary" :key="s.label" class="usage-summary-item">
+            <span class="usage-summary-value tabular">{{ s.value }}</span>
+            <span class="usage-summary-label">{{ s.label }}</span>
+          </div>
+        </div>
+
+        <div class="usage-grid">
+          <div class="usage-block">
+            <div class="usage-block-head">
+              <span>按模型</span>
+              <span class="usage-block-sub">仅统计有 Token 记录的轮次</span>
+            </div>
+            <div class="usage-table-wrap">
+              <table class="usage-table">
+                <thead>
+                  <tr>
+                    <th>模型</th>
+                    <th class="num">轮次</th>
+                    <th class="num">输入 / 输出</th>
+                    <th class="num">平均耗时</th>
+                    <th class="num">失败率</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in usage?.models || []" :key="row.model">
+                    <td class="usage-name" :title="row.model">{{ row.model }}</td>
+                    <td class="num tabular">{{ fmtInt(row.turns) }}</td>
+                    <td class="num tabular">{{ fmtInt(row.inputTokens) }} / {{ fmtInt(row.outputTokens) }}</td>
+                    <td class="num tabular">{{ fmtDuration(row.avgDurationMs) }}</td>
+                    <td class="num tabular" :class="{ 'usage-bad': row.failureRate > 0 }">{{ fmtRate(row.failureRate) }}</td>
+                  </tr>
+                  <tr v-if="!usage?.models?.length">
+                    <td colspan="5" class="usage-empty">还没有模型用量记录</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="usage-block">
+            <div class="usage-block-head">
+              <span>按会话（Token 前 8）</span>
+              <span class="usage-block-sub">点击会话可继续对话</span>
+            </div>
+            <div class="usage-table-wrap">
+              <table class="usage-table">
+                <thead>
+                  <tr>
+                    <th>会话</th>
+                    <th class="num">轮次</th>
+                    <th class="num">Token</th>
+                    <th class="num">平均耗时</th>
+                    <th class="num">失败率</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in usage?.sessions || []" :key="row.sessionId">
+                    <td class="usage-name">
+                      <button class="usage-session" type="button" :title="row.title" @click="openSession(row.sessionId)">
+                        {{ row.title }}
+                      </button>
+                    </td>
+                    <td class="num tabular">{{ fmtInt(row.turns) }}</td>
+                    <td class="num tabular">{{ fmtInt(row.totalTokens) }}</td>
+                    <td class="num tabular">{{ fmtDuration(row.avgDurationMs) }}</td>
+                    <td class="num tabular" :class="{ 'usage-bad': row.failureRate > 0 }">{{ fmtRate(row.failureRate) }}</td>
+                  </tr>
+                  <tr v-if="!usage?.sessions?.length">
+                    <td colspan="5" class="usage-empty">还没有会话用量记录</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <div class="chart-row">
         <!-- Token 构成环图 -->
         <section class="card chart-card">
@@ -108,8 +196,10 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
-import { fetchDashboardStats } from '../api/stats'
+import { useRouter } from 'vue-router'
+import { fetchDashboardStats, fetchUsageStats } from '../api/stats'
 import { useAgentSocket } from '../composables/useAgentSocket'
+import { switchConversation } from '../composables/useChatStore'
 import AppIcon from '../components/AppIcon.vue'
 
 // ---------- ECharts 按需引入（控制打包体积） ----------
@@ -143,6 +233,8 @@ const COLOR = {
 
 // ---------- 数据状态 ----------
 const stats = ref(null)
+const usage = ref(null)
+const usageLoading = ref(false)
 const loading = ref(false)
 const error = ref('')
 const lastUpdated = ref('')
@@ -159,6 +251,31 @@ const baseEmpty = {
 
 // ---------- 数字格式化 ----------
 const fmtInt = (n) => (n ?? 0).toLocaleString('zh-CN')
+const fmtDuration = (ms) => {
+  if (ms == null) return '—'
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  return `${Math.floor(ms / 60000)}m${Math.round((ms % 60000) / 1000)}s`
+}
+const fmtRate = (rate) => (rate == null ? '—' : `${(Number(rate) * 100).toFixed(1)}%`)
+
+const router = useRouter()
+const usageSummary = computed(() => {
+  const s = usage.value?.summary
+  if (!s) return []
+  return [
+    { label: '总轮次', value: fmtInt(s.turns) },
+    { label: '总 Token', value: fmtInt(s.totalTokens) },
+    { label: '平均耗时', value: fmtDuration(s.avgDurationMs) },
+    { label: '失败率', value: fmtRate(s.failureRate) },
+  ]
+})
+
+function openSession(id) {
+  if (!id) return
+  switchConversation(id)
+  router.push('/chat')
+}
 const fmtCompact = (n) => {
   n = n ?? 0
   if (n >= 100000000) return (n / 100000000).toFixed(2) + ' 亿'
@@ -483,6 +600,11 @@ let stopStatusWatch = null
 
 async function loadData() {
   loading.value = true
+  usageLoading.value = true
+  fetchUsageStats(8)
+    .then((data) => { usage.value = data })
+    .catch((e) => console.warn('[dashboard] 用量统计加载失败:', e))
+    .finally(() => { usageLoading.value = false })
   try {
     const data = await fetchDashboardStats(7)
     stats.value = data
@@ -943,6 +1065,161 @@ onUnmounted(() => {
   }
   .page-title {
     font-size: 23px;
+  }
+}
+
+/* ===== 用量与成本 ===== */
+.usage-card {
+  padding-bottom: 6px;
+}
+
+.usage-loading {
+  display: inline-flex;
+  align-items: center;
+}
+
+.usage-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0 14px 12px;
+  overflow: hidden;
+  background: var(--line-1);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+}
+
+.usage-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  background: var(--bg-input);
+}
+
+.usage-summary-value {
+  color: var(--text-1);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.usage-summary-label {
+  color: var(--text-4);
+  font-size: 10px;
+}
+
+.usage-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  padding: 0 14px 12px;
+}
+
+.usage-block {
+  min-width: 0;
+}
+
+.usage-block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.usage-block-sub {
+  color: var(--text-4);
+  font-size: 9.5px;
+  font-weight: 400;
+}
+
+.usage-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.usage-table th,
+.usage-table td {
+  padding: 7px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--line-1);
+  white-space: nowrap;
+}
+
+.usage-table th {
+  color: var(--text-4);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.usage-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.usage-table tbody tr:hover td {
+  background: rgba(239, 168, 76, 0.035);
+}
+
+.usage-table .num {
+  text-align: right;
+  color: var(--text-2);
+}
+
+.usage-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-2);
+}
+
+.usage-session {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.usage-session:hover {
+  color: var(--amber-200);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.usage-bad {
+  color: var(--coral-400) !important;
+}
+
+.usage-empty {
+  padding: 18px 8px !important;
+  text-align: center !important;
+  color: var(--text-4);
+}
+
+@media (max-width: 900px) {
+  .usage-grid {
+    grid-template-columns: 1fr;
+  }
+  .usage-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

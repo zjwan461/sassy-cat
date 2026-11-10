@@ -11,6 +11,7 @@ created_at 存毫秒时间戳，SQLite 侧用 json_extract 提取 token 字段�
 时间分桶用 (created_at + tz_offset_ms) / 86400000 的"天序号"聚合，避免逐行函数转换。
 """
 
+import json
 import logging
 import time
 from datetime import datetime, timedelta
@@ -18,7 +19,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import Integer, cast, func, select
 
 from server.db.database import get_session
-from server.db.models import KbDocument, KnowledgeBase, Message
+from server.db.models import Conversation, KbDocument, KnowledgeBase, Message
+import config_loader
 
 logger = logging.getLogger(__name__)
 
@@ -187,4 +189,214 @@ async def dashboard_stats(trend_days: int = 7) -> dict:
         },
         "kb": await _kb_stats(),
         "trend": await _daily_trend(trend_days),
+    }
+
+
+async def usage_stats(session_limit: int = 8) -> dict:
+    """按模型 / 会话聚合 token、耗时与失败率。
+
+    模型名与耗时从 0008 迁移新增的 messages.model / duration_ms 读取；
+    老消息没有这两列，模型归入「历史未记录」，耗时跳过。
+    """
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(
+                    Message.session_id,
+                    Message.model,
+                    Message.usage_metadata,
+                    Message.duration_ms,
+                    Message.error,
+                    Message.created_at,
+                ).where(Message.role == "assistant")
+            )
+        ).all()
+        conv_rows = (
+            await session.execute(select(Conversation.id, Conversation.title))
+        ).all()
+
+    titles = {cid: title for cid, title in conv_rows}
+    models: dict[str, dict] = {}
+    sessions: dict[str, dict] = {}
+
+    for session_id, model, usage_text, duration_ms, error, created_at in rows:
+        try:
+            usage = json.loads(usage_text) if usage_text else {}
+        except (TypeError, ValueError):
+            usage = {}
+        inp = int(usage.get("input_tokens") or 0)
+        out = int(usage.get("output_tokens") or 0)
+        duration = int(duration_ms) if duration_ms is not None else None
+        failed = bool(error)
+
+        model_key = (model or "").strip() or "历史未记录"
+        for bucket, key in (
+            (models, model_key),
+            (sessions, session_id),
+        ):
+            item = bucket.setdefault(
+                key,
+                {
+                    "turns": 0,
+                    "inputTokens": 0,
+                    "outputTokens": 0,
+                    "durationTotal": 0,
+                    "durationCount": 0,
+                    "errors": 0,
+                    "lastAt": 0,
+                },
+            )
+            item["turns"] += 1
+            item["inputTokens"] += inp
+            item["outputTokens"] += out
+            if duration is not None:
+                item["durationTotal"] += duration
+                item["durationCount"] += 1
+            if failed:
+                item["errors"] += 1
+            item["lastAt"] = max(item["lastAt"], int(created_at or 0))
+
+    def finalize(item: dict) -> dict:
+        turns = item["turns"]
+        return {
+            "turns": turns,
+            "inputTokens": item["inputTokens"],
+            "outputTokens": item["outputTokens"],
+            "totalTokens": item["inputTokens"] + item["outputTokens"],
+            "avgDurationMs": (
+                round(item["durationTotal"] / item["durationCount"])
+                if item["durationCount"]
+                else None
+            ),
+            "errors": item["errors"],
+            "failureRate": round(item["errors"] / turns, 4) if turns else 0,
+            "lastAt": item["lastAt"],
+        }
+
+    model_list = [
+        {"model": name, **finalize(data)}
+        for name, data in sorted(
+            models.items(), key=lambda kv: kv[1]["inputTokens"] + kv[1]["outputTokens"], reverse=True
+        )
+    ]
+    session_list = [
+        {
+            "sessionId": sid,
+            "title": titles.get(sid) or "未命名对话",
+            **finalize(data),
+        }
+        for sid, data in sorted(
+            sessions.items(), key=lambda kv: kv[1]["inputTokens"] + kv[1]["outputTokens"], reverse=True
+        )[:session_limit]
+    ]
+
+    total_turns = sum(i["turns"] for i in models.values())
+    total_input = sum(i["inputTokens"] for i in models.values())
+    total_output = sum(i["outputTokens"] for i in models.values())
+    total_errors = sum(i["errors"] for i in models.values())
+    durations = sum(i["durationTotal"] for i in models.values())
+    duration_counts = sum(i["durationCount"] for i in models.values())
+
+    return {
+        "summary": {
+            "turns": total_turns,
+            "inputTokens": total_input,
+            "outputTokens": total_output,
+            "totalTokens": total_input + total_output,
+            "errors": total_errors,
+            "failureRate": round(total_errors / total_turns, 4) if total_turns else 0,
+            "avgDurationMs": round(durations / duration_counts) if duration_counts else None,
+        },
+        "models": model_list,
+        "sessions": session_list,
+    }
+
+
+async def session_stats(session_id: str) -> dict:
+    """当前会话底部统计：轮次/步数、Token、缓存命中、输出速度与上下文占用。"""
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(
+                    Message.role,
+                    Message.usage_metadata,
+                    Message.tool_calls,
+                    Message.duration_ms,
+                    Message.model,
+                    Message.created_at,
+                )
+                .where(Message.session_id == session_id)
+                .order_by(Message.created_at.asc())
+            )
+        ).all()
+
+    turns = 0
+    steps = 0
+    input_tokens = 0
+    output_tokens = 0
+    cache_read = 0
+    duration_ms = 0
+    latest_usage: dict = {}
+    latest_model = None
+
+    for role, usage_text, tool_calls_text, row_duration, model, _created_at in rows:
+        if role == "user":
+            turns += 1
+        if role != "assistant":
+            continue
+        steps += 1
+        try:
+            calls = json.loads(tool_calls_text) if tool_calls_text else []
+            if isinstance(calls, list):
+                steps += len(calls)
+        except (TypeError, ValueError):
+            pass
+        try:
+            usage = json.loads(usage_text) if usage_text else {}
+        except (TypeError, ValueError):
+            usage = {}
+        if usage:
+            latest_usage = usage
+            input_tokens += int(usage.get("input_tokens") or 0)
+            output_tokens += int(usage.get("output_tokens") or 0)
+            details = usage.get("input_token_details") or {}
+            cache_read += int(details.get("cache_read") or 0)
+        if row_duration is not None:
+            duration_ms += int(row_duration)
+        if model:
+            latest_model = model
+
+    # 上下文窗口取当前激活配置档；老配置没有该字段时给一个保守默认值
+    context_window = 131072
+    try:
+        llm = config_loader.current().get("llm") or {}
+        active = llm.get("activeProfile") or "default"
+        profile = (llm.get("profiles") or {}).get(active) or {}
+        context_window = int(profile.get("contextWindow") or context_window)
+    except Exception:
+        pass
+
+    context_tokens = int(latest_usage.get("total_tokens") or 0)
+    speed = (
+        round(output_tokens / (duration_ms / 1000), 1)
+        if duration_ms > 300 and output_tokens > 0
+        else None
+    )
+    return {
+        "sessionId": session_id,
+        "turns": turns,
+        "steps": steps,
+        "inputTokens": input_tokens,
+        "outputTokens": output_tokens,
+        "totalTokens": input_tokens + output_tokens,
+        "cacheReadTokens": cache_read,
+        "cacheHitRate": round(cache_read / input_tokens, 4) if input_tokens else None,
+        "durationMs": duration_ms,
+        "tokensPerSecond": speed,
+        "contextTokens": context_tokens,
+        "contextWindow": context_window,
+        "contextPercent": (
+            round(context_tokens / context_window * 100, 1) if context_window else None
+        ),
+        "model": latest_model,
     }

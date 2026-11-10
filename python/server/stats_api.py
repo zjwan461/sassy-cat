@@ -24,3 +24,27 @@ async def dashboard_stats(
     except Exception as e:
         logger.exception("查询 Dashboard 统计失败")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/usage")
+async def usage_stats(
+    session_limit: int = Query(8, ge=1, le=50, description="返回的会话数"),
+):
+    """按模型/会话统计 Token、平均耗时与失败率。"""
+    try:
+        return await stats_repository.usage_stats(session_limit=session_limit)
+    except Exception as e:
+        logger.exception("查询用量统计失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/session")
+async def session_stats(
+    session_id: str = Query(..., description="会话 ID"),
+):
+    """聊天页底部统计：轮次/步数、Token、缓存命中、速度与上下文占用。"""
+    try:
+        return await stats_repository.session_stats(session_id)
+    except Exception as e:
+        logger.exception("查询会话统计失败")
+        raise HTTPException(status_code=500, detail=str(e))

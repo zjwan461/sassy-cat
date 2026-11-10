@@ -431,8 +431,39 @@
             </div>
           </div>
         </div>
-        
-        <!-- 拖拽提示遮罩 -->
+
+        <!-- 底部会话统计（DSH 风格）：轮次/步数、速度、Token/缓存、上下文占用 -->
+        <div v-if="sessionStats?.steps" class="chat-stats">
+          <div class="cs-pill" :title="`模型用时 ${fmtStatDuration(sessionStats.durationMs)}`">
+            <AppIcon name="gauge" :size="14" />
+            <span>{{ sessionStats.turns }} 轮 {{ sessionStats.steps }} 步</span>
+            <template v-if="sessionStats.tokensPerSecond != null">
+              <span class="cs-sep">·</span>
+              <span>{{ sessionStats.tokensPerSecond }} tok/s</span>
+            </template>
+          </div>
+          <div v-if="sessionStats.totalTokens" class="cs-pill" :title="`输入 ${fmtStatInt(sessionStats.inputTokens)} · 输出 ${fmtStatInt(sessionStats.outputTokens)}`">
+            <AppIcon name="database" :size="14" />
+            <span>{{ fmtStatTokens(sessionStats.totalTokens) }} tok</span>
+            <template v-if="sessionStats.cacheHitRate != null">
+              <span class="cs-sep">·</span>
+              <span>缓存命中 {{ Math.round(sessionStats.cacheHitRate * 100) }}%</span>
+            </template>
+          </div>
+          <div
+            v-if="sessionStats.contextPercent"
+            class="cs-context"
+            :title="`上下文 ${fmtStatInt(sessionStats.contextTokens)} / ${fmtStatInt(sessionStats.contextWindow)}`"
+          >
+            <span
+              class="cs-ring"
+              :style="{ background: `conic-gradient(var(--amber-400) ${sessionStats.contextPercent}%, var(--line-2) 0)` }"
+            >
+              <span class="cs-ring-inner">{{ Math.round(sessionStats.contextPercent) }}%</span>
+            </span>
+          </div>
+        </div>
+
         <div v-if="isDragOver" class="drag-overlay">
           <div class="drag-hint"> 松开以上传文件</div>
         </div>
@@ -466,6 +497,7 @@ import { useChatStore } from '../composables/useChatStore'
 import { useAgentSocket } from '../composables/useAgentSocket'
 import { useFileUpload } from '../composables/useFileUpload'
 import { useTTS } from '../composables/useTTS'
+import { fetchSessionStats } from '../api/stats'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 import PresentedFiles from '../components/PresentedFiles.vue'
 import FilePreview from '../components/FilePreview.vue'
@@ -557,6 +589,39 @@ const isDragOver = ref(false)
 const composerFocused = ref(false)
 const previewImageUrl = ref(null)
 const citationView = ref(null)
+const sessionStats = ref(null)
+
+function fmtStatInt(n) {
+  return Number(n || 0).toLocaleString('zh-CN')
+}
+
+function fmtStatTokens(n) {
+  const v = Number(n || 0)
+  if (v >= 1e9) return `${(v / 1e9).toFixed(2)}B`
+  if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`
+  if (v >= 1e3) return `${(v / 1e3).toFixed(1)}K`
+  return String(v)
+}
+
+function fmtStatDuration(ms) {
+  const v = Number(ms || 0)
+  if (v < 1000) return `${Math.round(v)}ms`
+  if (v < 60000) return `${(v / 1000).toFixed(1)}s`
+  return `${Math.floor(v / 60000)}m${Math.round((v % 60000) / 1000)}s`
+}
+
+async function loadSessionStats() {
+  const id = chat.convId || socketState.sessionId
+  if (!id) return
+  try {
+    const data = await fetchSessionStats(id)
+    if (chat.convId === id || (!chat.convId && socketState.sessionId === id)) {
+      sessionStats.value = data
+    }
+  } catch (e) {
+    console.warn('[chat] 会话统计加载失败:', e)
+  }
+}
 
 // ---------- 会话内搜索（Ctrl/Cmd + F） ----------
 const convSearchOpen = ref(false)
@@ -1241,6 +1306,22 @@ async function onLoadMore() {
     }
   }
 }
+
+watch(
+  () => chat.convId,
+  () => {
+    sessionStats.value = null
+    loadSessionStats()
+  },
+  { immediate: true }
+)
+// 一轮结束后落库完成，刷新底部统计
+watch(
+  () => chat.generating,
+  (generating) => {
+    if (!generating) loadSessionStats()
+  }
+)
 
 onMounted(() => {
   // 回到页面时若仍处于流式轮次，恢复滚动位置（进入页面默认贴底并恢复自动跟随）
@@ -2445,6 +2526,91 @@ onUnmounted(() => {
   align-items: flex-end;
   gap: 8px;
   padding: 12px 14px 14px;
+}
+
+/* ===== 底部会话统计 ===== */
+.chat-stats {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 20px 8px;
+  color: var(--text-4);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.cs-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 8px;
+  color: var(--text-4);
+  white-space: nowrap;
+  border-radius: var(--r-xs);
+}
+
+.cs-pill:hover {
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.cs-pill :deep(svg) {
+  flex: none;
+  opacity: 0.85;
+}
+
+.cs-sep {
+  color: var(--text-5);
+}
+
+.cs-context {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+}
+
+.cs-ring {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  position: relative;
+}
+
+.cs-ring::after {
+  content: '';
+  position: absolute;
+  inset: 2.5px;
+  background: var(--bg-app);
+  border-radius: 50%;
+}
+
+.cs-ring-inner {
+  position: relative;
+  z-index: 1;
+  color: var(--text-4);
+  font-size: 8px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  .chat-stats {
+    padding: 0 12px 6px;
+    font-size: 10px;
+  }
+  .cs-pill {
+    padding: 2px 4px;
+    gap: 4px;
+  }
+  .cs-pill span:nth-of-type(n + 3) {
+    display: none;
+  }
 }
 
 .composer-stack {
