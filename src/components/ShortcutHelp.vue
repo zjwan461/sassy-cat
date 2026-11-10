@@ -2,7 +2,7 @@
   <Teleport to="body">
     <Transition name="sk">
       <div v-if="open" class="sk-overlay" @click.self="close">
-        <div class="sk-panel" role="dialog" aria-modal="true" aria-label="快捷键">
+        <div ref="panelEl" class="sk-panel" tabindex="-1" role="dialog" aria-modal="true" aria-label="快捷键">
           <div class="sk-head">
             <div>
               <div class="sk-title">快捷键</div>
@@ -33,10 +33,14 @@
 </template>
 
 <script setup>
+import { computed, ref } from 'vue'
 import AppIcon from './AppIcon.vue'
+import { useFocusTrap } from '../composables/useFocusTrap'
 
-defineProps({ open: { type: Boolean, default: false } })
+const props = defineProps({ open: { type: Boolean, default: false } })
 const emit = defineEmits(['close'])
+const panelEl = ref(null)
+useFocusTrap(panelEl, computed(() => props.open))
 
 const groups = [
   {

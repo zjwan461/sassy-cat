@@ -57,6 +57,7 @@ function stateFor(id) {
       totalMessages: 0,
       loadingMore: false,
       hasMore: true,
+      loadToken: 0,
     })
     convStates.set(key, st)
   }
@@ -415,7 +416,9 @@ function ensureStarted() {
     const cached = convStates.has(p.id)
     _active.convId = p.id
     _active.convTitle = p.title || ''
-    if (!cached) loadMessages(true)
+    const st = stateFor(p.id)
+    // 没加载过，或曾因“请求期间切走”留下空现场（loadingMore 卡住）：重拉第一页
+    if (!cached || (st.messages.length === 0 && !st.generating)) loadMessages(true)
   })
 }
 
@@ -682,36 +685,48 @@ function transformMessage(item) {  // 构建工具调用列表（合并 toolCall
  * @param {boolean} reset 是否重置（从第一页开始，清空现有消息）
  */
 export async function loadMessages(reset = false) {
-  if (!chat.convId) return
-  if (chat.loadingMore) return
+  // 关键：在第一个 await 之前锁定会话现场。
+  // 旧实现一路读写 chat 代理；若请求期间用户切走会话，响应会被写进新会话，
+  // 原会话则留下 loadingMore=true 且永远为空（表现就是“第一条历史永远加载不出来”）。
+  const sessionId = chat.convId
+  if (!sessionId) return
+  const st = stateFor(sessionId)
+  // reset 允许抢占进行中的请求（切回一个被旧竞态卡住的会话时可自愈）
+  if (st.loadingMore && !reset) return
+
+  const token = (st.loadToken || 0) + 1
+  st.loadToken = token
 
   if (reset) {
-    chat.currentPage = 1
-    chat.hasMore = true
+    st.currentPage = 1
+    st.hasMore = true
   }
 
-  chat.loadingMore = true
+  st.loadingMore = true
   try {
-    const result = await fetchMessages(chat.convId, chat.currentPage, chat.pageSize)
+    const result = await fetchMessages(sessionId, st.currentPage, st.pageSize)
+    // 已被更新的请求（例如切走又切回触发的 reset）取代，丢弃旧响应
+    if (st.loadToken !== token) return
     const items = (result.items || []).map(transformMessage)
 
     if (reset) {
       // 重置：后端返回按时间倒序，反转为正序后写入
-      chat.messages.splice(0, chat.messages.length, ...items.reverse())
+      st.messages.splice(0, st.messages.length, ...items.reverse())
     } else {
       // 加载更多（之前的页）：后端返回按时间倒序，反转后插入到头部
-      chat.messages.splice(0, 0, ...items.reverse())
+      st.messages.splice(0, 0, ...items.reverse())
     }
 
-    chat.totalMessages = result.total || 0
-    chat.currentPage++
-    // 判断是否还有更多
-    const loadedCount = chat.messages.filter((m) => m.role === 'user' || m.role === 'assistant').length
-    chat.hasMore = loadedCount < chat.totalMessages
+    st.totalMessages = result.total || 0
+    st.currentPage++
+    // 判断是否还有更多（只统计 user/assistant，与实际渲染条数一致）
+    const loadedCount = st.messages.filter((m) => m.role === 'user' || m.role === 'assistant').length
+    st.hasMore = loadedCount < st.totalMessages
   } catch (e) {
+    // 失败时保留已有消息；hasMore 不动，向上滚动可重试
     console.warn('[chat] 加载历史消息失败:', e)
   } finally {
-    chat.loadingMore = false
+    if (st.loadToken === token) st.loadingMore = false
   }
 }
 

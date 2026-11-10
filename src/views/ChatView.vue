@@ -31,6 +31,7 @@
           ref="convSearchInput"
           v-model="convSearchQuery"
           type="text"
+          aria-label="在当前对话中搜索"
           placeholder="在当前对话中搜索…"
           @keydown.enter.prevent="nextConvMatch($event.shiftKey)"
           @keydown.esc.prevent="closeConvSearch"
@@ -1172,8 +1173,9 @@ function docAttachments(m) {
 function onMsgListScroll() {
   if (!listRef.value) return
   const { scrollTop } = listRef.value
-  // 当滚动到顶部附近（50px 以内）时触发加载
-  if (scrollTop < 50 && chat.hasMore && !chat.loadingMore) {
+  // 当滚动到顶部附近（50px 以内）时触发加载；空会话/首屏加载中不触发，
+  // 否则会跳过第一页直接请求 page+1
+  if (scrollTop < 50 && chat.hasMore && !chat.loadingMore && chat.messages.length > 0) {
     onLoadMore()
   }
   // 程序化贴底产生的 scroll 事件不代表用户意图，直接忽略；
@@ -1184,7 +1186,7 @@ function onMsgListScroll() {
 }
 
 async function onLoadMore() {
-  if (chat.loadingMore || !chat.hasMore) return
+  if (chat.loadingMore || !chat.hasMore || chat.messages.length === 0) return
   const oldScrollHeight = listRef.value?.scrollHeight || 0
   await loadMoreMessages()
   // 保持滚动位置：新消息插入头部后，调整 scrollTop 使当前内容不跳动

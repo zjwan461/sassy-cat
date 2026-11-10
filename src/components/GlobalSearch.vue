@@ -2,7 +2,7 @@
   <Teleport to="body">
     <Transition name="gs">
       <div v-if="open" class="gs-overlay" @click.self="close">
-        <div class="gs-panel" role="dialog" aria-modal="true" aria-label="全局搜索">
+        <div ref="panelEl" class="gs-panel" role="dialog" aria-modal="true" aria-label="全局搜索">
           <div class="gs-input-row">
             <AppIcon name="search" :size="16" class="gs-input-icon" />
             <input
@@ -10,6 +10,7 @@
               v-model="query"
               class="gs-input"
               type="text"
+              aria-label="搜索页面、操作或对话"
               placeholder="搜索页面、操作或对话…"
               @keydown="onKeydown"
             />
@@ -62,6 +63,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { conv, loadConversations, newConversation, switchConversation } from '../composables/useChatStore'
+import { useFocusTrap } from '../composables/useFocusTrap'
 import AppIcon from './AppIcon.vue'
 
 const props = defineProps({
@@ -71,6 +73,8 @@ const emit = defineEmits(['close'])
 
 const router = useRouter()
 const inputEl = ref(null)
+const panelEl = ref(null)
+useFocusTrap(panelEl, computed(() => props.open))
 const query = ref('')
 const activeIndex = ref(0)
 const petEnabled = ref(null)

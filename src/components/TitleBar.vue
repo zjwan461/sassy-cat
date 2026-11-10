@@ -12,7 +12,7 @@
 
     <div class="tb-space"></div>
 
-    <button class="tb-search" type="button" title="搜索页面、操作或对话" @click="$emit('open-search')" @dblclick.stop>
+    <button class="tb-search" type="button" title="搜索页面、操作或对话" aria-label="搜索页面、操作或对话" @click="$emit('open-search')" @dblclick.stop>
       <AppIcon name="search" :size="14" />
       <span class="tb-search-text">搜索页面、操作或对话…</span>
       <kbd class="tb-kbd">{{ isMac ? '⌘ K' : 'Ctrl K' }}</kbd>

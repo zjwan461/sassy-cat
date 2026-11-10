@@ -16,6 +16,7 @@
               class="nav-item"
               :class="{ disabled: item.disabled, active: !item.disabled && isMenuActive(item.path) }"
               :title="item.label"
+              :aria-label="item.label"
             >
               <AppIcon :name="item.icon" :size="17" class="nav-icon" />
               <span class="nav-label">{{ item.label }}</span>
@@ -50,6 +51,7 @@
             class="rail-toggle"
             type="button"
             :title="sidebarCollapsed ? '展开侧栏（Ctrl+B）' : '收起侧栏（Ctrl+B）'"
+            :aria-label="sidebarCollapsed ? '展开侧栏' : '收起侧栏'"
             @click="toggleSidebar"
           >
             <AppIcon :name="sidebarCollapsed ? 'chevron-right' : 'chevron-left'" :size="13" />
