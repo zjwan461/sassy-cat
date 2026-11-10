@@ -360,32 +360,74 @@
             style="display: none"
             @change="onFileSelect"
           />
-          <!-- 一体化书写区：正文在上、工具条在下，视觉上是一个整体 -->
-          <div class="composer" :class="{ focused: composerFocused }">
-            <textarea
-              v-model="draft"
-              class="chat-input"
-              rows="2"
-              placeholder="说点什么…"
-              @focus="composerFocused = true"
-              @blur="composerFocused = false"
-              @keydown.enter.exact.prevent="submit"
-              @paste="onPaste"
-            ></textarea>
-            <div class="composer-tools">
-              <button class="attach-btn" @click="triggerFileInput" title="上传图片或文件">
-                <AppIcon name="paperclip" :size="15" />
-                <span>附件</span>
-              </button>
-              <span class="composer-hint">Enter 发送 · Shift + Enter 换行</span>
-              <button v-if="!generating" class="btn send" :disabled="(!draft.trim() && !hasAttachments) || isProcessing" @click="submit">
-                <AppIcon name="arrow-up" :size="14" />
-                <span>发送</span>
-              </button>
-              <button v-else class="btn stop" @click="stopGen">
-                <AppIcon name="stop" :size="12" />
-                <span>停止</span>
-              </button>
+          <div class="composer-stack">
+            <!-- 生成中收到的消息默认排队；可直接插队或移除 -->
+            <div v-if="chat.queued.length" class="queue-panel">
+              <div class="queue-head">
+                <span class="queue-title">
+                  <AppIcon name="clock" :size="12" />
+                  排队中 · {{ chat.queued.length }}
+                </span>
+                <span class="queue-sub">本轮结束后自动发送</span>
+              </div>
+              <div v-for="(q, i) in chat.queued" :key="q.id" class="queue-item">
+                <span class="queue-index">{{ i + 1 }}</span>
+                <div class="queue-main">
+                  <div class="queue-text" :title="q.text">{{ q.text || '（附件）' }}</div>
+                  <div v-if="q.attachments?.length" class="queue-meta">
+                    <AppIcon name="paperclip" :size="11" />
+                    {{ q.attachments.length }} 个附件
+                  </div>
+                </div>
+                <button
+                  class="queue-act send-now"
+                  type="button"
+                  title="插队发送：中断当前回复，立刻发送这条"
+                  @click="sendQueuedNow(q.id)"
+                >
+                  <AppIcon name="zap" :size="12" />
+                  <span>插队</span>
+                </button>
+                <button class="queue-act remove" type="button" title="移除" @click="removeQueuedMessage(q.id)">
+                  <AppIcon name="x" :size="12" />
+                </button>
+              </div>
+            </div>
+
+            <!-- 一体化书写区：正文在上、工具条在下，视觉上是一个整体 -->
+            <div class="composer" :class="{ focused: composerFocused }">
+              <textarea
+                v-model="draft"
+                class="chat-input"
+                rows="2"
+                :placeholder="generating ? '输入将加入队列…' : '说点什么…'"
+                @focus="composerFocused = true"
+                @blur="composerFocused = false"
+                @keydown.enter.exact.prevent="submit"
+                @paste="onPaste"
+              ></textarea>
+              <div class="composer-tools">
+                <button class="attach-btn" @click="triggerFileInput" title="上传图片或文件">
+                  <AppIcon name="paperclip" :size="15" />
+                  <span>附件</span>
+                </button>
+                <span class="composer-hint">
+                  {{ generating ? '本轮输出中 · 发送会排队，可用插队立即发送' : 'Enter 发送 · Shift + Enter 换行' }}
+                </span>
+                <button
+                  class="btn send"
+                  :class="{ queue: generating }"
+                  :disabled="(!draft.trim() && !hasAttachments) || isProcessing"
+                  @click="submit"
+                >
+                  <AppIcon :name="generating ? 'clock' : 'arrow-up'" :size="14" />
+                  <span>{{ generating ? '排队' : '发送' }}</span>
+                </button>
+                <button v-if="generating" class="btn stop" @click="stopGen">
+                  <AppIcon name="stop" :size="12" />
+                  <span>停止</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -436,7 +478,7 @@ import logoUrl from '../../assets/icon.png'
 // 会话状态与 WS 事件订阅已提升到模块级单例（useChatStore）：
 // 切换 tab 导致本组件卸载时，流式数据仍在后台接收与累积；
 // 重新挂载直接恢复现场继续渲染，不再出现"切走就停止渲染"的问题。
-const { chat, conv, pinnedConvs, historyConvs, socketState, submitMessage, stopGeneration, retryLastTurn, decideInterrupt, approveAllInterrupt, newConversation, switchConversation, renameConversation, deleteConversation, setConversationPinned, loadMoreConversations, loadMoreMessages } = useChatStore()
+const { chat, conv, pinnedConvs, historyConvs, socketState, submitMessage, stopGeneration, retryLastTurn, decideInterrupt, approveAllInterrupt, sendQueuedNow, removeQueuedMessage, newConversation, switchConversation, renameConversation, deleteConversation, setConversationPinned, loadMoreConversations, loadMoreMessages } = useChatStore()
 const { hasAttachments, isProcessing, handleFiles, buildAttachments, clearAllAttachments } = useFileUpload()
 // 语音朗读（TTS）：播放状态（模块级，跨 tab 存活）+ 播放/停止/切换
 const { speaking, playMessage, loadConfig: loadTtsConfig } = useTTS()
@@ -2403,6 +2445,161 @@ onUnmounted(() => {
   align-items: flex-end;
   gap: 8px;
   padding: 12px 14px 14px;
+}
+
+.composer-stack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ===== 生成中的消息队列（参考 DSH：默认排队，可插队） ===== */
+.queue-panel {
+  padding: 6px;
+  background: linear-gradient(180deg, rgba(239, 168, 76, 0.055), rgba(239, 168, 76, 0.02));
+  border: 1px solid var(--amber-a20);
+  border-radius: var(--r-md);
+}
+
+.queue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 6px 6px;
+  user-select: none;
+}
+
+.queue-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--amber-200);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.queue-sub {
+  color: var(--text-4);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px;
+  background: rgba(10, 14, 20, 0.55);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+}
+
+.queue-item + .queue-item {
+  margin-top: 4px;
+}
+
+.queue-index {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-4);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, 0.045);
+  border-radius: 5px;
+}
+
+.queue-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.queue-meta {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-4);
+  font-size: 10px;
+}
+
+.queue-act {
+  height: 24px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 8px;
+  font-family: inherit;
+  font-size: 10.5px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.queue-act.send-now {
+  color: var(--amber-200);
+  background: var(--amber-a12);
+  border: 1px solid var(--amber-a20);
+}
+
+.queue-act.send-now:hover {
+  color: var(--amber-100);
+  border-color: var(--amber-a55);
+  background: var(--amber-a20);
+}
+
+.queue-act.remove {
+  width: 24px;
+  padding: 0;
+  color: var(--text-4);
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.queue-act.remove:hover {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--line-2);
+}
+
+@media (max-width: 720px) {
+  .queue-sub { display: none; }
+  .queue-act.send-now span { display: none; }
+  .queue-act.send-now { width: 24px; padding: 0; }
+}
+
+/* 生成中：发送按钮变为“排队”，仍保持主按钮可点 */
+.btn.send.queue {
+  color: var(--amber-200);
+  background: var(--amber-a12);
+  border: 1px solid var(--amber-a35);
+  box-shadow: none;
+}
+
+.btn.send.queue:hover:not(:disabled) {
+  background: var(--amber-a20);
+  border-color: var(--amber-a55);
 }
 
 /* 一体化书写区：外框承担焦点态，内部所有控件去边框，视觉更"整" */

@@ -49,7 +49,10 @@ function stateFor(id) {
   let st = convStates.get(key)
   if (!st) {
     st = reactive({
+      convId: key,
       messages: [],
+      // 生成中收到的消息先排队，本轮结束后按顺序自动发送
+      queued: [],
       generating: false,
       currentMsgId: null,
       currentPage: 1,
@@ -273,7 +276,10 @@ function ensureStarted() {
     // 仅当前轮次的完成才复位 generating：旧轮次迟到的 completed 不得打断新轮次
     // （按 msgId 定位所属会话现场，后台会话的完成不影响当前展示的会话）
     const st = ownerState(p.msgId)
-    if (st) st.generating = false
+    if (st) {
+      st.generating = false
+      pumpQueue(st)
+    }
   })
   on('chat.error', (p) => {
     const m = findMessage(p.msgId)
@@ -296,7 +302,10 @@ function ensureStarted() {
       }
     }
     const st = ownerState(p.msgId)
-    if (st) st.generating = false
+    if (st) {
+      st.generating = false
+      pumpQueue(st)
+    }
   })
   on('agent.tool_call', (p) => {
     const m = findMessage(p.msgId)
@@ -418,7 +427,12 @@ function ensureStarted() {
     _active.convTitle = p.title || ''
     const st = stateFor(p.id)
     // 没加载过，或曾因“请求期间切走”留下空现场（loadingMore 卡住）：重拉第一页
-    if (!cached || (st.messages.length === 0 && !st.generating)) loadMessages(true)
+    if (!cached || (st.messages.length === 0 && !st.generating)) {
+      loadMessages(true).then(() => pumpQueue(st))
+    } else {
+      // 切回带排队消息的会话：若当前没有进行中的轮次，立刻发送队首
+      pumpQueue(st)
+    }
   })
 }
 
@@ -461,20 +475,17 @@ export function setConversationPinned(id, pinned = true) {
   send('conv.pin', { id, pinned })
 }
 
-/** 用户发送消息（支持附件） */
-export function submitMessage(text, attachments = []) {
-  ensureStarted()
-  expirePendingInterrupts(stateFor(_active.convId))
-
+/** 把输入整理成可入队 / 可发送的载荷 */
+function buildOutgoing(text, attachments) {
   // 提取图片用于前端渲染
   const images = attachments
-    .filter(att => att.type === 'image')
-    .map(att => `data:${att.mimeType};base64,${att.data}`)
+    .filter((att) => att.type === 'image')
+    .map((att) => `data:${att.mimeType};base64,${att.data}`)
 
   // 提取文档附件用于前端渲染（与历史回填 transformMessage 的格式保持一致：
   // type='document' + fileName/fileExt/markdownContent，供 DocumentAttachment 渲染图标）
   const docs = attachments
-    .filter(att => att.type === 'text')
+    .filter((att) => att.type === 'text')
     .map((att, i) => {
       const fileName = att.name || '文件'
       const dot = fileName.lastIndexOf('.')
@@ -487,34 +498,93 @@ export function submitMessage(text, attachments = []) {
       }
     })
 
-  chat.messages.push({
-    id: 'u-' + Date.now(),
-    role: 'user',
-    content: text,
-    images: images.length ? images : undefined,
-    attachments: docs.length ? docs : undefined,
-  })
-
-  const len = chat.messages.length
-  send('chat.send', {
-    sessionId: chat.convId || socketState.sessionId,
-    content: text,
-    attachments: attachments.length ? attachments : undefined,
-    lastAssistantMsgId: len >=2 ?chat.messages[len-2].id: null
-  })
-  chat.generating = true
+  return { text, attachments, images, docs }
 }
 
-/** 停止当前轮次生成 */
-export function stopGeneration() {
+function sessionIdFor(st) {
+  return st.convId && st.convId !== '__default__'
+    ? st.convId
+    : (_active.convId || socketState.sessionId)
+}
+
+function dispatchOutgoing(st, outgoing) {
+  expirePendingInterrupts(st)
+  st.messages.push({
+    id: 'u-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+    role: 'user',
+    content: outgoing.text,
+    images: outgoing.images?.length ? outgoing.images : undefined,
+    attachments: outgoing.docs?.length ? outgoing.docs : undefined,
+  })
+
+  const len = st.messages.length
+  send('chat.send', {
+    sessionId: sessionIdFor(st),
+    content: outgoing.text,
+    attachments: outgoing.attachments?.length ? outgoing.attachments : undefined,
+    lastAssistantMsgId: len >= 2 ? st.messages[len - 2].id : null,
+  })
+  st.generating = true
+}
+
+/** 当前轮结束后，按队列顺序自动发送下一条（只推进当前激活会话） */
+function pumpQueue(st) {
+  if (!st || st.generating || !st.queued?.length) return
+  if (st.convId !== _active.convId) return
+  const next = st.queued.shift()
+  if (!next) return
+  dispatchOutgoing(st, next)
+}
+
+/** 用户发送消息（支持附件）；生成中默认入队，不打断当前轮 */
+export function submitMessage(text, attachments = []) {
+  ensureStarted()
+  const st = stateFor(_active.convId)
+  const outgoing = buildOutgoing(text, attachments)
+
+  // 生成中，或已有排队消息：追加到队尾，避免抢跑
+  if (st.generating || st.queued.length) {
+    st.queued.push({
+      ...outgoing,
+      id: 'q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      createdAt: Date.now(),
+    })
+    pumpQueue(st)
+    return 'queued'
+  }
+
+  dispatchOutgoing(st, outgoing)
+  return 'sent'
+}
+
+/** 插队发送：中断当前轮，立刻发送指定排队消息（不传 id 则发队首） */
+export function sendQueuedNow(id) {
+  const st = stateFor(_active.convId)
+  if (!st.queued.length) return
+  const index = id ? st.queued.findIndex((q) => q.id === id) : 0
+  if (index < 0) return
+  const [item] = st.queued.splice(index, 1)
+  if (st.generating) markTurnStopped(st)
+  dispatchOutgoing(st, item)
+}
+
+/** 移除一条排队消息 */
+export function removeQueuedMessage(id) {
+  const st = stateFor(_active.convId)
+  const index = st.queued.findIndex((q) => q.id === id)
+  if (index >= 0) st.queued.splice(index, 1)
+}
+
+/** 停止当前轮次生成（内部：只做现场复位，不负责发队列） */
+function markTurnStopped(st) {
   // 先下发取消帧（服务端据此终止 worker），并立刻做乐观复位：
   // 停止按钮 / 打字光标即时消失，不必等服务端在 chunk 边界真正终止后回帧。
   // 服务端在工具执行、上游缓冲等无 chunk 阶段可能长时间无响应，纯等回帧会让
   // "停止"延迟数秒以上；标记 stopped 后，迟到的 delta/completed 不再改动内容，
   // 避免停止后文本仍继续增长或被突然补全为完整回复。
-  send('chat.cancel', { sessionId: chat.convId || socketState.sessionId })
-  chat.generating = false
-  for (const m of chat.messages) {
+  send('chat.cancel', { sessionId: sessionIdFor(st) })
+  st.generating = false
+  for (const m of st.messages) {
     if (m.role === 'assistant' && m.streaming) {
       m.streaming = false
       m.thinking = false
@@ -522,6 +592,13 @@ export function stopGeneration() {
       m.stopped = true
     }
   }
+}
+
+/** 停止当前轮次生成；已排队的消息会在本轮结束后继续 */
+export function stopGeneration() {
+  const st = stateFor(_active.convId)
+  markTurnStopped(st)
+  pumpQueue(st)
 }
 
 /** 重试上一轮失败的生成：不新增用户消息，是否重试完全由用户决定 */
@@ -754,6 +831,7 @@ export function useChatStore() {
   return {
     chat, conv, pinnedConvs, historyConvs, socketState,
     submitMessage, stopGeneration, retryLastTurn, decideInterrupt, approveAllInterrupt,
+    sendQueuedNow, removeQueuedMessage,
     loadConversations, loadMoreConversations, newConversation, switchConversation, renameConversation, deleteConversation, setConversationPinned,
     loadMessages, loadMoreMessages,
   }
