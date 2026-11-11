@@ -451,15 +451,15 @@
             </template>
           </div>
           <div
-            v-if="sessionStats.contextPercent"
+            v-if="contextPercent != null && contextPercent > 0"
             class="cs-context"
-            :title="`${sessionStats.estimated ? '估算 ' : ''}上下文 ${fmtStatInt(sessionStats.contextTokens)} / ${fmtStatInt(sessionStats.contextWindow)}`"
+            :title="`${sessionStats.estimated ? '估算 ' : ''}上下文 ${fmtStatInt(sessionStats.contextTokens)} / ${fmtStatInt(selectedContextWindow)}`"
           >
             <span
               class="cs-ring"
-              :style="{ background: `conic-gradient(var(--amber-400) ${sessionStats.contextPercent}%, var(--line-2) 0)` }"
+              :style="{ background: `conic-gradient(var(--amber-400) ${contextPercent}%, var(--line-2) 0)` }"
             >
-              <span class="cs-ring-inner">{{ Math.round(sessionStats.contextPercent) }}%</span>
+              <span class="cs-ring-inner">{{ contextLabel }}</span>
             </span>
           </div>
         </div>
@@ -542,6 +542,7 @@ async function loadLlmProfiles() {
     llmOptions.value = Object.entries(profiles).map(([name, p]) => ({
       name,
       model: p?.model || '',
+      contextWindow: Number(p?.contextWindow) || 0,
       optionLabel: optionLabel(name, p),
     }))
     activeLlmProfile.value = llm.activeProfile || 'default'
@@ -569,6 +570,8 @@ async function onSwitchModel(name) {
       return
     }
     activeLlmProfile.value = name
+    // 上下文占比要跟当前选中的模型窗口联动：本地立即重算，不等后端配置热更新
+    loadSessionStats()
     // Python 侧 reload_config + holder.invalidate：下一轮用新模型重建 agent
     sendSocket('config.invalidate', { paths: ['llm'] })
     flashModelNotice('已切换，下一条消息生效')
@@ -649,6 +652,23 @@ function refreshStatsSoon() {
     statsRetryTimers.push(setTimeout(loadSessionStats, ms))
   })
 }
+
+// 上下文占比必须跟「当前选中的模型」联动：切换模型后立即用新窗口重算，
+// 不依赖后端 config.invalidate 的异步生效。
+const selectedContextWindow = computed(() => {
+  const selected = llmOptions.value.find((p) => p.name === activeLlmProfile.value)
+  return selected?.contextWindow || sessionStats.value?.contextWindow || 0
+})
+const contextPercent = computed(() => {
+  const stats = sessionStats.value
+  if (!stats || !selectedContextWindow.value) return null
+  return Math.max(0, Math.min(100, (stats.contextTokens / selectedContextWindow.value) * 100))
+})
+const contextLabel = computed(() => {
+  if (contextPercent.value == null) return ''
+  if (contextPercent.value > 0 && contextPercent.value < 1) return '<1%'
+  return `${Math.round(contextPercent.value)}%`
+})
 
 // ---------- 会话内搜索（Ctrl/Cmd + F） ----------
 const convSearchOpen = ref(false)

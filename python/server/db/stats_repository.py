@@ -342,6 +342,8 @@ async def session_stats(session_id: str) -> dict:
                     Message.content,
                     Message.reasoning,
                     Message.duration_ms,
+                    Message.ttft_ms,
+                    Message.decode_ms,
                     Message.model,
                     Message.created_at,
                 )
@@ -362,6 +364,8 @@ async def session_stats(session_id: str) -> dict:
     estimated_output = 0
     last_output_tokens = 0
     last_duration_ms = 0
+    last_decode_ms = 0
+    last_ttft_ms = 0
 
     for (
         role,
@@ -372,6 +376,8 @@ async def session_stats(session_id: str) -> dict:
         content,
         reasoning,
         row_duration,
+        row_ttft,
+        row_decode,
         model,
         _created_at,
     ) in rows:
@@ -403,6 +409,8 @@ async def session_stats(session_id: str) -> dict:
         if not last_output_tokens:
             last_output_tokens = _estimate_tokens("\n".join(x for x in (content, reasoning) if x))
         last_duration_ms = int(row_duration or 0)
+        last_decode_ms = int(row_decode or 0)
+        last_ttft_ms = int(row_ttft or 0)
         if usage:
             latest_usage = usage
             input_tokens += int(usage.get("input_tokens") or 0)
@@ -435,11 +443,11 @@ async def session_stats(session_id: str) -> dict:
         if not estimated
         else estimated_context + 3000
     )
-    speed = None
-    if last_duration_ms > 300 and last_output_tokens > 0:
-        speed = round(last_output_tokens / (last_duration_ms / 1000), 1)
-    elif duration_ms > 300 and output_tokens > 0:
-        speed = round(output_tokens / (duration_ms / 1000), 1)
+    speed = (
+        round(last_output_tokens / (last_decode_ms / 1000), 1)
+        if last_decode_ms > 100 and last_output_tokens > 0
+        else None
+    )
     return {
         "sessionId": session_id,
         "turns": turns,
@@ -450,6 +458,8 @@ async def session_stats(session_id: str) -> dict:
         "cacheReadTokens": cache_read,
         "cacheHitRate": round(cache_read / input_tokens, 4) if input_tokens and not estimated else None,
         "durationMs": duration_ms,
+        "ttftMs": last_ttft_ms or None,
+        "decodeMs": last_decode_ms or None,
         "tokensPerSecond": speed,
         "contextTokens": context_tokens,
         "contextWindow": context_window,

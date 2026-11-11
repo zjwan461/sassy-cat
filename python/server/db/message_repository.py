@@ -47,6 +47,8 @@ def _message_to_dict(msg: Message) -> dict:
         "usageMetadata": _load_json(msg.usage_metadata),
         "model": msg.model,
         "durationMs": msg.duration_ms,
+        "ttftMs": msg.ttft_ms,
+        "decodeMs": msg.decode_ms,
         "error": msg.error,
         "subagentName": msg.subagent_name,
         "segments": _load_json(msg.segments),
@@ -81,6 +83,8 @@ async def save_message(
     usage_metadata: Optional[dict] = None,
     model: Optional[str] = None,
     duration_ms: Optional[int] = None,
+    ttft_ms: Optional[int] = None,
+    decode_ms: Optional[int] = None,
     error: Optional[str] = None,
     subagent_name: Optional[str] = None,
     segments: Optional[list] = None,
@@ -122,6 +126,8 @@ async def save_message(
                 usage_metadata=json.dumps(usage_metadata, ensure_ascii=False) if usage_metadata else None,
                 model=model,
                 duration_ms=duration_ms,
+                ttft_ms=ttft_ms,
+                decode_ms=decode_ms,
                 error=error,
                 subagent_name=subagent_name,
                 segments=json.dumps(segments, ensure_ascii=False) if segments else None,
@@ -153,6 +159,8 @@ async def update_message(
     usage_metadata: Optional[dict] = None,
     model: Optional[str] = None,
     duration_ms: Optional[int] = None,
+    ttft_ms: Optional[int] = None,
+    decode_ms: Optional[int] = None,
     error: Optional[str] = None,
     subagent_name: Optional[str] = None,
     segments: Optional[list] = None,
@@ -203,6 +211,10 @@ async def update_message(
             values["model"] = model
         if duration_ms is not None:
             values["duration_ms"] = duration_ms
+        if ttft_ms is not None:
+            values["ttft_ms"] = ttft_ms
+        if decode_ms is not None:
+            values["decode_ms"] = decode_ms
         if error is not None:
             values["error"] = error
         if subagent_name is not None:

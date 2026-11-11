@@ -248,6 +248,8 @@ async def _save_or_update_assistant_message_sage(
     usage_metadata: dict | None = None,
     model: str | None = None,
     duration_ms: int | None = None,
+    ttft_ms: int | None = None,
+    decode_ms: int | None = None,
     error: str | None = None,
     subagent_name: str | None = None,
     segments: list | None = None,
@@ -274,6 +276,8 @@ async def _save_or_update_assistant_message_sage(
             )
             # 多轮续跑（工具确认/重试）累计耗时；模型取最新一轮
             duration_ms = (message.get("durationMs") or 0) + (duration_ms or 0)
+            ttft_ms = (message.get("ttftMs") or 0) + (ttft_ms or 0)
+            decode_ms = (message.get("decodeMs") or 0) + (decode_ms or 0)
             model = model or message.get("model")
             # 分段来源跨轮次累积（与 content 的拼接语义一致）；None 表示不改动
             if segments is not None:
@@ -291,6 +295,8 @@ async def _save_or_update_assistant_message_sage(
                 usage_metadata=usage_metadata,
                 model=model,
                 duration_ms=duration_ms,
+                ttft_ms=ttft_ms,
+                decode_ms=decode_ms,
                 error=error,
                 subagent_name=subagent_name,
                 segments=segments,
@@ -311,6 +317,8 @@ async def _save_or_update_assistant_message_sage(
                 usage_metadata=usage_metadata,
                 model=model,
                 duration_ms=duration_ms,
+                ttft_ms=ttft_ms,
+                decode_ms=decode_ms,
                 error=error,
                 subagent_name=subagent_name,
                 segments=segments,
@@ -345,6 +353,10 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     # 用于持久化的累积数据
     content_parts = []
     reasoning_parts = []
+    first_token_at = None  # 本轮首个可见 token 的时刻（reasoning 或正文）
+    stream_started_at = None  # 当前连续输出片段的起点
+    last_token_at = None
+    decode_ms_accum = 0.0  # 实际流式输出时长（排除工具执行/等待）
     subagent_name = None  # 本消息的子 agent 来源（含 dsh 产出即记 'dsh'，否则 None）
     subagent_segments = []  # 分段来源 [{agent, text}]，与实时 chat.delta 同源同序
     tool_call = []  # 工具调用列表
@@ -356,8 +368,29 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     usage_metadata = None  # token 用量（流式过程中累积，done 时随消息落库）
     finalized = False  # 本轮是否已由 done/error 正常收尾（取消提前结束则为 False）
 
+    def mark_token() -> None:
+        """记录一次可见输出：维护 TTFT 与「连续输出片段」的边界。"""
+        nonlocal first_token_at, stream_started_at, last_token_at
+        now = time.monotonic()
+        if first_token_at is None:
+            first_token_at = now
+        if stream_started_at is None:
+            stream_started_at = now
+        last_token_at = now
+
+    def flush_decode() -> None:
+        """工具调用/流结束时封口当前片段，避免把工具执行时间算进解码速度。"""
+        nonlocal stream_started_at, decode_ms_accum
+        if stream_started_at is not None and last_token_at is not None:
+            decode_ms_accum += max(0.0, last_token_at - stream_started_at)
+            stream_started_at = None
+
     async def persist(error: str = "", content: str | None = None):
         """本轮落库：done / error / 取消三条路径共用，保证字段口径一致。"""
+        flush_decode()
+        now = time.monotonic()
+        ttft_ms = int((first_token_at - turn_started) * 1000) if first_token_at else 0
+        decode_ms = int(decode_ms_accum * 1000)
         _spawn(
             _save_or_update_assistant_message_sage(
                 session_id=session_id,
@@ -372,7 +405,9 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 tool_call_result=tool_call_result if tool_call_result else None,
                 usage_metadata=usage_metadata,
                 model=turn_model,
-                duration_ms=int((time.monotonic() - turn_started) * 1000),
+                duration_ms=int((now - turn_started) * 1000),
+                ttft_ms=ttft_ms,
+                decode_ms=decode_ms,
                 error=error,
                 subagent_name=subagent_name,
                 segments=subagent_segments if subagent_name else None,
@@ -422,6 +457,8 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                     await flush()
                 buffer_agent = agent
                 text = event["text"]
+                if text:
+                    mark_token()
                 buffer.append(text)
                 buffer_chars += len(text)
                 # 维护累计字符数而不是每次 sum()：流式期间这是每 token 都会走的热路径
@@ -437,10 +474,13 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 # 先把已积累的 delta 正文 flush，保证 reasoning 帧不插队到正文之前
                 await flush()
                 reasoning_text = event.get("text", "")
+                if reasoning_text:
+                    mark_token()
                 reasoning_parts.append(reasoning_text)
                 await emit("agent.reasoning", {"msgId": msg_id, "text": reasoning_text})
             elif kind == "tool":
                 await flush()
+                flush_decode()
                 tool_name = event.get("name")
                 phase = event.get("phase")
                 call_id = event.get("tool_call_id")
