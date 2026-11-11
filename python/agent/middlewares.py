@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import io
 import logging
 import os
@@ -9,9 +10,7 @@ from langchain.agents.middleware import before_agent, before_model, wrap_model_c
 from langchain.agents.middleware.types import PrivateStateAttr
 from langchain.agents import AgentState
 from langgraph.runtime import Runtime
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
-from langchain.messages import RemoveMessage
-from langgraph.graph.message import REMOVE_ALL_MESSAGES
+from langchain_core.messages import SystemMessage
 import config_loader
 from typing import Annotated, Any
 from typing_extensions import NotRequired
@@ -33,33 +32,9 @@ class AgentInfoState(AgentState):
     metadata: NotRequired[Annotated[str, PrivateStateAttr]]
 
 
-@before_model
-async def trim_messages(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
-    """Keep only the last few messages to fit context window."""
-    messages = state["messages"]
-
-    cfg = config_loader.current()
-    try:
-        memory_window = int(cfg.active_agent_config().get("memoryWindow", 50))
-    except (TypeError, ValueError, AttributeError):
-        memory_window = 50
-
-    if len(messages) <= memory_window:
-        return None  # No changes needed
-
-    first_msg = messages[0]
-    # 起点与旧写法等价（偶数取最后 window 条；奇数多让一位，保持奇偶对齐），
-    # 另外补两个边界：至少保留尾部 1 条（window=1 时旧写法会退化成"一条不裁"），
-    # 且起点不能落在 ToolMessage 上 —— 它配对的 AIMessage(tool_calls) 会被留在
-    # 裁剪区外，LangGraph / 上游会因「tool_call 找不到对应结果」直接报错。
-    tail_start = len(messages) - memory_window + (0 if len(messages) % 2 == 0 else 1)
-    tail_start = max(1, min(tail_start, len(messages) - 1))
-    while tail_start > 1 and isinstance(messages[tail_start], ToolMessage):
-        tail_start -= 1
-    recent_messages = messages[tail_start:]
-    new_messages = [first_msg] + recent_messages
-
-    return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *new_messages]}
+# 旧的 trim_messages（按 memoryWindow 条数裁剪）已移除：
+# 它会在摘要触发前先截断历史，导致摘要只看到残缺历史、甚至永远不触发；
+# 上下文收敛统一交给 token 驱动的 SummarizationMiddleware（见 engine._build_middleware）。
 
 
 # ========================= 对话历史里的媒体块守卫 =========================
@@ -94,13 +69,17 @@ def _as_int(value: Any, default: int) -> int:
 
 
 def _media_guard_config() -> dict[str, int]:
-    """读取 llm.profiles.<active>.contextCompression 下的媒体守卫参数（全部带默认值）。
+    """读取 llm.profiles.<active>.contextCompression 下的媒体守卫参数。
 
-    keep       同一来源（用户消息 / 工具结果 / 其它）各保留最近 N 条含媒体消息，
-               更早的媒体块替换为文本占位；0 = 一律占位（模型彻底看不到图）
-    max_bytes  单条消息内联媒体载荷合计上限（字节）；0 = 不做体积限制
-    max_px     图片降采样后的最长边像素
-    quality    降采样重编码的 JPEG 质量
+    策略对齐 dsh 的 image offload：**默认全量保留，靠逐张压缩控制体积**，
+    只有历史内联媒体总量超出预算时，才从最旧的一端整批 offload。
+
+    max_bytes     单张图片压缩后的目标字节数
+    max_px        单张图片压缩后的最长边像素
+    budget_bytes  历史内联媒体总字节预算；0 = 不限
+    budget_images 历史内联图片总张数预算；0 = 不限
+    offload_bytes 触发裁剪时一次释放的字节额度（阶梯式高水位，
+                  避免每加一张图就改写旧前缀、打断 KV cache）
     """
     try:
         profile = config_loader.current().active_llm_profile() or {}
@@ -110,10 +89,11 @@ def _media_guard_config() -> dict[str, int]:
     except (AttributeError, TypeError):
         cc = {}
     return {
-        "keep": max(0, _as_int(cc.get("mediaKeep"), 1)),
-        "max_bytes": max(0, _as_int(cc.get("mediaMaxKB"), 512)) * 1024,
-        "max_px": max(64, _as_int(cc.get("mediaMaxPx"), 1280)),
-        "quality": min(95, max(30, _as_int(cc.get("mediaJpegQuality"), 80))),
+        "max_bytes": max(0, _as_int(cc.get("mediaMaxKB"), 1024)) * 1024,
+        "max_px": max(256, _as_int(cc.get("mediaMaxPx"), 1568)),
+        "budget_bytes": max(0, _as_int(cc.get("mediaBudgetKB"), 8192)) * 1024,
+        "budget_images": max(0, _as_int(cc.get("mediaMaxImages"), 24)),
+        "offload_bytes": max(0, _as_int(cc.get("mediaOffloadKB"), 1024)) * 1024,
     }
 
 
@@ -191,14 +171,6 @@ def _elide_block(block: Any, message: Any) -> dict:
     return {"type": "text", "text": text}
 
 
-def _elide_media_blocks(blocks: list, message: Any) -> list:
-    """把一条消息里的全部内联媒体块替换为文本占位，其余块原位保留"""
-    return [
-        block if _media_payload(block) is None else _elide_block(block, message)
-        for block in blocks
-    ]
-
-
 def _shrink_image_block(block: Any, *, max_px: int, quality: int) -> dict | None:
     """把图片块降采样并重编码为 JPEG，返回同形状的新块；不适用 / 失败返回 None。
 
@@ -251,105 +223,209 @@ def _shrink_image_block(block: Any, *, max_px: int, quality: int) -> dict | None
     return None
 
 
-async def _shrink_or_elide(blocks: list, message: Any, conf: dict[str, int]) -> list:
-    """单条消息内联载荷超限时的两级处理：先降采样图片，仍超限的块按体积从大到小占位"""
-    max_bytes = conf["max_bytes"]
-    new_blocks = list(blocks)
-
-    for i, block in enumerate(new_blocks):
-        if _payload_bytes(block) == 0:
-            continue
-        shrunk = await asyncio.to_thread(
-            _shrink_image_block, block, max_px=conf["max_px"], quality=conf["quality"]
-        )
-        if shrunk is not None:
-            new_blocks[i] = shrunk
-
-    if sum(_payload_bytes(b) for b in new_blocks) > max_bytes:
-        order = sorted(
-            (i for i, b in enumerate(new_blocks) if _payload_bytes(b) > 0),
-            key=lambda i: _payload_bytes(new_blocks[i]),
-            reverse=True,
-        )
-        for i in order:
-            if sum(_payload_bytes(b) for b in new_blocks) <= max_bytes:
-                break
-            new_blocks[i] = _elide_block(new_blocks[i], message)
-
-    return new_blocks
+# 质量阶梯（对齐 dsh 的 85/75/60）：从高到低尝试，取第一个满足目标字节的产物；
+# 都不满足时保留最小产物——始终保图，不因「压不到目标」把图删掉。
+_JPEG_QUALITY_LADDER = (85, 75, 60)
+# 记录「已经是我们压过但仍未达到目标」的图片载荷哈希：
+# 这类图（内容复杂、压不下去）下一次不再重复编码，避免每轮白烧 CPU。
+_COMPRESSED_IMAGE_HASHES: set[str] = set()
+_COMPRESSED_HASH_LIMIT = 512
 
 
-def _bucket_of(message: Any) -> str:
-    """媒体消息归类：用户消息 / 工具结果 / 其它，各自独立计算保留额度。"""
-    if isinstance(message, HumanMessage):
-        return "user"
-    if isinstance(message, ToolMessage):
-        return "tool"
-    return "other"
+def _remember_compressed(payload: str) -> None:
+    if len(_COMPRESSED_IMAGE_HASHES) >= _COMPRESSED_HASH_LIMIT:
+        _COMPRESSED_IMAGE_HASHES.clear()
+    _COMPRESSED_IMAGE_HASHES.add(hashlib.sha256(payload.encode("ascii", "ignore")).hexdigest())
+
+
+def _is_known_compressed(payload: str) -> bool:
+    return hashlib.sha256(payload.encode("ascii", "ignore")).hexdigest() in _COMPRESSED_IMAGE_HASHES
+
+
+def _compress_image_block(block: Any, *, max_px: int, target_bytes: int) -> dict | None:
+    """把单张图片压到「最长边 ≤ max_px 且字节 ≤ target_bytes」；已达标返回 None。
+
+    这与 dsh 的 request-image 处理同构：先按最长边等比缩放，再走质量阶梯，
+    取满足目标的最小产物；压不到目标也保留最小产物（**永不因为太大而丢图**）。
+
+    幂等：已经是 JPEG 且字节达标时直接跳过，重复调用不会反复重编码。
+    """
+    if not isinstance(block, dict) or not _media_mime(block).startswith("image/"):
+        return None
+    info = _media_payload(block)
+    if info is None:
+        return None
+    if target_bytes <= 0 and max_px <= 0:
+        return None
+
+    original_bytes = len(info[0]) * 3 // 4
+    if _is_known_compressed(info[0]):
+        return None
+    if info[1] == "image/jpeg" and target_bytes > 0 and original_bytes <= target_bytes:
+        return None
+
+    best: dict | None = None
+    best_bytes = original_bytes
+    ladder = _JPEG_QUALITY_LADDER if target_bytes > 0 else (85,)
+    for quality in ladder:
+        candidate = _shrink_image_block(block, max_px=max_px, quality=quality)
+        if candidate is None:
+            break
+        size = _payload_bytes(candidate)
+        if size < best_bytes:
+            best, best_bytes = candidate, size
+        if target_bytes > 0 and size <= target_bytes:
+            break
+
+    if best is None:
+        return None
+    # 压完反而更大（原图本来就是高压缩比）时保留原图
+    if best_bytes >= original_bytes:
+        return None
+    best_info = _media_payload(best)
+    if best_info is not None:
+        _remember_compressed(best_info[0])
+    return best
 
 
 @before_model
 async def trim_media_history(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
-    """收敛历史里的内联媒体块（图片/音视频/PDF 的 base64）。
+    """收敛历史里的内联媒体块，策略对齐 dsh 的 image offload。
 
-    两级规则（均幂等，重复执行不会再有变化）：
+    规则（幂等）：
 
-    1. **保留额度**：同一来源（用户消息 / 工具结果 / 其它）各自最多保留最近
-       `mediaKeep` 条含媒体消息，更早的媒体块替换为文本占位（带原始路径，模型可用
-       read_file 重新取回）。于是请求里的图片数量与「已进行多少轮」无关，恒定 O(keep)，
-       这是防止越聊越大的关键。
-    2. **体积上限**：单条消息内联载荷合计超过 `mediaMaxKB` 时，图片先降采样重编码为
-       JPEG（最长边 `mediaMaxPx`、质量 `mediaJpegQuality`），仍超限的块退化为占位。
-       专治「一张截图就爆窗口」（本地网关常按字符数折 token，base64 会直接超窗）。
+    1. **逐张压缩**：所有内联图片都按最长边 `mediaMaxPx`、单图目标 `mediaMaxKB`
+       重新编码（JPEG 质量阶梯 85/75/60，取满足目标的最小产物）。压不到目标也保留
+       最小产物，绝不因为"太大"直接丢图。
+    2. **总量预算**：历史内联媒体总字节超过 `mediaBudgetKB`，或图片张数超过
+       `mediaMaxImages` 时，才从**最旧的一端**开始 offload；一次释放
+       `mediaOffloadKB` 的额度（阶梯式高水位），避免每来一张新图就改写旧前缀。
+    3. 被 offload 的块换成带原始路径的文本占位，模型可用 read_file 重新取回。
 
-    为什么用 before_model 写回 state，而不是 wrap_model_call 只改本次请求：
-    只有写回 state（同 id 覆盖）才能把 base64 从 checkpoint 里真正抹掉，
-    否则下一轮模型调用又会原样重发；wrap_model_call 只挡得住当前这一次。
+    与旧实现的关键差别：不再使用 `mediaKeep` 的「每个来源只留 1 条消息」。
+    图片默认全量保留，只有总预算真的爆了才丢弃最旧的媒体。
     """
     messages = state.get("messages") or []
     if not messages:
         return None
 
     conf = _media_guard_config()
-    if conf["keep"] <= 0 and conf["max_bytes"] <= 0:
-        return None  # 两种手段都关掉 → 保持旧行为，什么都不动
+    if (
+        conf["max_bytes"] <= 0
+        and conf["max_px"] <= 0
+        and conf["budget_bytes"] <= 0
+        and conf["budget_images"] <= 0
+    ):
+        return None
 
-    keep_counts: dict[str, int] = {}
-    updated: list = []
-
-    # 从最新往最旧扫：每个来源的头 keep 条媒体消息保留，其余收敛
-    for message in reversed(messages):
+    # 先把每条消息的 content 块复制出来，后续压缩 / offload 都在这份副本上做
+    blocks_by_idx: list[list | None] = []
+    for message in messages:
         blocks = _blocks_of(message)
         if not blocks or not any(_media_payload(b) is not None for b in blocks):
+            blocks_by_idx.append(None)
+        else:
+            blocks_by_idx.append(list(blocks))
+
+    # ---------- 1) 逐张压缩 ----------
+    for blocks in blocks_by_idx:
+        if not blocks:
             continue
+        for i, block in enumerate(blocks):
+            if not _media_mime(block).startswith("image/"):
+                continue
+            compressed = await asyncio.to_thread(
+                _compress_image_block,
+                block,
+                max_px=conf["max_px"],
+                target_bytes=conf["max_bytes"],
+            )
+            if compressed is not None:
+                blocks[i] = compressed
 
-        bucket = _bucket_of(message)
-        seen = keep_counts.get(bucket, 0)
-        keep_counts[bucket] = seen + 1
-
-        new_blocks = None
-        if seen >= conf["keep"]:
-            new_blocks = _elide_media_blocks(blocks, message)
-        elif conf["max_bytes"] > 0 and sum(_payload_bytes(b) for b in blocks) > conf["max_bytes"]:
-            new_blocks = await _shrink_or_elide(blocks, message, conf)
-
-        if new_blocks is None or new_blocks == blocks:
+    # ---------- 2) 总量预算：从最旧一端 offload ----------
+    total_bytes = 0
+    total_images = 0
+    for blocks in blocks_by_idx:
+        if not blocks:
             continue
+        for block in blocks:
+            if _media_payload(block) is None:
+                continue
+            total_bytes += _payload_bytes(block)
+            if _media_mime(block).startswith("image/"):
+                total_images += 1
 
+    over_bytes = conf["budget_bytes"] > 0 and total_bytes > conf["budget_bytes"]
+    over_images = conf["budget_images"] > 0 and total_images > conf["budget_images"]
+    if over_bytes or over_images:
+        # 阶梯式高水位：一次多放掉一个 offload 额度，避免下一张图又触发改写
+        target_bytes = (
+            max(0, conf["budget_bytes"] - conf["offload_bytes"])
+            if over_bytes
+            else 0
+        )
+        target_images = conf["budget_images"] if over_images else 0
+        kept_bytes = 0
+        kept_images = 0
+        first_media = True
+
+        for idx in range(len(messages) - 1, -1, -1):
+            blocks = blocks_by_idx[idx]
+            if not blocks:
+                continue
+            for i in range(len(blocks) - 1, -1, -1):
+                block = blocks[i]
+                if _media_payload(block) is None:
+                    continue
+
+                size = _payload_bytes(block)
+                is_image = _media_mime(block).startswith("image/")
+
+                # 最新的一块无论如何保留：即便它自己就超预算，也不能把刚发来的图丢掉
+                drop_for_bytes = (
+                    over_bytes and kept_bytes + size > target_bytes
+                )
+                drop_for_images = (
+                    over_images
+                    and is_image
+                    and kept_images + 1 > target_images
+                )
+                if not first_media and (drop_for_bytes or drop_for_images):
+                    blocks[i] = _elide_block(block, messages[idx])
+                    continue
+
+                first_media = False
+                kept_bytes += size
+                if is_image:
+                    kept_images += 1
+
+    # ---------- 3) 写回变化 ----------
+    updated: list = []
+    for idx, message in enumerate(messages):
+        blocks = blocks_by_idx[idx]
+        if blocks is None:
+            continue
+        original = _blocks_of(message)
+        if blocks == original:
+            continue
         # 同 id 覆盖才能替换 state 里的原消息；缺 id 的消息（旧 checkpoint 里的历史）
         # 必须就地补上，否则 LangGraph 会把这份副本当成新消息追加，反而多一条
         if not getattr(message, "id", None):
             message.id = uuid.uuid4().hex
-        updated.append(message.model_copy(update={"content": new_blocks}))
+        updated.append(message.model_copy(update={"content": blocks}))
 
     if not updated:
         return None
 
     logger.info(
-        "媒体守卫：收敛 %d 条消息的内联媒体块（保留额度=%d/来源，单条上限=%dKB）",
+        "媒体守卫：处理 %d 条消息（图片 %d 张，内联 %.1fMB；预算 %dKB/%d 张，offload 阶梯 %dKB）",
         len(updated),
-        conf["keep"],
-        conf["max_bytes"] // 1024,
+        total_images,
+        total_bytes / 1024 / 1024,
+        conf["budget_bytes"] // 1024,
+        conf["budget_images"],
+        conf["offload_bytes"] // 1024,
     )
     return {"messages": updated}
 

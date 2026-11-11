@@ -41,7 +41,6 @@ from agent.command_policy import apply_execute_allowlist
 from agent.constant import DB_URL
 from agent.workspace import resolve_workspace
 from agent.middlewares import (
-    trim_messages,
     trim_media_history,
     inject_metadata,
     load_metadata,
@@ -66,13 +65,18 @@ def _as_float(value, default: float) -> float:
 
 
 def _resolve_context_compression(cfg: "config_loader.AppConfig"):
-    """按当前 LLM 配置档解析「上下文自动压缩」中间件（完成 engine 顶部 todo）。
+    """按当前 LLM 配置档解析「上下文自动压缩」中间件。
 
     读取 llm.profiles.<activeProfile>.contextCompression：
-      - enabled:    是否启用自动压缩（默认 True；关闭则退化为仅按条数裁剪）
-      - model:      生成摘要所用的 LLM 配置档名（留空则复用当前激活档）
-      - threshold:  触发压缩的上下文占用百分比（占 contextWindow，默认 80）
-      - keepRecent: 压缩后保留的最近原始消息条数（默认 10）
+      - enabled:           是否启用自动压缩（默认 True）
+      - model:             生成摘要所用的 LLM 配置档名（留空则复用当前激活档）
+      - threshold:         触发压缩的上下文占用百分比（默认 80）
+      - headroomTokens:    触发阈值额外预留（默认 8192；对齐 dsh 的 headroom 思路）
+      - retainRatio:       压缩后保留最近原文占 contextWindow 的比例（默认 0.16）
+      - retainTokens:      直接指定保留的最近 token 数（优先于 retainRatio，上限 64k）
+      - keepRecent:        旧配置，已废弃并被忽略；保留量由 retainRatio/retainTokens 决定
+      - summaryInputTokens: 送给摘要模型的旧历史 token 上限（默认 64k；0 = 不截断）
+      - media*:            媒体守卫参数，见 middlewares.trim_media_history
 
     返回构建好的 SummarizationMiddleware；未启用时返回 None。
     摘要提示词使用 langchain SummarizationMiddleware 的内置默认值。
@@ -89,14 +93,32 @@ def _resolve_context_compression(cfg: "config_loader.AppConfig"):
     if cc.get("enabled", True) is False:
         return None
 
-    # 触发阈值：把「占 contextWindow 的百分比」换算为绝对 token 数
-    # （使用绝对 token 而非 ("fraction", x)，因为自建/兼容网关的模型可能没有 profile，
-    #  无法提供 max_input_tokens）
+    # 触发阈值：占窗口比例，同时给输出和 headroom 留空间（dsh 也是这个思路）。
+    # 使用绝对 token 而非 ("fraction", x)，因为自建/兼容网关的模型可能没有 profile。
     window = _as_int(profile.get("contextWindow"), 262144)
+    max_tokens = max(1, _as_int(profile.get("maxTokens"), 8192))
     threshold_pct = min(100.0, max(1.0, _as_float(cc.get("threshold"), 80.0)))
-    trigger_tokens = max(1, int(window * threshold_pct / 100.0))
+    headroom = max(0, _as_int(cc.get("headroomTokens"), 8192))
+    pct_trigger = max(1, int(window * threshold_pct / 100.0))
+    hard_trigger = window - max_tokens - headroom
+    trigger_tokens = min(pct_trigger, hard_trigger) if hard_trigger > 0 else pct_trigger
+    trigger_tokens = max(1, trigger_tokens)
 
-    keep_recent = max(1, _as_int(cc.get("keepRecent"), 10))
+    # 最近原文保留：优先 retainTokens，否则按 retainRatio（默认 16%）。
+    # 旧的 keepRecent 已不再参与计算，避免老配置继续把保留量压到极小。
+    retain_ratio = min(0.8, max(0.02, _as_float(cc.get("retainRatio"), 0.16)))
+    retain_tokens_cfg = _as_int(cc.get("retainTokens"), 0)
+    if retain_tokens_cfg > 0:
+        retain_tokens = retain_tokens_cfg
+    else:
+        retain_tokens = int((window - max_tokens) * retain_ratio)
+    retain_tokens = max(2048, min(65536, retain_tokens))
+    if retain_tokens >= trigger_tokens:
+        retain_tokens = max(2048, trigger_tokens // 2)
+
+    # 摘要输入：默认 64k；显式 0 表示不截断（交给摘要模型自身窗口兜底）
+    summary_input = _as_int(cc.get("summaryInputTokens"), 65536)
+    summary_input = summary_input if summary_input > 0 else None
 
     # 摘要 LLM：可指定独立配置档，留空/无效则复用当前激活档
     summary_name = (cc.get("model") or "").strip()
@@ -112,18 +134,22 @@ def _resolve_context_compression(cfg: "config_loader.AppConfig"):
     summary_llm = build_chat_llm(summary_profile)
 
     logger.info(
-        "上下文自动压缩已启用：触发阈值≈%d tokens（contextWindow=%d 的 %.0f%%），"
-        "压缩后保留最近 %d 条，摘要模型档=%s",
+        "上下文自动压缩已启用：触发阈值≈%d tokens（window=%d, maxTokens=%d, "
+        "headroom=%d, 比例=%.0f%%），保留最近≈%d tokens，摘要输入上限=%s，摘要模型档=%s",
         trigger_tokens,
         window,
+        max_tokens,
+        headroom,
         threshold_pct,
-        keep_recent,
+        retain_tokens,
+        summary_input if summary_input is not None else "不截断",
         summary_name or "(当前激活档)",
     )
     return SummarizationMiddleware(
         model=summary_llm,
-        trigger=("tokens", trigger_tokens),  # 上下文估算 token 达阈值即触发压缩
-        keep=("messages", keep_recent),      # 压缩后保留最近 N 条原始消息
+        trigger=("tokens", trigger_tokens),
+        keep=("tokens", retain_tokens),
+        trim_tokens_to_summarize=summary_input,
     )
 
 
@@ -131,18 +157,22 @@ def _build_middleware(cfg: "config_loader.AppConfig") -> list:
     """装配中间件列表。before_model 钩子在 LangGraph 里各自成节点、按列表顺序串行执行，
     因此下面的顺序就是每次模型调用前的执行顺序：
 
-    1. trim_messages      —— 廉价的「条数」裁剪（memoryWindow）
-    2. trim_media_history —— 媒体块守卫：限制历史内联图片/音视频/PDF 的数量与单条体积
-    3. summarization      —— 按 token 的摘要压缩（可选，见 _resolve_context_compression）
-    4. inject_metadata / load_metadata —— 运行时元信息注入
+    1. trim_media_history —— 媒体守卫：逐张压缩内联图片，总量超预算才 offload 最旧媒体
+    2. summarization      —— 按 token 的摘要压缩（可选，见 _resolve_context_compression）
+    3. inject_metadata / load_metadata —— 运行时元信息注入
 
-    顺序理由：2 必须排在 3 之前 —— 3 会把待压缩历史交给摘要 LLM，若历史里还留着
-    base64 图片，摘要调用自己就会超窗；先由 2 把二进制块收敛掉，摘要才只看文本。
+    不再使用 trim_messages 的「按条数裁剪」：它会在摘要触发前先把历史砍掉，
+    导致摘要看到的是残缺历史、甚至永远不触发；上下文收敛统一交给 token 驱动的
+    summarization，只有显式关闭压缩时才由用户自行承担窗口风险。
+
+    顺序理由：媒体守卫必须排在摘要之前 —— 摘要调用虽然通过 get_buffer_string
+    只取文本块，但先做压缩/预算可以避免同一轮请求体过大；同时保证摘要不会因为
+    历史里的巨量媒体而失败。
     """
-    middleware = [trim_messages, trim_media_history, inject_metadata, load_metadata]
+    middleware = [trim_media_history, inject_metadata, load_metadata]
     summarization_mw = _resolve_context_compression(cfg)
     if summarization_mw is not None:
-        middleware.insert(2, summarization_mw)
+        middleware.insert(1, summarization_mw)
     return middleware
 
 
@@ -301,9 +331,9 @@ class AgentHolder:
             # 运行时元信息（画像/系统/软件/知识库/技能）写入 state；
             # inject_metadata（wrap_model_call）在每次模型调用前把该块注入 system message，
             # 不再逐次查库/扫盘。
-            # 上下文治理见 _build_middleware：trim_messages（条数）+ trim_media_history
-            # （媒体块数量/体积，专治 read_file 读图爆上下文）+ SummarizationMiddleware
-            # （token 摘要压缩，按 llm.profiles.<active>.contextCompression 决定是否接入）。
+            # 上下文治理见 _build_middleware：trim_media_history（逐张压缩 + 预算 offload）
+            # + SummarizationMiddleware（token 摘要压缩，按 contextCompression 决定是否接入）。
+            # 不再使用按条数裁剪的 trim_messages。
             # 另注：deepagents 的 create_deep_agent 自身也会装一个带媒体外迁的
             # SummarizationMiddleware（core stack），故上下文压缩能力实际是两套并存的。
             middleware=_build_middleware(cfg),

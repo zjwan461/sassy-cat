@@ -116,7 +116,7 @@
         </div>
         <div class="field">
           <label class="check"><input type="checkbox" v-model="form.contextCompressionEnabled" /> 启用上下文自动压缩</label>
-          <span class="hint">对话上下文接近模型窗口上限时，自动把久远历史总结成一条摘要并保留近期原文，避免请求溢出（默认开启；关闭则仅按条数裁剪）</span>
+          <span class="hint">对话上下文接近模型窗口上限时，自动把久远历史总结成一条摘要并保留近期原文，避免请求溢出。关闭后不再自动裁剪历史，请自行控制会话长度</span>
         </div>
         <template v-if="form.contextCompressionEnabled">
           <div class="field">
@@ -133,53 +133,47 @@
             <span class="hint">当前上下文估算 token 达到 contextWindow 的该比例时触发压缩，范围 10~95%（默认 80%）</span>
           </div>
           <div class="field">
-            <label>压缩后保留的最近消息（条）</label>
-            <div class="stepper">
-              <button type="button" class="step-btn" @click="step('contextCompressionKeep', -1, CC_KEEP_MIN, CC_KEEP_MAX)" :disabled="form.contextCompressionKeep <= CC_KEEP_MIN"><AppIcon name="minus" :size="14" /></button>
-              <input type="number" v-model.number="form.contextCompressionKeep" :min="CC_KEEP_MIN" :max="CC_KEEP_MAX" class="step-input"
-                @blur="clamp('contextCompressionKeep', CC_KEEP_MIN, CC_KEEP_MAX, DEFAULT_CC_KEEP)" />
-              <button type="button" class="step-btn" @click="step('contextCompressionKeep', 1, CC_KEEP_MIN, CC_KEEP_MAX)" :disabled="form.contextCompressionKeep >= CC_KEEP_MAX"><AppIcon name="plus" :size="14" /></button>
-            </div>
-            <span class="hint">压缩完成后保留的最近原始消息条数，范围 1~200（默认 10）</span>
+            <label>压缩后保留最近原文（tokens）</label>
+            <input type="number" v-model.number="form.contextCompressionRetainTokens" min="0" :max="CC_RETAIN_TOKENS_MAX" step="1024" />
+            <span class="hint">默认 0 = 自动按窗口的 16% 计算（上限 64k）；压缩只替换更旧的历史，最近这段原文不动</span>
+          </div>
+          <div class="field">
+            <label>摘要输入上限（tokens）</label>
+            <input type="number" v-model.number="form.contextCompressionSummaryInput" min="0" :max="CC_SUMMARY_INPUT_MAX" step="8192" />
+            <span class="hint">送给摘要模型的旧历史 token 上限，默认 65536；0 = 不截断，交给摘要模型自身窗口兜底</span>
+          </div>
+          <div class="field">
+            <label>触发预留 headroom（tokens）</label>
+            <input type="number" v-model.number="form.contextCompressionHeadroom" min="0" :max="CC_HEADROOM_MAX" step="4096" />
+            <span class="hint">触发阈值会同时受 maxTokens 与 headroom 约束：min(窗口×比例, 窗口−maxTokens−headroom)，默认 8192</span>
           </div>
         </template>
         <!-- 媒体守卫（contextCompression.media*，见 agent/middlewares.py::trim_media_history）：
-             与上面的「自动压缩」开关相互独立 —— 关掉自动压缩只是不做摘要，历史图片的收敛照常生效，
-             否则 read_file 读图 / 用户上传附件会把上下文越撑越大，直到上游报「上下文超长」。 -->
+             与上面的「自动压缩」开关相互独立 —— 关掉自动压缩只是不做摘要，历史图片的压缩/预算照常生效。 -->
         <div class="field">
-          <label>历史图片保留条数（每种来源）</label>
-          <div class="stepper">
-            <button type="button" class="step-btn" @click="step('contextMediaKeep', -1, MEDIA_KEEP_MIN, MEDIA_KEEP_MAX)" :disabled="form.contextMediaKeep <= MEDIA_KEEP_MIN"><AppIcon name="minus" :size="14" /></button>
-            <input type="number" v-model.number="form.contextMediaKeep" :min="MEDIA_KEEP_MIN" :max="MEDIA_KEEP_MAX" class="step-input"
-              @blur="clamp('contextMediaKeep', MEDIA_KEEP_MIN, MEDIA_KEEP_MAX, DEFAULT_MEDIA_KEEP)" />
-            <button type="button" class="step-btn" @click="step('contextMediaKeep', 1, MEDIA_KEEP_MIN, MEDIA_KEEP_MAX)" :disabled="form.contextMediaKeep >= MEDIA_KEEP_MAX"><AppIcon name="plus" :size="14" /></button>
-          </div>
-          <span class="hint">read_file 读到的图与用户上传的图「各自」保留最近 N 条（0~20，默认 1）；更早的图片会被替换成带原始路径的文字占位，模型可按需用 read_file 重新读取 —— 于是上下文里的图片数不会随对话轮数增长；0 = 图片一律不保留（模型看不到任何历史图）</span>
+          <label>单张图片压缩目标（KB）</label>
+          <input type="number" v-model.number="form.contextMediaMaxKB" :min="MEDIA_MAX_KB_MIN" :max="MEDIA_MAX_KB_MAX" step="128" />
+          <span class="hint">每张历史图片都会尝试压到该体积（默认 1024KB）；压不到目标也保留最小产物，不因体积丢图；0 = 不做体积目标</span>
         </div>
         <div class="field">
-          <label>单条消息图片体积上限（KB）</label>
-          <div class="stepper">
-            <button type="button" class="step-btn" @click="step('contextMediaMaxKB', -128, MEDIA_MAX_KB_MIN, MEDIA_MAX_KB_MAX)" :disabled="form.contextMediaMaxKB <= MEDIA_MAX_KB_MIN"><AppIcon name="minus" :size="14" /></button>
-            <input type="number" v-model.number="form.contextMediaMaxKB" :min="MEDIA_MAX_KB_MIN" :max="MEDIA_MAX_KB_MAX" class="step-input"
-              @blur="clamp('contextMediaMaxKB', MEDIA_MAX_KB_MIN, MEDIA_MAX_KB_MAX, DEFAULT_MEDIA_MAX_KB)" />
-            <button type="button" class="step-btn" @click="step('contextMediaMaxKB', 128, MEDIA_MAX_KB_MIN, MEDIA_MAX_KB_MAX)" :disabled="form.contextMediaMaxKB >= MEDIA_MAX_KB_MAX"><AppIcon name="plus" :size="14" /></button>
-          </div>
-          <span class="hint">单条消息内的图片合计超过该值即触发降采样（0~16384KB，默认 512）；0 = 不做体积限制（只靠上面的条数收敛）；把「条数」与「体积」同时设为 0 即等于关闭本机制</span>
+          <label>压缩后图片最长边（px）</label>
+          <input type="number" v-model.number="form.contextMediaMaxPx" :min="MEDIA_MAX_PX_MIN" :max="MEDIA_MAX_PX_MAX" step="128" />
+          <span class="hint">按最长边等比缩放（默认 1568px）；越小越省视觉 token，但截图文字会更模糊</span>
         </div>
         <div class="field">
-          <label>降采样后图片最长边（px）</label>
-          <div class="stepper">
-            <button type="button" class="step-btn" @click="step('contextMediaMaxPx', -128, MEDIA_MAX_PX_MIN, MEDIA_MAX_PX_MAX)" :disabled="form.contextMediaMaxPx <= MEDIA_MAX_PX_MIN"><AppIcon name="minus" :size="14" /></button>
-            <input type="number" v-model.number="form.contextMediaMaxPx" :min="MEDIA_MAX_PX_MIN" :max="MEDIA_MAX_PX_MAX" class="step-input"
-              @blur="clamp('contextMediaMaxPx', MEDIA_MAX_PX_MIN, MEDIA_MAX_PX_MAX, DEFAULT_MEDIA_MAX_PX)" />
-            <button type="button" class="step-btn" @click="step('contextMediaMaxPx', 128, MEDIA_MAX_PX_MIN, MEDIA_MAX_PX_MAX)" :disabled="form.contextMediaMaxPx >= MEDIA_MAX_PX_MAX"><AppIcon name="plus" :size="14" /></button>
-          </div>
-          <span class="hint">超限图片重编码为 JPEG 时的最长边像素（128~4096，默认 1280）；越小越省上下文，但字迹与细节也越模糊</span>
+          <label>历史媒体总预算（KB）</label>
+          <input type="number" v-model.number="form.contextMediaBudgetKB" min="0" :max="MEDIA_BUDGET_KB_MAX" step="1024" />
+          <span class="hint">所有历史内联图片/音视频的总字节预算，默认 8192KB；0 = 不限制，永远只压缩不 offload</span>
         </div>
         <div class="field">
-          <label>降采样 JPEG 质量 <span class="inline-val">{{ form.contextMediaJpegQuality }}</span></label>
-          <input type="range" :min="MEDIA_JPEG_QUALITY_MIN" :max="MEDIA_JPEG_QUALITY_MAX" step="5" v-model.number="form.contextMediaJpegQuality" />
-          <span class="hint">30~95（默认 80），越低体积越小、画质越差；仅作用于被降采样的超限图片</span>
+          <label>历史图片张数预算</label>
+          <input type="number" v-model.number="form.contextMediaMaxImages" min="0" :max="MEDIA_MAX_IMAGES_MAX" step="1" />
+          <span class="hint">历史内联图片最多保留多少张，默认 24；0 = 不限制</span>
+        </div>
+        <div class="field">
+          <label>offload 阶梯（KB）</label>
+          <input type="number" v-model.number="form.contextMediaOffloadKB" min="0" :max="MEDIA_OFFLOAD_KB_MAX" step="512" />
+          <span class="hint">总预算超限时一次释放的额度，默认 1024KB；阶梯式高水位可避免每来一张图就改写旧前缀</span>
         </div>
         <div class="field">
           <label>最大输出 token（maxTokens）</label>
@@ -209,7 +203,7 @@
         <span class="card-icon"><AppIcon name="brain" :size="15" /></span>
         <div class="card-head-main">
           <div class="card-title">Agent 配置</div>
-          <div class="card-sub">人设提示词、记忆窗口与高危操作确认</div>
+          <div class="card-sub">人设提示词与高危操作确认</div>
         </div>
       </div>
       <div class="card-body form">
@@ -228,16 +222,6 @@
           <textarea v-model="form.persona" rows="10" class="mono persona"
             placeholder="你是「优墨」……（支持 {app_name} {time} {os_user} 变量）"></textarea>
           <span class="hint">{{ form.persona.length }} 字</span>
-        </div>
-        <div class="field">
-          <label>记忆窗口（条）</label>
-          <div class="stepper">
-            <button type="button" class="step-btn" @click="step('memoryWindow', -1, 2, 500)" :disabled="form.memoryWindow <= 2"><AppIcon name="minus" :size="14" /></button>
-            <input type="number" v-model.number="form.memoryWindow" min="2" max="500" class="step-input"
-              @blur="clamp('memoryWindow', 2, 500, 50)" />
-            <button type="button" class="step-btn" @click="step('memoryWindow', 1, 2, 500)" :disabled="form.memoryWindow >= 500"><AppIcon name="plus" :size="14" /></button>
-          </div>
-          <span class="hint">对话上下文保留的最近消息条数，超出后自动裁剪（默认 50）</span>
         </div>
         <div class="field">
           <label>递归上限（步）</label>
@@ -976,23 +960,26 @@ const MAX_TOKENS_MAX = 1048576
 const DEFAULT_CC_THRESHOLD = 80
 const CC_THRESHOLD_MIN = 10
 const CC_THRESHOLD_MAX = 95
-const DEFAULT_CC_KEEP = 10
-const CC_KEEP_MIN = 1
-const CC_KEEP_MAX = 200
+const DEFAULT_CC_RETAIN_TOKENS = 0
+const CC_RETAIN_TOKENS_MAX = 65536
+const DEFAULT_CC_SUMMARY_INPUT = 65536
+const CC_SUMMARY_INPUT_MAX = 262144
+const DEFAULT_CC_HEADROOM = 8192
+const CC_HEADROOM_MAX = 65536
 // 媒体守卫（contextCompression.media*，见 agent/middlewares.py::trim_media_history）：
-// 历史图片的保留条数 / 单条体积上限 / 降采样参数，默认值与 config_loader.DEFAULTS 一致
-const DEFAULT_MEDIA_KEEP = 1
-const MEDIA_KEEP_MIN = 0
-const MEDIA_KEEP_MAX = 20
-const DEFAULT_MEDIA_MAX_KB = 512
+// 图片默认全量保留、逐张压缩；只有总预算超限才从最旧一端 offload。
+const DEFAULT_MEDIA_MAX_KB = 1024
 const MEDIA_MAX_KB_MIN = 0
 const MEDIA_MAX_KB_MAX = 16384
-const DEFAULT_MEDIA_MAX_PX = 1280
-const MEDIA_MAX_PX_MIN = 128
+const DEFAULT_MEDIA_MAX_PX = 1568
+const MEDIA_MAX_PX_MIN = 256
 const MEDIA_MAX_PX_MAX = 4096
-const DEFAULT_MEDIA_JPEG_QUALITY = 80
-const MEDIA_JPEG_QUALITY_MIN = 30
-const MEDIA_JPEG_QUALITY_MAX = 95
+const DEFAULT_MEDIA_BUDGET_KB = 8192
+const MEDIA_BUDGET_KB_MAX = 131072
+const DEFAULT_MEDIA_MAX_IMAGES = 24
+const MEDIA_MAX_IMAGES_MAX = 200
+const DEFAULT_MEDIA_OFFLOAD_KB = 1024
+const MEDIA_OFFLOAD_KB_MAX = 16384
 // dsh 子代理：输出上限（DashScope qwen 系只接受 [1,131072]）与推理强度可选值
 const DSH_MAX_TOKENS_LIMIT = 131072
 const dshReasoningEffortOptions = [
@@ -1014,9 +1001,11 @@ const defaultInterruptOn = () => Object.fromEntries(interruptTools.map((t) => [t
 const form = reactive({
   provider: 'openai', baseUrl: '', apiKey: '', model: '', temperature: 0.7, contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS, extraParamsText: '{}',
   // 上下文自动压缩（随当前 LLM 配置档保存）
-  contextCompressionEnabled: true, contextCompressionModel: '', contextCompressionThreshold: DEFAULT_CC_THRESHOLD, contextCompressionKeep: DEFAULT_CC_KEEP,
+  contextCompressionEnabled: true, contextCompressionModel: '', contextCompressionThreshold: DEFAULT_CC_THRESHOLD,
+  contextCompressionRetainTokens: DEFAULT_CC_RETAIN_TOKENS, contextCompressionSummaryInput: DEFAULT_CC_SUMMARY_INPUT, contextCompressionHeadroom: DEFAULT_CC_HEADROOM,
   // 媒体守卫（同样随当前 LLM 配置档保存；不受上面的自动压缩开关影响）
-  contextMediaKeep: DEFAULT_MEDIA_KEEP, contextMediaMaxKB: DEFAULT_MEDIA_MAX_KB, contextMediaMaxPx: DEFAULT_MEDIA_MAX_PX, contextMediaJpegQuality: DEFAULT_MEDIA_JPEG_QUALITY,
+  contextMediaMaxKB: DEFAULT_MEDIA_MAX_KB, contextMediaMaxPx: DEFAULT_MEDIA_MAX_PX,
+  contextMediaBudgetKB: DEFAULT_MEDIA_BUDGET_KB, contextMediaMaxImages: DEFAULT_MEDIA_MAX_IMAGES, contextMediaOffloadKB: DEFAULT_MEDIA_OFFLOAD_KB,
   persona: '', memoryWindow: 50, recursionLimit: 100, idleEnabled: true, idleThreshold: 30, idleQuiet: 10,
   // 工作区（agent.workspace，空=应用内部 runtime；切换即时保存，不随配置档保存）
   workspace: '',
@@ -1311,12 +1300,15 @@ function fillFormFromProfile() {
   form.contextCompressionEnabled = cc.enabled !== false
   form.contextCompressionModel = cc.model || ''
   form.contextCompressionThreshold = Number.isFinite(Number(cc.threshold)) ? Number(cc.threshold) : DEFAULT_CC_THRESHOLD
-  form.contextCompressionKeep = Number.isFinite(Number(cc.keepRecent)) ? Number(cc.keepRecent) : DEFAULT_CC_KEEP
-  // 媒体守卫：缺省或非法值回退默认，与 config_loader.DEFAULTS 保持一致
-  form.contextMediaKeep = Number.isFinite(Number(cc.mediaKeep)) ? Number(cc.mediaKeep) : DEFAULT_MEDIA_KEEP
+  form.contextCompressionRetainTokens = Number.isFinite(Number(cc.retainTokens)) ? Number(cc.retainTokens) : DEFAULT_CC_RETAIN_TOKENS
+  form.contextCompressionSummaryInput = Number.isFinite(Number(cc.summaryInputTokens)) ? Number(cc.summaryInputTokens) : DEFAULT_CC_SUMMARY_INPUT
+  form.contextCompressionHeadroom = Number.isFinite(Number(cc.headroomTokens)) ? Number(cc.headroomTokens) : DEFAULT_CC_HEADROOM
+  // 媒体守卫：缺省或非法值回退默认；旧版的 mediaKeep/mediaJpegQuality 已废弃
   form.contextMediaMaxKB = Number.isFinite(Number(cc.mediaMaxKB)) ? Number(cc.mediaMaxKB) : DEFAULT_MEDIA_MAX_KB
   form.contextMediaMaxPx = Number.isFinite(Number(cc.mediaMaxPx)) ? Number(cc.mediaMaxPx) : DEFAULT_MEDIA_MAX_PX
-  form.contextMediaJpegQuality = Number.isFinite(Number(cc.mediaJpegQuality)) ? Number(cc.mediaJpegQuality) : DEFAULT_MEDIA_JPEG_QUALITY
+  form.contextMediaBudgetKB = Number.isFinite(Number(cc.mediaBudgetKB)) ? Number(cc.mediaBudgetKB) : DEFAULT_MEDIA_BUDGET_KB
+  form.contextMediaMaxImages = Number.isFinite(Number(cc.mediaMaxImages)) ? Number(cc.mediaMaxImages) : DEFAULT_MEDIA_MAX_IMAGES
+  form.contextMediaOffloadKB = Number.isFinite(Number(cc.mediaOffloadKB)) ? Number(cc.mediaOffloadKB) : DEFAULT_MEDIA_OFFLOAD_KB
   form.extraParamsText = JSON.stringify(p.extraParams || {}, null, 2)
   keyRevealed.value = false
   validateExtra()
@@ -1470,12 +1462,15 @@ async function saveAll() {
     { path: `${llmPrefix}.contextCompression.enabled`, value: !!form.contextCompressionEnabled },
     { path: `${llmPrefix}.contextCompression.model`, value: form.contextCompressionModel || '' },
     { path: `${llmPrefix}.contextCompression.threshold`, value: Number.isFinite(Number(form.contextCompressionThreshold)) ? Number(form.contextCompressionThreshold) : DEFAULT_CC_THRESHOLD },
-    { path: `${llmPrefix}.contextCompression.keepRecent`, value: Number(form.contextCompressionKeep) || DEFAULT_CC_KEEP },
-    // 媒体守卫：历史图片保留条数 / 单条体积上限 / 降采样参数（0 是合法值，故用 isFinite 而非 ||）
-    { path: `${llmPrefix}.contextCompression.mediaKeep`, value: Number.isFinite(Number(form.contextMediaKeep)) ? Number(form.contextMediaKeep) : DEFAULT_MEDIA_KEEP },
+    { path: `${llmPrefix}.contextCompression.retainTokens`, value: Math.max(0, Math.min(CC_RETAIN_TOKENS_MAX, Number(form.contextCompressionRetainTokens) || 0)) },
+    { path: `${llmPrefix}.contextCompression.summaryInputTokens`, value: Math.max(0, Math.min(CC_SUMMARY_INPUT_MAX, Number(form.contextCompressionSummaryInput) || 0)) },
+    { path: `${llmPrefix}.contextCompression.headroomTokens`, value: Math.max(0, Math.min(CC_HEADROOM_MAX, Number(form.contextCompressionHeadroom) || 0)) },
+    // 媒体守卫：单图压缩目标 / 总预算 / 张数预算 / offload 阶梯（0 是合法值，故用 isFinite）
     { path: `${llmPrefix}.contextCompression.mediaMaxKB`, value: Number.isFinite(Number(form.contextMediaMaxKB)) ? Number(form.contextMediaMaxKB) : DEFAULT_MEDIA_MAX_KB },
     { path: `${llmPrefix}.contextCompression.mediaMaxPx`, value: Number.isFinite(Number(form.contextMediaMaxPx)) ? Number(form.contextMediaMaxPx) : DEFAULT_MEDIA_MAX_PX },
-    { path: `${llmPrefix}.contextCompression.mediaJpegQuality`, value: Number.isFinite(Number(form.contextMediaJpegQuality)) ? Number(form.contextMediaJpegQuality) : DEFAULT_MEDIA_JPEG_QUALITY },
+    { path: `${llmPrefix}.contextCompression.mediaBudgetKB`, value: Number.isFinite(Number(form.contextMediaBudgetKB)) ? Number(form.contextMediaBudgetKB) : DEFAULT_MEDIA_BUDGET_KB },
+    { path: `${llmPrefix}.contextCompression.mediaMaxImages`, value: Number.isFinite(Number(form.contextMediaMaxImages)) ? Number(form.contextMediaMaxImages) : DEFAULT_MEDIA_MAX_IMAGES },
+    { path: `${llmPrefix}.contextCompression.mediaOffloadKB`, value: Number.isFinite(Number(form.contextMediaOffloadKB)) ? Number(form.contextMediaOffloadKB) : DEFAULT_MEDIA_OFFLOAD_KB },
     { path: `${llmPrefix}.extraParams`, value: JSON.parse(form.extraParamsText || '{}') },
     { path: 'agent.activeProfile', value: activeAgentProfile.value },
     { path: `${agentPrefix}.persona`, value: form.persona },
