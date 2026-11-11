@@ -118,6 +118,20 @@
           <p class="empty-sub">本喵听着呢 · 可以粘贴或拖入图片、文档</p>
         </div>
         <div v-for="m in messages" :key="m.id" class="msg" :class="[m.role, { 'search-hit': m.id === convSearchActiveId }]" :data-msg-id="m.id">
+          <template v-if="m.role === 'compaction'">
+            <div class="compaction-row">
+              <button type="button" class="compaction-btn" @click="m.compactionOpen = !m.compactionOpen">
+                <span class="compaction-icon">🗜</span>
+                <span class="compaction-title">上下文已压缩</span>
+                <span class="compaction-meta">已压缩 {{ m.compaction?.items || 0 }} 条历史记录（约 {{ fmtTokens(m.compaction?.tokens) }} tokens）</span>
+                <span v-if="m.content" class="compaction-chevron" :class="{ open: m.compactionOpen }">⌄</span>
+              </button>
+              <div v-if="m.compactionOpen && m.content" class="compaction-body">
+                <MarkdownRenderer :content="m.content" :done="true" />
+              </div>
+            </div>
+          </template>
+          <template v-else>
           <div class="msg-avatar" :class="m.role">
             <img v-if="isAssistant(m)" :src="logoUrl" alt="" />
             <span v-else>你</span>
@@ -332,6 +346,7 @@
             <!-- 光标：放在 msg-body 末尾，确保出现在所有内容（包括工具步骤和中断确认）之后 -->
             <span v-if="m.streaming" class="cursor cursor-at-end">▌</span>
           </div>
+          </template>
         </div>
       </div>
 
@@ -439,7 +454,7 @@
             <span>{{ sessionStats.turns }} 轮 {{ sessionStats.steps }} 步</span>
             <template v-if="sessionStats.tokensPerSecond != null">
               <span class="cs-sep">·</span>
-              <span>{{ sessionStats.estimated ? '≈' : '' }}{{ sessionStats.tokensPerSecond }} tok/s</span>
+              <span>{{ sessionStats.estimated ? '≈' : '' }}{{ formatSpeed(sessionStats.tokensPerSecond) }} tok/s</span>
             </template>
           </div>
           <div v-if="sessionStats.totalTokens" class="cs-pill" :title="`输入 ${fmtStatInt(sessionStats.inputTokens)} · 输出 ${fmtStatInt(sessionStats.outputTokens)}`">
@@ -596,6 +611,13 @@ const sessionStats = ref(null)
 
 function fmtStatInt(n) {
   return Number(n || 0).toLocaleString('zh-CN')
+}
+
+// 与 dsh 的 StatsPills 一致：>=10 取整，<10 保留一位小数
+function formatSpeed(value) {
+  if (value == null) return ''
+  const speed = Math.max(0, Number(value) || 0)
+  return speed >= 10 ? String(Math.round(speed)) : String(Math.round(speed * 10) / 10)
 }
 
 function fmtStatTokens(n) {
@@ -1879,6 +1901,74 @@ onUnmounted(() => {
   gap: 10px;
   margin-bottom: 18px;
   animation: fadeUp var(--dur) var(--ease-out) both;
+}
+
+/* 上下文压缩标记：不占头像列，单独一行，展开后显示摘要正文 */
+.msg.compaction {
+  display: block;
+  margin: 0 0 14px;
+}
+.compaction-row {
+  max-width: min(100%, 820px);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-card) 70%, transparent);
+  overflow: hidden;
+}
+.compaction-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 11px;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.compaction-btn:hover {
+  background: var(--ink-750);
+  color: var(--text-2);
+}
+.compaction-icon {
+  flex: none;
+  font-size: 13px;
+  opacity: 0.8;
+}
+.compaction-title {
+  flex: none;
+  color: var(--text-2);
+  font-weight: 500;
+}
+.compaction-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-4);
+}
+.compaction-chevron {
+  flex: none;
+  margin-left: auto;
+  font-size: 14px;
+  line-height: 1;
+  transition: transform var(--dur) var(--ease-out);
+}
+.compaction-chevron.open {
+  transform: rotate(180deg);
+}
+.compaction-body {
+  max-height: 280px;
+  overflow: auto;
+  padding: 2px 14px 12px 30px;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1.7;
+  border-top: 1px solid var(--line-1);
 }
 
 .msg.user {

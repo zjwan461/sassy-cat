@@ -170,6 +170,9 @@ async def _worker_stream(
                 # 注意：来源标签不能存进 `agent` 变量——它是本函数的 graph 形参，
                 # 覆盖后流尾的 agent.aget_state() 会拿到字符串（interrupt 检查失效）
                 if isinstance(chunk, dict):
+                    if chunk.get("type") == "compaction":
+                        await q.put({"kind": "compaction", "payload": chunk})
+                        continue
                     agent_label = chunk.get("agent") or "dsh"
                     text = chunk.get("text") or ""
                 else:

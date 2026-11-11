@@ -49,6 +49,7 @@ def _message_to_dict(msg: Message) -> dict:
         "durationMs": msg.duration_ms,
         "ttftMs": msg.ttft_ms,
         "decodeMs": msg.decode_ms,
+        "decodeTokens": msg.decode_tokens,
         "error": msg.error,
         "subagentName": msg.subagent_name,
         "segments": _load_json(msg.segments),
@@ -85,6 +86,7 @@ async def save_message(
     duration_ms: Optional[int] = None,
     ttft_ms: Optional[int] = None,
     decode_ms: Optional[int] = None,
+    decode_tokens: Optional[int] = None,
     error: Optional[str] = None,
     subagent_name: Optional[str] = None,
     segments: Optional[list] = None,
@@ -128,6 +130,7 @@ async def save_message(
                 duration_ms=duration_ms,
                 ttft_ms=ttft_ms,
                 decode_ms=decode_ms,
+                decode_tokens=decode_tokens,
                 error=error,
                 subagent_name=subagent_name,
                 segments=json.dumps(segments, ensure_ascii=False) if segments else None,
@@ -161,6 +164,7 @@ async def update_message(
     duration_ms: Optional[int] = None,
     ttft_ms: Optional[int] = None,
     decode_ms: Optional[int] = None,
+    decode_tokens: Optional[int] = None,
     error: Optional[str] = None,
     subagent_name: Optional[str] = None,
     segments: Optional[list] = None,
@@ -215,6 +219,8 @@ async def update_message(
             values["ttft_ms"] = ttft_ms
         if decode_ms is not None:
             values["decode_ms"] = decode_ms
+        if decode_tokens is not None:
+            values["decode_tokens"] = decode_tokens
         if error is not None:
             values["error"] = error
         if subagent_name is not None:

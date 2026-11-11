@@ -46,6 +46,7 @@ from agent.middlewares import (
     load_metadata,
 )
 from langchain.agents.middleware import SummarizationMiddleware
+from langchain.messages import RemoveMessage
 from langchain_core.messages import HumanMessage
 import uuid
 
@@ -53,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 
 class _SessionSummarizationMiddleware(SummarizationMiddleware):
-    """给压缩摘要一个稳定 id，确保 add_messages reducer 把它当作可更新消息而不是临时消息。"""
+    """给压缩摘要一个稳定 id，并把压缩结果作为 UI 事件广播出去。"""
 
     @staticmethod
     def _build_new_messages(summary: str):
@@ -64,6 +65,62 @@ class _SessionSummarizationMiddleware(SummarizationMiddleware):
                 additional_kwargs={"lc_source": "summarization"},
             )
         ]
+
+    async def abefore_model(self, state, runtime):
+        original = list(state.get("messages") or [])
+        try:
+            before_tokens = self.token_counter(original)
+        except Exception:  # noqa: BLE001
+            before_tokens = 0
+        result = await super().abefore_model(state, runtime)
+        if not result:
+            return result
+        new_messages = result.get("messages") or []
+        summary_msg = next(
+            (
+                m
+                for m in new_messages
+                if getattr(m, "additional_kwargs", {}).get("lc_source")
+                == "summarization"
+            ),
+            None,
+        )
+        if summary_msg is None:
+            return result
+        preserved = [m for m in new_messages if not isinstance(m, RemoveMessage)]
+        try:
+            after_tokens = self.token_counter(preserved)
+        except Exception:  # noqa: BLE001
+            after_tokens = before_tokens
+        text = summary_msg.content
+        if isinstance(text, list):
+            text = "".join(
+                b.get("text", "") for b in text if isinstance(b, dict)
+            )
+        text = str(text or "")
+        prefix = "Here is a summary of the conversation to date:\n\n"
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+        payload = {
+            "type": "compaction",
+            "compactionId": f"compaction-{uuid.uuid4().hex}",
+            "summary": text.strip(),
+            "shadowedItems": max(0, len(original) - max(0, len(preserved) - 1)),
+            "shadowedTokens": max(0, before_tokens - after_tokens),
+        }
+        try:
+            writer = getattr(runtime, "stream_writer", None)
+            if callable(writer):
+                writer(payload)
+        except Exception:  # noqa: BLE001
+            logger.warning("广播上下文压缩事件失败", exc_info=True)
+        logger.info(
+            "上下文压缩完成：%d 条消息 / %d tokens -> 摘要 %d 字符",
+            payload["shadowedItems"],
+            payload["shadowedTokens"],
+            len(payload["summary"]),
+        )
+        return result
 
 
 def _as_int(value, default: int) -> int:

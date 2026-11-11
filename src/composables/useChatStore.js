@@ -353,6 +353,27 @@ function ensureStarted() {
       m.usage = p.usage_metadata
     }
   })
+  on('chat.compaction', (p) => {
+    // 压缩标记要插在「正在生成的助手消息」之前：压缩发生在该轮模型请求前，
+    // 追加到末尾会让它看起来像压缩后的产物。历史接口也会返回同一 marker。
+    const st = stateFor(p.sessionId || _active.convId)
+    if (!st || st.messages.some((x) => x.id === p.compactionId)) return
+    const marker = {
+      id: p.compactionId,
+      role: 'compaction',
+      content: p.summary || '',
+      compaction: {
+        items: Number(p.shadowedItems) || 0,
+        tokens: Number(p.shadowedTokens) || 0,
+      },
+      compactionOpen: false,
+    }
+    const idx = st.currentMsgId
+      ? st.messages.findIndex((x) => x.id === st.currentMsgId)
+      : -1
+    if (idx >= 0) st.messages.splice(idx, 0, marker)
+    else st.messages.push(marker)
+  })
   on('agent.interrupt', (p) => {
     const m = findMessage(p.msgId)
     if (m) {
@@ -673,7 +694,21 @@ function toArray(value) {
   return []
 }
 
-function transformMessage(item) {  // 构建工具调用列表（合并 toolCalls、toolCallArgs、toolCallResult）
+function transformMessage(item) {  // 压缩标记：只渲染一行可展开的摘要，不进入普通消息气泡
+  if (item.role === 'compaction') {
+    const meta = item.usageMetadata || {}
+    return {
+      id: item.id,
+      role: 'compaction',
+      content: item.content || '',
+      compaction: {
+        items: Number(meta.shadowedItems) || 0,
+        tokens: Number(meta.shadowedTokens) || 0,
+      },
+      compactionOpen: false,
+    }
+  }
+  // 构建工具调用列表（合并 toolCalls、toolCallArgs、toolCallResult）
   // toolCalls 现在是对象数组（[{tool_call_id, tool_name}]），与 toolCallArgs 一一对应
   const tools = []
   if (item.toolCalls && Array.isArray(item.toolCalls)) {

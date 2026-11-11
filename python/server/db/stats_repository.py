@@ -344,6 +344,7 @@ async def session_stats(session_id: str) -> dict:
                     Message.duration_ms,
                     Message.ttft_ms,
                     Message.decode_ms,
+                    Message.decode_tokens,
                     Message.model,
                     Message.created_at,
                 )
@@ -365,6 +366,7 @@ async def session_stats(session_id: str) -> dict:
     last_output_tokens = 0
     last_duration_ms = 0
     last_decode_ms = 0
+    last_decode_tokens = 0
     last_ttft_ms = 0
 
     for (
@@ -378,6 +380,7 @@ async def session_stats(session_id: str) -> dict:
         row_duration,
         row_ttft,
         row_decode,
+        row_decode_tokens,
         model,
         _created_at,
     ) in rows:
@@ -410,6 +413,7 @@ async def session_stats(session_id: str) -> dict:
             last_output_tokens = _estimate_tokens("\n".join(x for x in (content, reasoning) if x))
         last_duration_ms = int(row_duration or 0)
         last_decode_ms = int(row_decode or 0)
+        last_decode_tokens = int(row_decode_tokens or 0)
         last_ttft_ms = int(row_ttft or 0)
         if usage:
             latest_usage = usage
@@ -439,13 +443,17 @@ async def session_stats(session_id: str) -> dict:
         output_tokens = estimated_output
 
     context_tokens = (
-        int(latest_usage.get("total_tokens") or 0)
+        int(
+            latest_usage.get("input_tokens")
+            or latest_usage.get("total_tokens")
+            or 0
+        )
         if not estimated
         else estimated_context + 3000
     )
     speed = (
-        round(last_output_tokens / (last_decode_ms / 1000), 1)
-        if last_decode_ms > 100 and last_output_tokens > 0
+        round(last_decode_tokens / (last_decode_ms / 1000), 1)
+        if last_decode_ms > 100 and last_decode_tokens > 0
         else None
     )
     return {
@@ -460,6 +468,7 @@ async def session_stats(session_id: str) -> dict:
         "durationMs": duration_ms,
         "ttftMs": last_ttft_ms or None,
         "decodeMs": last_decode_ms or None,
+        "decodeTokens": last_decode_tokens or None,
         "tokensPerSecond": speed,
         "contextTokens": context_tokens,
         "contextWindow": context_window,

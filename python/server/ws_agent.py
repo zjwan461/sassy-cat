@@ -250,6 +250,7 @@ async def _save_or_update_assistant_message_sage(
     duration_ms: int | None = None,
     ttft_ms: int | None = None,
     decode_ms: int | None = None,
+    decode_tokens: int | None = None,
     error: str | None = None,
     subagent_name: str | None = None,
     segments: list | None = None,
@@ -278,6 +279,7 @@ async def _save_or_update_assistant_message_sage(
             duration_ms = (message.get("durationMs") or 0) + (duration_ms or 0)
             ttft_ms = (message.get("ttftMs") or 0) + (ttft_ms or 0)
             decode_ms = (message.get("decodeMs") or 0) + (decode_ms or 0)
+            decode_tokens = (message.get("decodeTokens") or 0) + (decode_tokens or 0)
             model = model or message.get("model")
             # 分段来源跨轮次累积（与 content 的拼接语义一致）；None 表示不改动
             if segments is not None:
@@ -297,6 +299,7 @@ async def _save_or_update_assistant_message_sage(
                 duration_ms=duration_ms,
                 ttft_ms=ttft_ms,
                 decode_ms=decode_ms,
+                decode_tokens=decode_tokens,
                 error=error,
                 subagent_name=subagent_name,
                 segments=segments,
@@ -319,6 +322,7 @@ async def _save_or_update_assistant_message_sage(
                 duration_ms=duration_ms,
                 ttft_ms=ttft_ms,
                 decode_ms=decode_ms,
+                decode_tokens=decode_tokens,
                 error=error,
                 subagent_name=subagent_name,
                 segments=segments,
@@ -357,6 +361,8 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     stream_started_at = None  # 当前连续输出片段的起点
     last_token_at = None
     decode_ms_accum = 0.0  # 实际流式输出时长（排除工具执行/等待）
+    decode_tokens_accum = 0  # 本轮各解码步骤的 output tokens 合计
+    step_output_tokens = 0  # 当前步骤最后一次 usage 的 output tokens
     subagent_name = None  # 本消息的子 agent 来源（含 dsh 产出即记 'dsh'，否则 None）
     subagent_segments = []  # 分段来源 [{agent, text}]，与实时 chat.delta 同源同序
     tool_call = []  # 工具调用列表
@@ -380,10 +386,14 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
 
     def flush_decode() -> None:
         """工具调用/流结束时封口当前片段，避免把工具执行时间算进解码速度。"""
-        nonlocal stream_started_at, decode_ms_accum
+        nonlocal stream_started_at, decode_ms_accum, decode_tokens_accum, step_output_tokens
         if stream_started_at is not None and last_token_at is not None:
             decode_ms_accum += max(0.0, last_token_at - stream_started_at)
             stream_started_at = None
+        # 一个模型步骤可能经过多个工具往返；speed 的分母是整轮解码时间，
+        # 分子也必须是整轮各步骤 output 之和，否则会被最后一步的 output 除出「假慢」。
+        decode_tokens_accum += step_output_tokens
+        step_output_tokens = 0
 
     async def persist(error: str = "", content: str | None = None):
         """本轮落库：done / error / 取消三条路径共用，保证字段口径一致。"""
@@ -391,6 +401,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
         now = time.monotonic()
         ttft_ms = int((first_token_at - turn_started) * 1000) if first_token_at else 0
         decode_ms = int(decode_ms_accum * 1000)
+        decode_tokens = int(decode_tokens_accum)
         _spawn(
             _save_or_update_assistant_message_sage(
                 session_id=session_id,
@@ -408,6 +419,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 duration_ms=int((now - turn_started) * 1000),
                 ttft_ms=ttft_ms,
                 decode_ms=decode_ms,
+                decode_tokens=decode_tokens,
                 error=error,
                 subagent_name=subagent_name,
                 segments=subagent_segments if subagent_name else None,
@@ -539,6 +551,13 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 # 流式中可能多次携带 usage（每个 chunk 的累计值），取最后一个完整值，
                 # 待 done 时随 AI 消息一起写入 DB
                 usage_metadata = event.get("usage_metadata") or usage_metadata
+                try:
+                    step_output_tokens = max(
+                        step_output_tokens,
+                        int((usage_metadata or {}).get("output_tokens") or 0),
+                    )
+                except (TypeError, ValueError):
+                    pass
                 await emit(
                     "agent.usage",
                     {
@@ -547,6 +566,28 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                         "usage_metadata": event.get("usage_metadata", {}),
                     },
                 )
+            elif kind == "compaction":
+                await flush()
+                payload = event.get("payload") or {}
+                cid = payload.get("compactionId") or f"compaction-{msg_id}"
+                summary = payload.get("summary") or ""
+                counts = {
+                    "shadowedItems": int(payload.get("shadowedItems") or 0),
+                    "shadowedTokens": int(payload.get("shadowedTokens") or 0),
+                }
+                # 压缩标记落库：刷新/切回会话后仍能看到「上下文已压缩」这一行，
+                # 并且和普通聊天消息一起按时间排序。role=compaction 不参与轮次统计。
+                try:
+                    await save_message(
+                        id=cid,
+                        session_id=session_id,
+                        role="compaction",
+                        content=summary,
+                        usage_metadata=counts,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning("保存上下文压缩标记失败", exc_info=True)
+                await emit("chat.compaction", {**payload, "compactionId": cid, **counts})
             elif kind == "done":
                 finalized = True
                 await flush()

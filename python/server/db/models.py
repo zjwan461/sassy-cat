@@ -37,6 +37,7 @@ class Message(Base):
     duration_ms = Column(Integer)                      # 本轮生成耗时（毫秒，含工具/中断续跑累计）
     ttft_ms = Column(Integer)                          # 首 token 延迟（毫秒）
     decode_ms = Column(Integer)                        # 解码阶段耗时（首 token 到完成）
+    decode_tokens = Column(Integer)                    # 解码阶段输出 token 合计（多步骤累加）
     error = Column(Text)                               # 生成失败提示文案（为空表示正常完成，仅 assistant）
     subagent_name = Column(String)                     # 子 agent 来源标识（如 'dsh'；主 agent 自身产出为 NULL）(仅 assistant)
     segments = Column(Text)                            # 分段来源 JSON，如 [{"agent":"dsh","text":"..."}]，仅含子 agent 产出时写入
