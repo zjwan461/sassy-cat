@@ -142,7 +142,14 @@ async def _worker_stream(
                 logger.info("收到取消信号，终止流")
                 break
             if stream_mode == "messages":
-                msg_chunk = chunk[0]
+                msg_chunk, msg_meta = chunk
+                # 摘要模型 / 其它中间件内部调用不能混入聊天流：
+                # langchain 会给这类调用打 lc_internal_call 元数据，正常 agent 输出没有。
+                if isinstance(msg_meta, dict) and (
+                    msg_meta.get("lc_internal_call")
+                    or msg_meta.get("lc_source") == "summarization"
+                ):
+                    continue
                 if isinstance(msg_chunk, AIMessageChunk):
                     usage_metadata = msg_chunk.usage_metadata
                     if usage_metadata and usage_metadata != last_usage:

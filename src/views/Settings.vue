@@ -183,7 +183,7 @@
               @blur="clamp('maxTokens', MAX_TOKENS_MIN, MAX_TOKENS_MAX, DEFAULT_MAX_TOKENS)" />
             <button type="button" class="step-btn" @click="step('maxTokens', 1024, MAX_TOKENS_MIN, MAX_TOKENS_MAX)" :disabled="form.maxTokens >= MAX_TOKENS_MAX"><AppIcon name="plus" :size="14" /></button>
           </div>
-          <span class="hint">模型单次回复允许生成的最大 token 数；范围 256~1048576，默认 8192</span>
+          <span class="hint">模型单次回复允许生成的最大 token 数；范围 256~1048576，默认 8192。实际请求会预留输入空间：超过上下文窗口 1/8 时自动按窗口 1/8 发送</span>
         </div>
         <div class="field">
           <label>额外参数（JSON）</label>

@@ -46,8 +46,24 @@ from agent.middlewares import (
     load_metadata,
 )
 from langchain.agents.middleware import SummarizationMiddleware
+from langchain_core.messages import HumanMessage
+import uuid
 
 logger = logging.getLogger(__name__)
+
+
+class _SessionSummarizationMiddleware(SummarizationMiddleware):
+    """给压缩摘要一个稳定 id，确保 add_messages reducer 把它当作可更新消息而不是临时消息。"""
+
+    @staticmethod
+    def _build_new_messages(summary: str):
+        return [
+            HumanMessage(
+                id=f"summary-{uuid.uuid4().hex}",
+                content=f"Here is a summary of the conversation to date:\n\n{summary}",
+                additional_kwargs={"lc_source": "summarization"},
+            )
+        ]
 
 
 def _as_int(value, default: int) -> int:
@@ -145,7 +161,7 @@ def _resolve_context_compression(cfg: "config_loader.AppConfig"):
         summary_input if summary_input is not None else "不截断",
         summary_name or "(当前激活档)",
     )
-    return SummarizationMiddleware(
+    return _SessionSummarizationMiddleware(
         model=summary_llm,
         trigger=("tokens", trigger_tokens),
         keep=("tokens", retain_tokens),
@@ -268,6 +284,42 @@ def _resolve_interrupt_on(cfg: "config_loader.AppConfig") -> dict:
     return interrupt_on
 
 
+_DEEPAGENTS_SUMMARY_EXCLUDED = False
+
+
+def _disable_deepagents_builtin_summarization() -> None:
+    """移除 deepagents core stack 自带的 SummarizationMiddleware。
+
+    我们在 middleware 里已经装了自己的 SummarizationMiddleware（按
+    contextCompression 配置、支持 token 保留策略）。两套并存会导致：
+    - 两套阈值/保留策略互相竞争；
+    - 一套压缩后的摘要不被另一套识别，下一轮继续触发；
+    - 摘要模型调用被重复执行。
+
+    只按「类」排除 deepagents 的私有实现，不按字符串名排除，
+    避免把用户自己的 langchain SummarizationMiddleware 一起删掉。
+    """
+    global _DEEPAGENTS_SUMMARY_EXCLUDED
+    if _DEEPAGENTS_SUMMARY_EXCLUDED:
+        return
+    try:
+        from deepagents import HarnessProfile, register_harness_profile
+        from deepagents.middleware.summarization import (
+            _DeepAgentsSummarizationMiddleware,
+        )
+
+        profile = HarnessProfile(
+            excluded_middleware=frozenset({_DeepAgentsSummarizationMiddleware})
+        )
+        # 只注册我们实际会用的 provider；重复注册是幂等的叠加配置
+        register_harness_profile("openai", profile)
+        register_harness_profile("deepseek", profile)
+        _DEEPAGENTS_SUMMARY_EXCLUDED = True
+        logger.info("已禁用 deepagents 内置的 SummarizationMiddleware（使用项目自定义压缩）")
+    except Exception:  # noqa: BLE001 — 版本差异时不要阻止 agent 构建
+        logger.warning("禁用 deepagents 内置摘要失败，可能出现双压缩栈", exc_info=True)
+
+
 class AgentHolder:
     def __init__(self):
         self._lock = threading.Lock()
@@ -279,6 +331,8 @@ class AgentHolder:
         # 只在真正构建 Agent（首轮聊天/配置热重建）时加载，避免拖慢后端启动。
         from deepagents import create_deep_agent
         from agent.shell_backend import create_shell_backend
+
+        _disable_deepagents_builtin_summarization()
 
         cfg = config_loader.current()
         profile = cfg.active_llm_profile()

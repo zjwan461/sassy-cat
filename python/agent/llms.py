@@ -58,6 +58,23 @@ def _resolve_max_tokens(profile_cfg: dict, default: int = 8192) -> int | None:
     if value <= 0:
         logger.warning("maxTokens=%r 非正整数，回退默认值 %s", raw, default)
         return default
+    # 输出预算必须给输入留空间：maxTokens 配得过大时（例如 400k 窗口配 131k 输出），
+    # 仅输入一多就会触发上游 ContextWindowExceeded（输入+预留输出 > 窗口）。
+    # 这里按窗口的 1/8 设硬上限，至少 4096；用户仍可在设置里配更小的值。
+    try:
+        window = int(profile_cfg.get("contextWindow") or 0)
+    except (TypeError, ValueError):
+        window = 0
+    if window > 0:
+        safe = max(4096, window // 8)
+        if value > safe:
+            logger.info(
+                "maxTokens=%s 超过窗口 %s 的安全输出预算，按 %s 请求",
+                value,
+                window,
+                safe,
+            )
+            value = safe
     return value
 
 
@@ -73,6 +90,9 @@ def build_openai_chat_llm(profile_cfg: dict):
         model=profile_cfg.get("model") or "Qwen3.6-35B",
         temperature=_resolve_temperature(profile_cfg),
         max_tokens=_resolve_max_tokens(profile_cfg),
+        # 让流式请求在最后一个 chunk 带上 usage；否则前端上下文/速度只能靠字符估算，
+        # 在长工具链里会明显低估（vLLM/OpenAI-compatible 均支持 stream_options.include_usage）。
+        stream_usage=True,
         extra_body=extra,
     )
 
@@ -92,6 +112,9 @@ def build_ds_chat_llm(profile_cfg: dict):
         model=profile_cfg.get("model") or "Qwen3.6-35B",
         temperature=_resolve_temperature(profile_cfg),
         max_tokens=_resolve_max_tokens(profile_cfg),
+        # 让流式请求在最后一个 chunk 带上 usage；否则前端上下文/速度只能靠字符估算，
+        # 在长工具链里会明显低估（vLLM/OpenAI-compatible 均支持 stream_options.include_usage）。
+        stream_usage=True,
         extra_body=extra,
     )
 

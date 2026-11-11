@@ -558,6 +558,9 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
                 finalized = True
                 await flush()
                 err_msg = event.get("message") or "生成失败，请重试"
+                raw_err = event.get("raw")
+                if raw_err:
+                    logger.warning("模型请求失败 raw: %s", str(raw_err)[:3000])
                 await emit(
                     "chat.error",
                     {
@@ -581,6 +584,7 @@ async def _stream_turn(ws, session_id: str, gen, msg_id: str, cancel: threading.
     except Exception as e:
         logger.exception("stream turn 异常")
         code, msg = runner.classify_error(e)
+        logger.warning("stream turn raw error: %s", str(e)[:3000])
         await emit("chat.error", {"msgId": msg_id, "code": code, "message": msg})
         # 未正常收尾的轮次同样落库：否则本轮已产出的内容只存在于前端内存，
         # 刷新/切回会话后整轮消失（与 done/error 路径保持一致的持久化语义）
