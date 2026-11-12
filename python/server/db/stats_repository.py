@@ -324,6 +324,30 @@ def _estimate_tokens(text: str | None) -> int:
     return int(cjk / 1.5 + other / 4)
 
 
+async def latest_input_tokens(session_id: str) -> int:
+    """最近一条带 provider usage 的 assistant 消息的 input_tokens（请求前压力预检）。"""
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(Message.usage_metadata)
+                .where(
+                    Message.session_id == session_id,
+                    Message.role == "assistant",
+                    Message.usage_metadata.is_not(None),
+                )
+                .order_by(Message.created_at.desc())
+                .limit(1)
+            )
+        ).first()
+    if not row or not row[0]:
+        return 0
+    try:
+        usage = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        return int((usage or {}).get("input_tokens") or 0)
+    except (TypeError, ValueError, AttributeError):
+        return 0
+
+
 async def session_stats(session_id: str) -> dict:
     """当前会话底部统计：轮次/步数、Token、缓存命中、输出速度与上下文占用。
 

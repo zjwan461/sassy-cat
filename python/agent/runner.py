@@ -254,6 +254,66 @@ async def _drive_stream(agent, input_payload, config, cancel_event: threading.Ev
 #         print(f"messages: {messages}")
 #         print(f"invoke kwargs (tools/temp等): {kwargs}")
 #         print("==============================================\n")
+async def _maybe_force_compact(agent, config, user_text: str):
+    """输入压力保护：用上一轮真实 usage 判断，必要时在模型请求前先压缩。"""
+    try:
+        from agent.engine import force_compact_thread
+        from agent.llms import _resolve_max_tokens
+
+        cfg = config_loader.current()
+        profile = cfg.active_llm_profile() or {}
+        window = int(profile.get("contextWindow") or 0)
+        if window <= 0:
+            return None
+        max_out = _resolve_max_tokens(profile) or 8192
+        cc = profile.get("contextCompression") or {}
+        headroom = int(cc.get("headroomTokens") or 8192)
+        state = await agent.aget_state(config)
+        messages = list((getattr(state, "values", None) or {}).get("messages") or [])
+        latest_input = 0
+        for msg in reversed(messages):
+            usage = getattr(msg, "usage_metadata", None)
+            if isinstance(usage, dict):
+                latest_input = int(
+                    usage.get("input_tokens")
+                    or (int(usage.get("total_tokens") or 0) - int(usage.get("output_tokens") or 0))
+                    or 0
+                )
+                if latest_input:
+                    break
+        if latest_input <= 0:
+            # checkpoint 里的 AIMessage 可能没保留 usage（或旧消息被压缩掉），
+            # 用数据库里最近一条 provider usage 兜底，确保压力预检仍能生效。
+            try:
+                from server.db.stats_repository import latest_input_tokens
+
+                latest_input = await latest_input_tokens(
+                    config.get("configurable", {}).get("thread_id") or ""
+                )
+            except Exception:  # noqa: BLE001
+                latest_input = 0
+        if latest_input <= 0:
+            return None
+        # 预留安全垫：provider 的 input_tokens 只到上一次请求，下一轮还会叠加
+        # 工具结果、system prompt 变化等；8k headroom 对 400k 窗口不够。
+        safety = max(headroom, int(window * 0.2))
+        projected = latest_input + max_out + headroom + safety + max(1, len(user_text) // 2)
+        if projected < window:
+            return None
+        logger.warning(
+            "上下文压力预检：上次输入 %d + 输出预留 %d + headroom %d + 安全垫 %d >= 窗口 %d，先压缩",
+            latest_input,
+            max_out,
+            headroom,
+            safety,
+            window,
+        )
+        return await force_compact_thread(agent, config)
+    except Exception:  # noqa: BLE001 — 预检失败不阻塞正常聊天
+        logger.warning("上下文压力预检失败", exc_info=True)
+        return None
+
+
 async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event):
     """发起新一轮对话，异步产出事件"""
     version, agent = holder.get()
@@ -262,6 +322,9 @@ async def run_turn(user_text: str, thread_id: str, cancel_event: threading.Event
         "recursion_limit": _recursion_limit(),
         # "callbacks": [PrintLLMRequestCallback()]
     }
+    compacted = await _maybe_force_compact(agent, config, user_text)
+    if compacted:
+        yield {"kind": "compaction", "payload": compacted}
     payload = {"messages": [{"role": "user", "content": user_text}]}
     async for event in _drive_stream(agent, payload, config, cancel_event):
         yield event

@@ -47,6 +47,7 @@ from agent.middlewares import (
 )
 from langchain.agents.middleware import SummarizationMiddleware
 from langchain.messages import RemoveMessage
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langchain_core.messages import HumanMessage
 import uuid
 
@@ -135,6 +136,58 @@ def _as_float(value, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+async def force_compact_thread(agent, config):
+    """按最近一次 provider 的真实 prompt 压力，主动压缩一次 checkpoint 历史。
+
+    普通 SummarizationMiddleware 用 count_tokens_approximately 做阈值判断，
+    对「system prompt + 工具 schema + reasoning」会明显低估；等它触发时，
+    输入+预留输出可能已经越过上游窗口（典型是 400k 窗口报 400001）。
+    这里直接用上次 usage 的 input_tokens 做压力判断，调用同一套压缩逻辑，
+    把旧历史换成摘要，再让本轮正常发起请求。
+    """
+    try:
+        state = await agent.aget_state(config)
+        messages = list((getattr(state, "values", None) or {}).get("messages") or [])
+        if len(messages) < 3:
+            return None
+        mw = _resolve_context_compression(config_loader.current())
+        if mw is None:
+            return None
+        mw._ensure_message_ids(messages)
+        before_tokens = mw.token_counter(messages)
+        cutoff = mw._determine_cutoff_index(messages)
+        if cutoff <= 0:
+            return None
+        messages_to_summarize = messages[:cutoff]
+        preserved = messages[cutoff:]
+        summary = await mw._acreate_summary(messages_to_summarize)
+        new_messages = [RemoveMessage(id=REMOVE_ALL_MESSAGES)]
+        new_messages.extend(mw._build_new_messages(summary))
+        new_messages.extend(preserved)
+        await agent.aupdate_state(config, {"messages": new_messages})
+        after_tokens = mw.token_counter(
+            [m for m in new_messages if not isinstance(m, RemoveMessage)]
+        )
+        text = summary.strip()
+        payload = {
+            "compactionId": f"compaction-{uuid.uuid4().hex}",
+            "summary": text,
+            "shadowedItems": max(0, len(messages) - len(preserved)),
+            "shadowedTokens": max(0, before_tokens - after_tokens),
+            "reason": "pressure",
+        }
+        logger.warning(
+            "主动压缩上下文：%d 条 / %d tokens（摘要 %d 字符）",
+            payload["shadowedItems"],
+            payload["shadowedTokens"],
+            len(text),
+        )
+        return payload
+    except Exception:  # noqa: BLE001 — 压缩失败不应吞掉本轮，让原请求继续
+        logger.warning("主动压缩上下文失败", exc_info=True)
+        return None
 
 
 def _resolve_context_compression(cfg: "config_loader.AppConfig"):
