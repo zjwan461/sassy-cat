@@ -36,6 +36,7 @@ DEFAULTS = {
                 #   retainRatio 压缩后保留最近原文的比例（默认 0.16）
                 #   retainTokens 直接指定保留 token 数（优先于 retainRatio，上限 64k）
                 #   summaryInputTokens 送给摘要模型的旧历史 token 上限（默认 64k，0=不截断）
+                #   estimateSafetyFactor 无 provider usage 时，本地 token 估算的保守放大系数（默认 4）
                 # 媒体守卫（见 agent/middlewares.py::trim_media_history，对齐 dsh 的 image offload）：
                 # 图片默认全量保留，逐张压到 mediaMaxPx / mediaMaxKB；只有历史媒体总量
                 # 超过 mediaBudgetKB 或图片张数超过 mediaMaxImages 时，才从最旧一端 offload。
@@ -51,6 +52,7 @@ DEFAULTS = {
                     "headroomTokens": 8192,
                     "retainRatio": 0.16,
                     "summaryInputTokens": 65536,
+                    "estimateSafetyFactor": 4.0,
                     "keepRecent": 10,
                     "mediaMaxKB": 1024,
                     "mediaMaxPx": 1568,

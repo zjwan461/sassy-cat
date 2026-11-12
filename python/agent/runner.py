@@ -222,6 +222,7 @@ async def _drive_stream(agent, input_payload, config, cancel_event: threading.Ev
     task = asyncio.create_task(
         _worker_stream(agent, input_payload, config, q, cancel_event)
     )
+    overflow_retried = False
     try:
         while True:
             try:
@@ -231,6 +232,39 @@ async def _drive_stream(agent, input_payload, config, cancel_event: threading.Ev
                 if cancel_event.is_set() or task.done():
                     break
                 continue
+            # 上游 400「context window exceeded」是无需 usage 也能识别的硬信号：
+            # 先强制压缩 checkpoint，再从压缩后的状态重跑一次，避免直接失败。
+            if (
+                event.get("kind") == "error"
+                and not overflow_retried
+                and _is_context_overflow(event.get("raw") or "")
+            ):
+                overflow_retried = True
+                logger.warning("检测到上下文溢出，尝试强制压缩后重试")
+                # 先停掉旧生产者，避免它仍持有 graph/checkpoint 状态时做 aupdate_state
+                if not task.done():
+                    task.cancel()
+                await asyncio.sleep(0)
+                compacted = None
+                try:
+                    from agent.engine import (
+                        emergency_prune_thread,
+                        force_compact_thread,
+                    )
+
+                    compacted = await force_compact_thread(agent, config)
+                    if compacted is None:
+                        compacted = await emergency_prune_thread(agent, config)
+                except Exception:  # noqa: BLE001
+                    logger.warning("溢出后压缩失败", exc_info=True)
+                if compacted:
+                    yield {"kind": "compaction", "payload": compacted}
+                    q = asyncio.Queue(maxsize=2000)
+                    # 用户消息/待执行节点已在 checkpoint 中；用 None 从压缩后的状态续跑
+                    task = asyncio.create_task(
+                        _worker_stream(agent, None, config, q, cancel_event)
+                    )
+                    continue
             yield event
             if event["kind"] in ("done", "error"):
                 break
@@ -238,6 +272,19 @@ async def _drive_stream(agent, input_payload, config, cancel_event: threading.Ev
         # 不再需要生产者输出：取消其任务，停止后台 astream 消费
         if not task.done():
             task.cancel()
+
+
+def _is_context_overflow(raw: str) -> bool:
+    text = (raw or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "contextwindowexceeded",
+            "maximum context length",
+            "context length exceeded",
+            "context_window_exceeded",
+        )
+    )
             
 # from typing import Dict,List,Any
 # from langchain_core.callbacks import BaseCallbackHandler
@@ -257,7 +304,7 @@ async def _drive_stream(agent, input_payload, config, cancel_event: threading.Ev
 async def _maybe_force_compact(agent, config, user_text: str):
     """输入压力保护：用上一轮真实 usage 判断，必要时在模型请求前先压缩。"""
     try:
-        from agent.engine import force_compact_thread
+        from agent.engine import emergency_prune_thread, force_compact_thread
         from agent.llms import _resolve_max_tokens
 
         cfg = config_loader.current()
@@ -267,6 +314,8 @@ async def _maybe_force_compact(agent, config, user_text: str):
             return None
         max_out = _resolve_max_tokens(profile) or 8192
         cc = profile.get("contextCompression") or {}
+        if cc.get("enabled", True) is False:
+            return None
         headroom = int(cc.get("headroomTokens") or 8192)
         state = await agent.aget_state(config)
         messages = list((getattr(state, "values", None) or {}).get("messages") or [])
@@ -281,6 +330,18 @@ async def _maybe_force_compact(agent, config, user_text: str):
                 )
                 if latest_input:
                     break
+        # 本地近似计数始终参与：真实 usage 只到上一次请求，本轮的 tool 结果/
+        # 上下文增长不会被算进去；取两者较大值做保守判断。
+        local_input = 0
+        try:
+            from langchain_core.messages.utils import count_tokens_approximately
+
+            factor = float(cc.get("estimateSafetyFactor") or 4.0)
+            local_input = int(
+                count_tokens_approximately(messages) * max(1.0, factor)
+            )
+        except Exception:  # noqa: BLE001
+            local_input = 0
         if latest_input <= 0:
             # checkpoint 里的 AIMessage 可能没保留 usage（或旧消息被压缩掉），
             # 用数据库里最近一条 provider usage 兜底，确保压力预检仍能生效。
@@ -292,6 +353,7 @@ async def _maybe_force_compact(agent, config, user_text: str):
                 )
             except Exception:  # noqa: BLE001
                 latest_input = 0
+        latest_input = max(latest_input, local_input)
         if latest_input <= 0:
             return None
         # 预留安全垫：provider 的 input_tokens 只到上一次请求，下一轮还会叠加
@@ -308,7 +370,7 @@ async def _maybe_force_compact(agent, config, user_text: str):
             safety,
             window,
         )
-        return await force_compact_thread(agent, config)
+        return await force_compact_thread(agent, config) or await emergency_prune_thread(agent, config)
     except Exception:  # noqa: BLE001 — 预检失败不阻塞正常聊天
         logger.warning("上下文压力预检失败", exc_info=True)
         return None
@@ -362,5 +424,10 @@ async def retry_turn(thread_id: str, cancel_event: threading.Event):
         "configurable": {"thread_id": thread_id},
         "recursion_limit": _recursion_limit(),
     }
+    # 用户点「重试」时上下文通常还是之前那份；先走同一套压力预检，
+    # 否则重试会原样再发一次超限请求，继续报同一个 400。
+    compacted = await _maybe_force_compact(agent, config, "")
+    if compacted:
+        yield {"kind": "compaction", "payload": compacted}
     async for event in _drive_stream(agent, None, config, cancel_event):
         yield event

@@ -48,7 +48,7 @@ from agent.middlewares import (
 from langchain.agents.middleware import SummarizationMiddleware
 from langchain.messages import RemoveMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -187,6 +187,76 @@ async def force_compact_thread(agent, config):
         return payload
     except Exception:  # noqa: BLE001 — 压缩失败不应吞掉本轮，让原请求继续
         logger.warning("主动压缩上下文失败", exc_info=True)
+        return None
+
+
+async def emergency_prune_thread(agent, config):
+    """摘要失败/不可用时的保险：直接丢弃最旧历史，只保留最近若干条。
+
+    不依赖 provider usage，也不调用摘要模型；用于「上下文已经溢出且摘要也失败」
+    的最后一层恢复。尽量不把起点落在 ToolMessage 上，避免拆散 tool_call 配对。
+    """
+    try:
+        state = await agent.aget_state(config)
+        messages = list((getattr(state, "values", None) or {}).get("messages") or [])
+        if len(messages) <= 4:
+            return None
+        # 不只看条数：工具结果可能单条就很大。从尾部往前保留到约 32k token，
+        # 至少留 4 条，避免紧急裁剪后仍然超窗。
+        cutoff = len(messages)
+        kept_tokens = 0
+        for i in range(len(messages) - 1, -1, -1):
+            text = str(getattr(messages[i], "content", "") or "")
+            kept_tokens += max(1, len(text) // 4)
+            cutoff = i
+            if kept_tokens >= 32000 and len(messages) - cutoff >= 4:
+                break
+        while cutoff > 0 and isinstance(messages[cutoff], ToolMessage):
+            cutoff -= 1
+        # 必须至少保留一条 user query：vLLM/部分 OpenAI 兼容服务收到
+        # 「只有 assistant/tool、没有 user」的 messages 会直接 400
+        # (No user query found in messages)。最新一条用户消息即使略早于预算，
+        # 也要把它一起保留，否则重试仍然无法发起请求。
+        last_user = next(
+            (i for i in range(len(messages) - 1, -1, -1)
+             if isinstance(messages[i], HumanMessage)),
+            None,
+        )
+        if last_user is not None and last_user < cutoff:
+            # 用户消息就在裁剪边界附近时一起带上；如果它在很久以前，
+            # 把整段旧历史重新拉回来会再次超窗，改为插入一条合成 user query。
+            if cutoff - last_user <= 4:
+                cutoff = last_user
+        if cutoff <= 0:
+            return None
+        preserved = messages[cutoff:]
+        if not any(isinstance(m, HumanMessage) for m in preserved):
+            preserved = [
+                HumanMessage(
+                    id=f"emergency-user-{uuid.uuid4().hex}",
+                    content="（上下文已紧急裁剪，请基于最近对话继续）",
+                ),
+                *preserved,
+            ]
+        await agent.aupdate_state(
+            config,
+            {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *preserved]},
+        )
+        payload = {
+            "compactionId": f"compaction-{uuid.uuid4().hex}",
+            "summary": "（压缩摘要暂不可用，已保留最近对话并丢弃更早历史）",
+            "shadowedItems": len(messages) - len(preserved),
+            "shadowedTokens": 0,
+            "reason": "emergency",
+        }
+        logger.warning(
+            "上下文紧急裁剪：丢弃 %d 条旧消息，保留最近 %d 条",
+            payload["shadowedItems"],
+            len(preserved),
+        )
+        return payload
+    except Exception:  # noqa: BLE001
+        logger.warning("上下文紧急裁剪失败", exc_info=True)
         return None
 
 
