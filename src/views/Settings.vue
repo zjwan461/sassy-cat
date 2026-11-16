@@ -1,22 +1,23 @@
 <template>
-  <div class="page settings-page">
-    <header class="page-header">
-      <div class="page-head-main">
+  <div ref="pageEl" class="page settings-page">
+    <header class="settings-topbar">
+      <div class="topbar-head">
         <div class="eyebrow">
           <AppIcon name="settings" :size="12" />
           偏好设置
         </div>
-        <h1 class="page-title">设置</h1>
-        <p class="page-subtitle">模型连接与人设配置，保存后热生效</p>
+        <div class="topbar-line">
+          <h1 class="page-title">设置</h1>
+          <span class="topbar-note">改动保存后生效</span>
+        </div>
       </div>
 
-      <!-- 全局操作 -->
       <div class="global-actions">
-        <button class="btn primary" @click="saveAll">
+        <button class="btn primary" type="button" @click="saveAll">
           <AppIcon name="check" :size="14" />
           保存设置
         </button>
-        <button class="btn warn" :class="{ 'is-done': restartDone }" @click="restartAgent" :disabled="restarting">
+        <button class="btn warn" type="button" :class="{ 'is-done': restartDone }" @click="restartAgent" :disabled="restarting">
           <span v-if="restarting" class="btn-spinner"></span>
           <AppIcon v-else-if="restartDone" name="check" :size="14" class="btn-check" />
           <AppIcon v-else name="refresh" :size="14" />
@@ -25,779 +26,1066 @@
       </div>
     </header>
 
-    <div class="settings-grid">
-    <!-- 外观主题 -->
-    <section class="card wide">
-      <div class="card-header">
-        <span class="card-icon"><AppIcon name="sun" :size="15" /></span>
-        <div class="card-head-main">
-          <div class="card-title">外观主题</div>
-          <div class="card-sub">墨夜琥珀 / 霜白墨青，切换立即生效</div>
+    <div class="settings-shell">
+      <nav class="settings-nav" aria-label="设置分类">
+        <div v-for="group in navGroups" :key="group.title" class="nav-group">
+          <div class="nav-group-title">{{ group.title }}</div>
+          <button
+            v-for="item in group.items"
+            :key="item.id"
+            type="button"
+            class="nav-item"
+            :class="{ active: activeSection === item.id }"
+            :aria-current="activeSection === item.id ? 'page' : undefined"
+            @click="selectSection(item.id)"
+          >
+            <AppIcon :name="item.icon" :size="15" class="nav-icon" />
+            <span class="nav-label">{{ item.label }}</span>
+          </button>
         </div>
-      </div>
-      <div class="card-body form">
-        <div class="field">
-          <label>主题模式</label>
-          <div class="theme-picker">
-            <button
-              v-for="opt in themeOptions"
-              :key="opt.value"
-              type="button"
-              class="theme-option"
-              :class="{ active: themeMode === opt.value }"
-              @click="setTheme(opt.value)"
-            >
-              <AppIcon :name="opt.icon" :size="16" />
-              <span>{{ opt.label }}</span>
-            </button>
-          </div>
-          <span class="hint">「跟随系统」会随操作系统的浅色/深色外观自动切换；选择保存在本机</span>
-        </div>
-      </div>
-    </section>
+        <p class="nav-note">设置仅保存在本机</p>
+      </nav>
 
-    <!-- 模型连接 -->
-    <section class="card wide">
-      <div class="card-header">
-        <span class="card-icon"><AppIcon name="plug" :size="15" /></span>
-        <div class="card-head-main">
-          <div class="card-title">模型连接</div>
-          <div class="card-sub">主 Agent 的 LLM 连接、采样与上下文策略</div>
-        </div>
-      </div>
-      <div class="card-body form">
-        <div class="field">
-          <label>配置档</label>
-          <div class="profile-row">
-            <select :value="activeProfile" @change="switchProfile($event.target.value)">
-              <option v-for="(p, name) in profiles" :key="name" :value="name">{{ p.label || name }}</option>
-            </select>
-            <button class="btn" @click="showAddProfile = true" title="新增配置档"><AppIcon name="plus" :size="14" />新增</button>
-            <button class="btn warn" @click="deleteProfile" :disabled="activeProfile === 'default'" title="删除当前配置档（default 不可删除）"><AppIcon name="trash" :size="14" />删除</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>Provider</label>
-          <select v-model="form.provider">
-            <option value="openai">OpenAI‑Compatible</option>
-            <option value="deepseek">DeepSeek-Compatible</option>
-          </select>
-          <span class="hint">OpenAI: reasoning 放在 content 中；DeepSeek: reasoning 放在 reasoning_content 中</span>
-        </div>
-        <div class="field">
-          <label>Base URL</label>
-          <input v-model="form.baseUrl" placeholder="http://localhost:8080/v1" />
-        </div>
-        <div class="field">
-          <label>API Key</label>
-          <div class="key-row">
-            <input v-model="form.apiKey" :type="showKey ? 'text' : 'password'" placeholder="sk-..." @focus="revealKey" />
-            <button class="mini" @click="showKey = !showKey">{{ showKey ? '隐藏' : '显示' }}</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>模型名称</label>
-          <input v-model="form.model" placeholder="Qwen3.6-35B" />
-        </div>
-        <div class="field">
-          <label>采样温度（Temperature）<span class="inline-val">{{ Number(form.temperature).toFixed(2) }}</span></label>
-          <input type="range" min="0" max="2" step="0.05" v-model.number="form.temperature" />
-          <span class="hint">范围 0~2，越低回答越稳定、越高越发散（默认 0.7）；仅作用于当前配置档</span>
-        </div>
-        <div class="field">
-          <label>上下文窗口（contextWindow）</label>
-          <div class="stepper">
-            <button type="button" class="step-btn" @click="step('contextWindow', -8192, CONTEXT_WINDOW_MIN, CONTEXT_WINDOW_MAX)" :disabled="form.contextWindow <= CONTEXT_WINDOW_MIN"><AppIcon name="minus" :size="14" /></button>
-            <input type="number" v-model.number="form.contextWindow" :min="CONTEXT_WINDOW_MIN" :max="CONTEXT_WINDOW_MAX" class="step-input"
-              @blur="clamp('contextWindow', CONTEXT_WINDOW_MIN, CONTEXT_WINDOW_MAX, DEFAULT_CONTEXT_WINDOW)" />
-            <button type="button" class="step-btn" @click="step('contextWindow', 8192, CONTEXT_WINDOW_MIN, CONTEXT_WINDOW_MAX)" :disabled="form.contextWindow >= CONTEXT_WINDOW_MAX"><AppIcon name="plus" :size="14" /></button>
-          </div>
-          <span class="hint">模型单次可处理的最大 token 数（含输入+输出），用于上下文压缩的阈值判断；范围 8192~1048576，默认 262144</span>
-        </div>
-        <div class="field">
-          <label class="check"><input type="checkbox" v-model="form.contextCompressionEnabled" /> 启用上下文自动压缩</label>
-          <span class="hint">对话上下文接近模型窗口上限时，自动把久远历史总结成一条摘要并保留近期原文，避免请求溢出。关闭后不再自动裁剪历史，请自行控制会话长度</span>
-        </div>
-        <template v-if="form.contextCompressionEnabled">
-          <div class="field">
-            <label>压缩使用的模型</label>
-            <select v-model="form.contextCompressionModel">
-              <option value="">跟随当前配置档（{{ profiles[activeProfile]?.label || activeProfile }}）</option>
-              <option v-for="(p, name) in profiles" :key="name" :value="name">{{ p.label || name }}</option>
-            </select>
-            <span class="hint">生成摘要所用的 LLM；可选择独立配置档，留空则复用当前激活的模型</span>
-          </div>
-          <div class="field">
-            <label>触发压缩的上下文占用 <span class="inline-val">{{ form.contextCompressionThreshold }}%</span></label>
-            <input type="range" :min="CC_THRESHOLD_MIN" :max="CC_THRESHOLD_MAX" step="5" v-model.number="form.contextCompressionThreshold" />
-            <span class="hint">当前上下文估算 token 达到 contextWindow 的该比例时触发压缩，范围 10~95%（默认 80%）</span>
-          </div>
-          <div class="field">
-            <label>压缩后保留最近原文（tokens）</label>
-            <input type="number" v-model.number="form.contextCompressionRetainTokens" min="0" :max="CC_RETAIN_TOKENS_MAX" step="1024" />
-            <span class="hint">默认 0 = 自动按窗口的 16% 计算（上限 64k）；压缩只替换更旧的历史，最近这段原文不动</span>
-          </div>
-          <div class="field">
-            <label>摘要输入上限（tokens）</label>
-            <input type="number" v-model.number="form.contextCompressionSummaryInput" min="0" :max="CC_SUMMARY_INPUT_MAX" step="8192" />
-            <span class="hint">送给摘要模型的旧历史 token 上限，默认 65536；0 = 不截断，交给摘要模型自身窗口兜底</span>
-          </div>
-          <div class="field">
-            <label>触发预留 headroom（tokens）</label>
-            <input type="number" v-model.number="form.contextCompressionHeadroom" min="0" :max="CC_HEADROOM_MAX" step="4096" />
-            <span class="hint">触发阈值会同时受 maxTokens 与 headroom 约束：min(窗口×比例, 窗口−maxTokens−headroom)，默认 8192</span>
-          </div>
-        </template>
-        <!-- 媒体守卫（contextCompression.media*，见 agent/middlewares.py::trim_media_history）：
-             与上面的「自动压缩」开关相互独立 —— 关掉自动压缩只是不做摘要，历史图片的压缩/预算照常生效。 -->
-        <div class="field">
-          <label>单张图片压缩目标（KB）</label>
-          <input type="number" v-model.number="form.contextMediaMaxKB" :min="MEDIA_MAX_KB_MIN" :max="MEDIA_MAX_KB_MAX" step="128" />
-          <span class="hint">每张历史图片都会尝试压到该体积（默认 1024KB）；压不到目标也保留最小产物，不因体积丢图；0 = 不做体积目标</span>
-        </div>
-        <div class="field">
-          <label>压缩后图片最长边（px）</label>
-          <input type="number" v-model.number="form.contextMediaMaxPx" :min="MEDIA_MAX_PX_MIN" :max="MEDIA_MAX_PX_MAX" step="128" />
-          <span class="hint">按最长边等比缩放（默认 1568px）；越小越省视觉 token，但截图文字会更模糊</span>
-        </div>
-        <div class="field">
-          <label>历史媒体总预算（KB）</label>
-          <input type="number" v-model.number="form.contextMediaBudgetKB" min="0" :max="MEDIA_BUDGET_KB_MAX" step="1024" />
-          <span class="hint">所有历史内联图片/音视频的总字节预算，默认 8192KB；0 = 不限制，永远只压缩不 offload</span>
-        </div>
-        <div class="field">
-          <label>历史图片张数预算</label>
-          <input type="number" v-model.number="form.contextMediaMaxImages" min="0" :max="MEDIA_MAX_IMAGES_MAX" step="1" />
-          <span class="hint">历史内联图片最多保留多少张，默认 24；0 = 不限制</span>
-        </div>
-        <div class="field">
-          <label>offload 阶梯（KB）</label>
-          <input type="number" v-model.number="form.contextMediaOffloadKB" min="0" :max="MEDIA_OFFLOAD_KB_MAX" step="512" />
-          <span class="hint">总预算超限时一次释放的额度，默认 1024KB；阶梯式高水位可避免每来一张图就改写旧前缀</span>
-        </div>
-        <div class="field">
-          <label>最大输出 token（maxTokens）</label>
-          <div class="stepper">
-            <button type="button" class="step-btn" @click="step('maxTokens', -1024, MAX_TOKENS_MIN, MAX_TOKENS_MAX)" :disabled="form.maxTokens <= MAX_TOKENS_MIN"><AppIcon name="minus" :size="14" /></button>
-            <input type="number" v-model.number="form.maxTokens" :min="MAX_TOKENS_MIN" :max="MAX_TOKENS_MAX" class="step-input"
-              @blur="clamp('maxTokens', MAX_TOKENS_MIN, MAX_TOKENS_MAX, DEFAULT_MAX_TOKENS)" />
-            <button type="button" class="step-btn" @click="step('maxTokens', 1024, MAX_TOKENS_MIN, MAX_TOKENS_MAX)" :disabled="form.maxTokens >= MAX_TOKENS_MAX"><AppIcon name="plus" :size="14" /></button>
-          </div>
-          <span class="hint">模型单次回复允许生成的最大 token 数；范围 256~1048576，默认 8192。实际请求会预留输入空间：超过上下文窗口 1/8 时自动按窗口 1/8 发送</span>
-        </div>
-        <div class="field">
-          <label>额外参数（JSON）</label>
-          <textarea v-model="form.extraParamsText" rows="3" class="mono" @input="validateExtra"></textarea>
-          <span class="hint" :class="{ bad: extraError }">{{ extraError || '个性化模型参数，例如 {"enable_thinking": true}、{"reasoning_effort": "high"}' }}</span>
-        </div>
-        <div class="actions">
-          <button class="btn" @click="testConnection" :disabled="testing">{{ testing ? '测试中…' : '测试连接' }}</button>
-          <span v-if="testResult" :class="testResult.ok ? 'ok' : 'bad-text'">{{ testResult.text }}</span>
-        </div>
-      </div>
-    </section>
-
-    <!-- Agent 配置 -->
-    <section class="card wide">
-      <div class="card-header">
-        <span class="card-icon"><AppIcon name="brain" :size="15" /></span>
-        <div class="card-head-main">
-          <div class="card-title">Agent 配置</div>
-          <div class="card-sub">人设提示词与高危操作确认</div>
-        </div>
-      </div>
-      <div class="card-body form">
-        <div class="field">
-          <label>配置档</label>
-          <div class="profile-row">
-            <select :value="activeAgentProfile" @change="switchAgentProfile($event.target.value)">
-              <option v-for="(p, name) in agentProfiles" :key="name" :value="name">{{ p.label || name }}</option>
-            </select>
-            <button class="btn" @click="showAddAgentProfile = true" title="新增 Agent 配置档"><AppIcon name="plus" :size="14" />新增</button>
-            <button class="btn warn" @click="deleteAgentProfile" :disabled="activeAgentProfile === 'default'" title="删除当前 Agent 配置档（default 不可删除）"><AppIcon name="trash" :size="14" />删除</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>人设提示词（可编辑，留空使用默认傲娇猫咪人设）</label>
-          <textarea v-model="form.persona" rows="10" class="mono persona"
-            placeholder="你是「优墨」……（支持 {app_name} {time} {os_user} 变量）"></textarea>
-          <span class="hint">{{ form.persona.length }} 字</span>
-        </div>
-        <div class="field">
-          <label>递归上限（步）</label>
-          <div class="stepper">
-            <button type="button" class="step-btn" @click="step('recursionLimit', -1, 1, 9999)" :disabled="form.recursionLimit <= 1"><AppIcon name="minus" :size="14" /></button>
-            <input type="number" v-model.number="form.recursionLimit" min="1" max="9999" class="step-input"
-              @blur="clamp('recursionLimit', 1, 9999, 100)" />
-            <button type="button" class="step-btn" @click="step('recursionLimit', 1, 1, 9999)" :disabled="form.recursionLimit >= 9999"><AppIcon name="plus" :size="14" /></button>
-          </div>
-          <span class="hint">单轮对话 Agent 可执行的最大步数（含工具调用），范围 1~9999，过小会提前中断（默认 100）</span>
-        </div>
-        <div class="field">
-          <label>Tavily API Key（网络搜索工具）</label>
-          <div class="key-row">
-            <input v-model="form.tavilyApiKey" :type="showTavilyKey ? 'text' : 'password'" placeholder="tvly-..." />
-            <button class="mini" @click="showTavilyKey = !showTavilyKey">{{ showTavilyKey ? '隐藏' : '显示' }}</button>
-          </div>
-          <span class="hint">用于 internet_search 工具，留空则无法使用网络搜索功能</span>
-        </div>
-        <div class="field">
-          <label>DeepSeek API Key（搜索 / 网页抓取工具）</label>
-          <div class="key-row">
-            <input v-model="form.dsApiKey" :type="showDsKey ? 'text' : 'password'" placeholder="sk-..." />
-            <button class="mini" @click="showDsKey = !showDsKey">{{ showDsKey ? '隐藏' : '显示' }}</button>
-          </div>
-          <span class="hint">用于 deepseek_web_search / deepseek_web_fetch 工具（DeepSeek 官方搜索与网页解析），留空则这两个工具不可用</span>
-        </div>
-        <div class="field">
-          <label class="check"><input type="checkbox" v-model="form.agentEnableOcr" /> 启用对话文档解析（OCR）</label>
-          <span class="hint">开启后，Agent 对话中上传的文档会进行 OCR 解析并入库；关闭后仅保存文件到存储目录，不做解析</span>
-        </div>
-        <div class="field" v-if="form.agentEnableOcr">
-          <label>对话文档解析引擎（OCR）</label>
-          <select v-model="form.agentOcrEngine">
-            <option value="markitdown">MarkItDown（快速）</option>
-            <option value="docling">Docling（更精细，支持图片识别）</option>
-          </select>
-          <span class="hint">Agent 对话中解析上传文档所使用的引擎，默认 MarkItDown</span>
-        </div>
-        <div class="field">
-          <label>高危操作人工确认（Interrupt）</label>
-          <div class="interrupt-grid">
-            <label v-for="t in interruptTools" :key="t.name" class="check">
-              <input type="checkbox" v-model="form.interruptOn[t.name]" /> {{ t.label }}
-            </label>
-          </div>
-          <div class="actions">
-            <button class="mini" type="button" @click="setAllInterrupt(true)">全部打断</button>
-            <button class="mini" type="button" @click="setAllInterrupt(false)">全部放行</button>
-          </div>
-          <span class="hint">勾选的工具在 Agent 执行前会中断并等待你确认（同意/拒绝）；取消勾选则直接放行自动执行</span>
-        </div>
-        <div class="field">
-          <label class="check">
-            <input type="checkbox" v-model="form.autoApproveSkillScripts" />
-            技能脚本免确认（skills 下的 scripts 目录）
-          </label>
-          <span class="hint">
-            开启后，运行技能自带脚本（python skills/技能名/scripts/脚本.py，可带前置 Set-Location）不再弹确认；
-            其它命令、以及带管道 / 重定向 / 变量 / 反引号等拼接写法的命令仍会打断。
-            仅在勾选上面的「执行命令（execute）」时生效。
-          </span>
-        </div>
-        <div class="actions">
-          <button class="btn" @click="togglePreview">{{ preview ? '隐藏完整提示词' : '预览完整提示词' }}</button>
-          <button class="btn" @click="resetPersona">恢复默认人设</button>
-        </div>
-        <pre v-if="preview" class="preview-box">{{ preview }}</pre>
-      </div>
-    </section>
-
-    <!-- 工作区 -->
-    <section class="card wide">
-      <div class="card-header">
-        <span class="card-icon"><AppIcon name="folder" :size="15" /></span>
-        <div class="card-head-main">
-          <div class="card-title">工作区</div>
-          <div class="card-sub">Agent 读写文件、执行命令的根目录</div>
-        </div>
-      </div>
-      <div class="card-body form">
-        <div class="field">
-          <label>当前工作区</label>
-          <div class="workspace-row">
-            <input :value="workspaceDisplay" readonly class="mono workspace-path" />
-            <button class="btn" type="button" @click="pickWorkspace">
-              <AppIcon name="folder" :size="14" />选择目录
-            </button>
-            <button class="btn" type="button" @click="resetWorkspace" :disabled="!form.workspace">恢复默认</button>
-          </div>
-          <span class="hint">
-            文件工具（ls / read_file / write_file / edit_file / glob / grep）与 shell 都以此目录为根，
-            相对路径相对它解析；留空则使用应用内部 runtime 目录。
-          </span>
-          <span class="hint">
-            技能库与任务清单始终留在应用数据目录，不受工作区影响；正在生成的那一轮仍使用旧工作区，下一条消息起生效。
-          </span>
-        </div>
-      </div>
-    </section>
-
-    <!-- dsh 子代理（DeepSeek Harness） -->
-    <section class="card wide">
-      <div class="card-header">
-        <span class="card-icon"><AppIcon name="layers" :size="15" /></span>
-        <div class="card-head-main">
-          <div class="card-title">dsh 子代理（DeepSeek Harness）</div>
-          <div class="card-sub">子代理的连接方式、输出上限与系统提示词</div>
-        </div>
-      </div>
-      <div class="card-body form">
-        <div class="field">
-          <span class="hint">dsh 会自动带上主 Agent 的 skills：委托执行时会挂载「技能管理」里的同一套技能，按需加载，无需重复配置。</span>
-        </div>
-        <div class="field">
-          <label class="check"><input type="checkbox" v-model="form.dshUseMainLlm" /> 复用主 Agent 的 LLM</label>
-          <span class="hint">
-            勾选时 dsh 直接使用「模型连接」中当前激活的配置档（{{ mainLlmSummary }}）；取消勾选则使用下方独立连接参数
-          </span>
-        </div>
-        <!-- 复用主 Agent LLM 时，独立连接参数整组隐藏（值仍随保存一起落盘，不丢失） -->
-        <template v-if="!form.dshUseMainLlm">
-          <div class="field">
-            <label>Base URL</label>
-            <input v-model="form.dshBaseUrl" placeholder="http://localhost:8080/v1" />
-          </div>
-          <div class="field">
-            <label>API Key</label>
-            <div class="key-row">
-              <input v-model="form.dshApiKey" :type="showDshKey ? 'text' : 'password'" placeholder="sk-..." @focus="revealDshKey" />
-              <button class="mini" @click="showDshKey = !showDshKey">{{ showDshKey ? '隐藏' : '显示' }}</button>
+      <div class="settings-main">
+        <!-- 外观主题 -->
+        <section v-show="activeSection === 'theme'" class="panel" aria-labelledby="sec-theme">
+          <header class="panel-head">
+            <span class="panel-icon"><AppIcon name="sun" :size="16" /></span>
+            <div class="panel-head-text">
+              <h2 id="sec-theme" class="panel-title">外观主题</h2>
+              <p class="panel-sub">墨夜琥珀 / 霜白墨青，切换立即生效</p>
             </div>
-          </div>
-          <div class="field">
-            <label>模型名称</label>
-            <input v-model="form.dshModel" placeholder="Qwen3.6-35B" />
-            <span class="hint">dsh 路由名固定为 deepseek-official，模型 id 原样透传给网关，填服务商/自建服务实际使用的模型名</span>
-          </div>
-        </template>
-        <div class="field">
-          <label>系统提示词</label>
-          <textarea v-model="form.dshSystemPrompt" rows="12" class="mono persona"
-            placeholder="留空则使用内置默认 dsh 提示词"></textarea>
-          <span class="hint">{{ form.dshSystemPrompt.length }} 字 · 支持 {shell_guidance} 变量，会在运行平台展开为 pwsh / bash 指引</span>
-        </div>
-        <div class="field">
-          <label>最大输出 tokens</label>
-          <div class="stepper">
-            <button type="button" class="step-btn" @click="step('dshMaxTokens', -1024, 1, DSH_MAX_TOKENS_LIMIT)" :disabled="form.dshMaxTokens <= 1"><AppIcon name="minus" :size="14" /></button>
-            <input type="number" v-model.number="form.dshMaxTokens" min="1" :max="DSH_MAX_TOKENS_LIMIT" class="step-input"
-              @blur="clamp('dshMaxTokens', 1, DSH_MAX_TOKENS_LIMIT, DSH_MAX_TOKENS_LIMIT)" />
-            <button type="button" class="step-btn" @click="step('dshMaxTokens', 1024, 1, DSH_MAX_TOKENS_LIMIT)" :disabled="form.dshMaxTokens >= DSH_MAX_TOKENS_LIMIT"><AppIcon name="plus" :size="14" /></button>
-          </div>
-          <span class="hint">dsh 单次响应的输出上限，范围 1~131072（DashScope qwen 系只接受该区间，默认 131072）</span>
-        </div>
-        <div class="field">
-          <label>推理强度（reasoningEffort）</label>
-          <select v-model="form.dshReasoningEffort">
-            <option v-for="o in dshReasoningEffortOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-          </select>
-          <span class="hint">仅 dsh 适配器识别（deepseek-official）；与主 Agent 的「额外参数」互不影响</span>
-        </div>
-        <div class="actions">
-          <button class="btn" @click="resetDshPrompt">恢复默认提示词</button>
-        </div>
-      </div>
-    </section>
-
-    <!-- 知识库（RAG） -->
-    <section class="card wide">
-      <div class="card-header">
-        <span class="card-icon"><AppIcon name="database" :size="15" /></span>
-        <div class="card-head-main">
-          <div class="card-title">知识库（RAG）</div>
-          <div class="card-sub">上传自动入库与向量模型配置</div>
-        </div>
-      </div>
-      <div class="card-body form">
-        <div class="field">
-          <label class="check"><input type="checkbox" v-model="form.ragAutoEmbedding" /> 聊天上传文件自动入库</label>
-          <span class="hint">开启后，普通对话中上传的文件将异步自动 Embedding 到默认知识库</span>
-        </div>
-        <div class="field">
-          <label class="check"><input type="checkbox" v-model="form.ragHybrid" /> 混合检索（向量 + 关键词）</label>
-          <span class="hint">默认开启：向量语义召回 + BM25 关键词召回，再用 RRF 融合；对编号、专有名词、代码标识符更稳。关闭后回到纯向量 top-k</span>
-        </div>
-        <div class="field">
-          <label>分块与召回参数</label>
-          <div class="rag-retrieval-row">
-            <label class="rag-num">
-              分块大小
-              <input type="number" v-model.number="form.ragChunkSize" min="100" max="8000" step="100" />
-            </label>
-            <label class="rag-num">
-              重叠
-              <input type="number" v-model.number="form.ragChunkOverlap" min="0" max="4000" step="50" />
-            </label>
-            <label class="rag-num">
-              候选倍数
-              <input type="number" v-model.number="form.ragCandidateMultiplier" min="1" max="10" step="1" />
-            </label>
-          </div>
-          <span class="hint">分块大小/重叠单位为字符；候选倍数用于混合检索（实际召回数 = k × 倍数）。修改分块参数后需要重建索引才会应用到已有文档</span>
-        </div>
-        <div class="field">
-          <label>索引健康</label>
-          <div class="rag-health" :class="{ bad: ragHealth && !ragHealth.dimensionMatch && !ragHealth.empty }">
-            <div class="rag-health-grid">
-              <span class="rh-item"><span class="rh-label">模型</span>{{ ragHealth?.embeddingModel?.model || '—' }}</span>
-              <span class="rh-item">
-                <span class="rh-label">维度</span>
-                {{ ragHealth ? `${ragHealth.embeddingDim ?? '—'} / 集合 ${ragHealth.collectionDim ?? '—'}` : '检测中…' }}
-              </span>
-              <span class="rh-item">
-                <span class="rh-label">分块 / 文档</span>
-                {{ ragHealth ? `${ragHealth.count} / ${ragHealth.documentCount}` : '—' }}
-              </span>
-            </div>
-            <div v-if="ragHealth && ragHealth.embeddingDim && ragHealth.collectionDim && !ragHealth.dimensionMatch && !ragHealth.empty" class="rag-warn">
-              <AppIcon name="alert" :size="13" />
-              <span>当前模型输出 {{ ragHealth.embeddingDim }} 维，索引是 {{ ragHealth.collectionDim }} 维；向量召回会降级为关键词。请重建索引，或切回建库时的模型。</span>
-            </div>
-            <div v-if="ragHealth?.embeddingError" class="rag-warn">
-              <AppIcon name="alert" :size="13" />
-              <span :title="ragHealth.embeddingError">Embedding 模型调用失败：{{ shortError(ragHealth.embeddingError, 140) }}。请检查模型地址 / API Key，或先修复模型再重建索引。</span>
-            </div>
-            <div v-if="ragHealth?.missingFileCount" class="rag-warn">
-              <AppIcon name="alert" :size="13" />
-              <span>{{ ragHealth.missingFileCount }} 篇文档的原始文件已缺失，重建后这些文档会标记为失败。</span>
-            </div>
-            <div class="rag-health-actions">
-              <button class="mini" type="button" @click="loadRagHealth" :disabled="ragHealthLoading">刷新状态</button>
-              <button class="mini danger" type="button" @click="startRagRebuild" :disabled="ragRebuild.running || ragHealthLoading || !!ragHealth?.embeddingError" :title="ragHealth?.embeddingError ? '请先修复 Embedding 模型' : ''">
-                {{ ragRebuild.running ? '重建中…' : '重建全部索引' }}
+          </header>
+          <div class="panel-body">
+            <div class="theme-picker">
+              <button
+                v-for="opt in themeOptions"
+                :key="opt.value"
+                type="button"
+                class="theme-option"
+                :class="[`theme-${opt.value}`, { active: themeMode === opt.value }]"
+                @click="setTheme(opt.value)"
+              >
+                <span class="theme-swatch">
+                  <span class="swatch-sample">Aa</span>
+                  <span class="swatch-dot"></span>
+                </span>
+                <span class="theme-meta">
+                  <span class="theme-name">
+                    <AppIcon :name="opt.icon" :size="14" />
+                    {{ opt.label }}
+                  </span>
+                  <span v-if="themeMode === opt.value" class="theme-badge">
+                    <AppIcon name="check" :size="11" />
+                    当前
+                  </span>
+                </span>
               </button>
-              <span class="rag-health-tip">重建会清空现有向量，并按原始文件重新 OCR / 分块 / embedding</span>
             </div>
-            <div v-if="ragRebuild.running" class="rag-progress">
-              <div class="rag-progress-bar"><span :style="{ width: ragRebuildPercent + '%' }"></span></div>
-              <div class="rag-progress-text">
-                {{ ragRebuild.done }} / {{ ragRebuild.total }} · {{ ragRebuild.current || '准备中' }}
+            <p class="field-hint">「跟随系统」会随操作系统的浅色 / 深色外观自动切换；选择保存在本机。</p>
+          </div>
+        </section>
+
+        <!-- 桌宠 -->
+        <section v-show="activeSection === 'pet'" class="panel" aria-labelledby="sec-pet">
+          <header class="panel-head">
+            <span class="panel-icon"><AppIcon name="bot" :size="16" /></span>
+            <div class="panel-head-text">
+              <h2 id="sec-pet" class="panel-title">桌宠</h2>
+              <p class="panel-sub">显示开关、大小与快速提问快捷键</p>
+            </div>
+          </header>
+          <div class="panel-body">
+            <div class="sgroup">
+              <div class="switch-row">
+                <div class="switch-text">
+                  <div class="switch-title">启用桌宠</div>
+                  <p class="switch-desc">桌宠不可见时（关闭或右键临时隐藏），提醒事项与闲置提醒将以系统通知呈现，不再使用桌宠气泡。</p>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.petEnabled" aria-label="启用桌宠" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
               </div>
             </div>
-            <div v-else-if="ragRebuild.finishedAt" class="rag-progress-text">
-              上次重建：{{ ragRebuild.failed ? `${ragRebuild.failed} 篇失败` : '全部成功' }}
-              （{{ ragRebuild.done }} / {{ ragRebuild.total }}）
+
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">外观</h3>
+              </div>
+              <div class="field">
+                <div class="range-grid" role="group" aria-label="桌宠大小与透明度">
+                  <label class="range-field">
+                    <span class="range-label">大小</span>
+                    <input type="range" v-model.number="form.petSize" min="0.75" max="1.3" step="0.05" />
+                    <span class="range-value">{{ Number(form.petSize).toFixed(2) }}×</span>
+                  </label>
+                  <label class="range-field">
+                    <span class="range-label">透明度</span>
+                    <input type="range" v-model.number="form.petOpacity" min="0.35" max="1" step="0.05" />
+                    <span class="range-value">{{ Math.round(Number(form.petOpacity) * 100) }}%</span>
+                  </label>
+                </div>
+                <p class="field-hint">保存后桌宠即时缩放 / 变透明，不影响气泡与主窗口。</p>
+              </div>
+            </div>
+
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">快速提问</h3>
+              </div>
+              <div class="field">
+                <label class="field-label">全局快捷键</label>
+                <div class="hotkey-row">
+                  <div
+                    class="hotkey-box"
+                    :class="{ recording: recordingKey, bad: hotkeyError }"
+                    tabindex="0"
+                    title="点击后按下组合键进行录制"
+                    @click="startRecord"
+                    @blur="stopRecord"
+                    @keydown.prevent="onRecordKeydown"
+                  >{{ hotkeyDisplay }}</div>
+                  <button v-if="form.quickAskShortcut" class="mini" type="button" @click="form.quickAskShortcut = ''">禁用</button>
+                </div>
+                <p class="field-hint" :class="{ bad: hotkeyError }">
+                  {{ hotkeyError || (recordingKey ? '请按下组合键（需包含 Ctrl / Alt / Shift / Win），Esc 取消' : '例如 Alt+Shift+Q；留空表示禁用') }}
+                </p>
+                <p v-if="hotkeyStatus" :class="hotkeyStatus.ok ? 'ok' : 'bad-text'" class="field-hint">{{ hotkeyStatus.text }}</p>
+              </div>
+            </div>
+
+            <div class="sgroup">
+              <div class="switch-row">
+                <div class="switch-text">
+                  <div class="switch-title">勿扰时段</div>
+                  <p class="switch-desc">勿扰时段内不弹提醒气泡与系统通知；支持跨午夜（如 22:00 → 08:00）。</p>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.dndEnabled" aria-label="勿扰时段" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+              <div v-if="form.dndEnabled" class="field-grid">
+                <label class="field">
+                  <span class="field-label">开始时间</span>
+                  <input type="time" v-model="form.dndStart" />
+                </label>
+                <label class="field">
+                  <span class="field-label">结束时间</span>
+                  <input type="time" v-model="form.dndEnd" />
+                </label>
+              </div>
             </div>
           </div>
-          <span class="hint">向量维度与集合不一致时，上传新文档会失败；重建会从原始文件重新生成全部索引</span>
-        </div>
-        <div class="field">
-          <label>Embedding 模型来源</label>
-          <select v-model="form.ragEmbedType" @change="onEmbedTypeChange">
-            <option value="local">本地模型（Local）</option>
-            <option value="remote">远程 API（OpenAI-Compatible）</option>
-          </select>
-          <span class="hint">本地模式无需 Base URL / API Key，首次使用时自动下载模型</span>
-        </div>
-        <div class="field">
-          <label>Embedding 模型名称</label>
-          <input v-model="form.ragEmbedModel" :placeholder="form.ragEmbedType === 'local' ? '由智能下载自动确定' : 'text-embedding-3-small'"
-            :disabled="form.ragEmbedType === 'local'" @change="onEmbedModelChange" />
-          <span class="hint">本地模式下模型由「智能下载」按显卡条件自动确定（N 卡 ≥4G 显存用 bge-large，否则 bge-small），无需手动填写；远程模式填服务商模型名</span>
-        </div>
-        <div class="field">
-          <label>Base URL</label>
-          <input v-model="form.ragEmbedBaseUrl" placeholder="https://api.openai.com/v1" :disabled="form.ragEmbedType !== 'remote'" />
-        </div>
-        <div class="field">
-          <label>API Key</label>
-          <div class="key-row">
-            <input v-model="form.ragEmbedApiKey" :type="showRagKey ? 'text' : 'password'" placeholder="sk-..." :disabled="form.ragEmbedType !== 'remote'" />
-            <button class="mini" @click="showRagKey = !showRagKey">{{ showRagKey ? '隐藏' : '显示' }}</button>
-          </div>
-          <span class="hint">仅远程模式需要</span>
-        </div>
-        <div class="field">
-          <label>知识库文档解析引擎（OCR）</label>
-          <select v-model="form.ragOcrEngine">
-            <option value="docling">Docling（更精细，支持图片识别）</option>
-            <option value="markitdown">MarkItDown（快速）</option>
-          </select>
-          <span class="hint">知识库维护上传时解析文档所使用的引擎，默认 Docling</span>
-        </div>
-        <div v-if="form.ragEmbedType === 'local' && !form.ragLocalDownloaded" id="rag-model" class="field">
-          <label>本地模型下载</label>
-          <div class="actions">
-            <button class="btn primary" @click="downloadModel" :disabled="downloading">
-              <span v-if="downloading" class="btn-spinner"></span>
-              <span v-else class="btn-label"><AppIcon name="download" :size="14" />下载模型</span>
-              <span v-if="downloading">下载中…</span>
-            </button>
-            <span v-if="downloadResult" :class="downloadResult.ok ? 'ok' : 'bad-text'">{{ downloadResult.text }}</span>
-          </div>
-          <span class="hint">自动检测网络（不可直连时走 hf-mirror 镜像）与显卡（N 卡 ≥4G 显存下载 bge-large，否则 bge-small），模型较大请耐心等待</span>
-        </div>
-        <div v-else-if="form.ragEmbedType === 'local'" id="rag-model" class="field">
-          <label>本地模型状态</label>
-          <div class="actions">
-            <span class="ok"><AppIcon name="check" :size="13" />模型已下载{{ form.ragEmbedModel ? `：${form.ragEmbedModel}` : '' }}</span>
-            <button class="mini" @click="redownloadModel" :disabled="downloading" title="清除已下载状态并重新下载">重新下载</button>
-            <span v-if="downloadResult" :class="downloadResult.ok ? 'ok' : 'bad-text'">{{ downloadResult.text }}</span>
-          </div>
-        </div>
-      </div>
-    </section>
+        </section>
 
-    <!-- 数据与备份 -->
-    <section class="card wide">
-      <div class="card-header">
-        <span class="card-icon"><AppIcon name="package" :size="15" /></span>
-        <div class="card-head-main">
-          <div class="card-title">数据与备份</div>
-          <div class="card-sub">导出配置、对话与向量库，方便换机迁移</div>
-        </div>
-      </div>
-      <div class="card-body form">
-        <div class="field">
-          <label>导出备份</label>
-          <div class="actions">
-            <button class="btn primary" type="button" :disabled="backupBusy" @click="exportBackupAction">
-              <span v-if="backupBusy" class="btn-spinner"></span>
-              {{ backupBusy ? '正在导出…' : '选择目录并导出' }}
-            </button>
-            <span class="hint">会生成独立的 sassy-cat-backup-日期-时间 目录</span>
-          </div>
-          <span class="hint">
-            包含 config.user.json、messages.sqlite（一致性快照）、Chroma 向量库、上传文件、MCP 服务器配置与技能库；
-            不包含体积通常很大的 checkpoints.sqlite（Agent 现场）。备份内含 API Key 等敏感配置，请妥善保管。
-          </span>
-          <div v-if="backupError" class="bad-text backup-result">{{ backupError }}</div>
-          <div v-if="backupResult" class="backup-result">
-            <span class="ok">
-              <AppIcon name="check" :size="13" />
-              已导出 {{ backupResult.items?.length || 0 }} 项 · {{ formatBytes(backupResult.totalSize) }}
-            </span>
-            <code class="backup-path" :title="backupResult.path">{{ backupResult.path }}</code>
-            <button class="mini" type="button" @click="openBackupFolder">打开文件夹</button>
-          </div>
-          <span class="hint">迁移：退出优墨后，把备份目录内容覆盖到新机器的 userData 目录（Windows 默认 %APPDATA%\sassy-cat）</span>
-        </div>
-      </div>
-    </section>
+        <!-- 语音朗读 -->
+        <section v-show="activeSection === 'voice'" class="panel" aria-labelledby="sec-voice">
+          <header class="panel-head">
+            <span class="panel-icon"><AppIcon name="volume" :size="16" /></span>
+            <div class="panel-head-text">
+              <h2 id="sec-voice" class="panel-title">语音朗读（TTS）</h2>
+              <p class="panel-sub">系统语音、语速与音调</p>
+            </div>
+          </header>
+          <div class="panel-body">
+            <div class="sgroup">
+              <div class="field">
+                <label class="field-label" for="tts-engine">语音方案</label>
+                <select id="tts-engine" v-model="form.voiceEngine">
+                  <option value="web-speech">Web Speech API（系统语音 · 无需 GPU）</option>
+                  <option value="local" disabled>本地 TTS（N 卡 ≥8GB，Phase 2 敬请期待）</option>
+                </select>
+                <p class="field-hint">当前方案使用系统自带语音，无需显卡、零依赖；本地 TTS 将随 GPU 推理支持逐步开放。</p>
+              </div>
+            </div>
 
-    <!-- 网络代理 -->
-    <section class="card">
-      <div class="card-header">
-        <span class="card-icon"><AppIcon name="globe" :size="15" /></span>
-        <div class="card-head-main">
-          <div class="card-title">网络代理</div>
-          <div class="card-sub">HTTP / HTTPS 代理与直连白名单</div>
-        </div>
-      </div>
-      <div class="card-body form">
-        <div class="field">
-          <label class="check"><input type="checkbox" v-model="form.proxyEnabled" /> 启用 HTTP / HTTPS 代理</label>
-          <span class="hint">保存后 Electron 立即生效；Python Agent 需在启用/停用后点击顶部「重启服务进程」以刷新代理环境变量</span>
-        </div>
-        <div class="field">
-          <label>HTTP 代理</label>
-          <input v-model="form.proxyHttp" placeholder="http://127.0.0.1:7890" :disabled="!form.proxyEnabled" />
-          <span class="hint">支持 http:// 或 socks5:// 前缀，例如 http://127.0.0.1:7890</span>
-        </div>
-        <div class="field">
-          <label>HTTPS 代理</label>
-          <input v-model="form.proxyHttps" placeholder="留空则与 HTTP 代理相同" :disabled="!form.proxyEnabled" />
-        </div>
-        <div class="field">
-          <label>绕过代理（NO_PROXY）</label>
-          <input v-model="form.proxyNoProxy" placeholder="localhost,127.0.0.1,*.example.com" :disabled="!form.proxyEnabled" />
-          <span class="hint">逗号分隔的主机名单，命中这些地址的请求不走代理</span>
-        </div>
-      </div>
-    </section>
+            <div class="sgroup">
+              <div class="switch-row">
+                <div class="switch-text">
+                  <div class="switch-title">启用语音朗读</div>
+                  <p class="switch-desc">开启后，每条 AI 回复气泡下都会出现朗读按钮。</p>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.voiceEnabled" aria-label="启用语音朗读" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+              <div class="switch-row">
+                <div class="switch-text">
+                  <div class="switch-title">AI 自动朗读</div>
+                  <p class="switch-desc">AI 回复生成时自动朗读；内置播放缓冲抗网络波动，回复结束会补全剩余内容。</p>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.voiceAutoRead" :disabled="!form.voiceEnabled" aria-label="AI 自动朗读" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+            </div>
 
-    <!-- 语音朗读（TTS） -->
-    <section class="card">
-      <div class="card-header">
-        <span class="card-icon"><AppIcon name="volume" :size="15" /></span>
-        <div class="card-head-main">
-          <div class="card-title">语音朗读（TTS）</div>
-          <div class="card-sub">系统语音、语速与音调</div>
-        </div>
-      </div>
-      <div class="card-body form">
-        <div class="field">
-          <label>语音方案</label>
-          <select v-model="form.voiceEngine">
-            <option value="web-speech">Web Speech API（系统语音 · 无需 GPU）</option>
-            <option value="local" disabled>本地 TTS（N 卡 ≥8GB，Phase 2 敬请期待）</option>
-          </select>
-          <span class="hint">当前方案使用系统自带语音，无需显卡、零依赖；本地 TTS 将随 GPU 推理支持逐步开放</span>
-        </div>
-        <div class="field">
-          <label class="check"><input type="checkbox" v-model="form.voiceEnabled" /> 启用语音朗读</label>
-          <span class="hint">开启后，每条 AI 回复气泡下都会出现朗读按钮</span>
-        </div>
-        <div class="field">
-          <label class="check"><input type="checkbox" v-model="form.voiceAutoRead" :disabled="!form.voiceEnabled" /> AI 自动朗读</label>
-          <span class="hint">开启后 AI 回复生成时自动朗读；内置播放缓冲抗网络波动，回复结束会补全剩余内容</span>
-        </div>
-        <div class="field">
-          <label>中文语音</label>
-          <div class="profile-row">
-            <select v-model="form.voiceVoiceName" class="voice-select" :disabled="!form.voiceEnabled">
-              <option v-for="v in voiceOptions" :key="v.name" :value="v.name">{{ voiceLabel(v) }}</option>
-            </select>
-            <button class="mini voice-preview-btn" type="button" :disabled="!form.voiceEnabled" @click="voicePreview" :title="testingVoice ? '正在试听…' : '试听当前语音'">
-              <template v-if="testingVoice"><span class="eq"><i></i><i></i><i></i></span>试听中</template>
-              <template v-else>试听</template>
-            </button>
-          </div>
-          <span class="hint" v-if="!voiceOptions.length">{{ voiceNoVoicesHint }}</span>
-          <span class="hint" v-else>选择朗读时使用的语音；留空则自动挑选中文语音</span>
-        </div>
-        <div class="field">
-          <label>语速 <span class="inline-val">{{ form.voiceRate.toFixed(1) }}</span></label>
-          <input type="range" min="0.5" max="2" step="0.1" v-model.number="form.voiceRate" :disabled="!form.voiceEnabled" />
-        </div>
-        <div class="field">
-          <label>音调 <span class="inline-val">{{ form.voicePitch.toFixed(1) }}</span></label>
-          <input type="range" min="0.5" max="2" step="0.1" v-model.number="form.voicePitch" :disabled="!form.voiceEnabled" />
-        </div>
-      </div>
-    </section>
+            <div class="sgroup">
+              <div class="field">
+                <label class="field-label" for="tts-voice">中文语音</label>
+                <div class="inline-row">
+                  <select id="tts-voice" v-model="form.voiceVoiceName" class="voice-select" :disabled="!form.voiceEnabled">
+                    <option v-for="v in voiceOptions" :key="v.name" :value="v.name">{{ voiceLabel(v) }}</option>
+                  </select>
+                  <button class="btn" type="button" :disabled="!form.voiceEnabled" @click="voicePreview" :title="testingVoice ? '正在试听…' : '试听当前语音'">
+                    <template v-if="testingVoice"><span class="eq"><i></i><i></i><i></i></span>试听中</template>
+                    <template v-else><AppIcon name="play" :size="13" />试听</template>
+                  </button>
+                </div>
+                <p v-if="!voiceOptions.length" class="field-hint">{{ voiceNoVoicesHint }}</p>
+                <p v-else class="field-hint">选择朗读时使用的语音；留空则自动挑选中文语音。</p>
+              </div>
+            </div>
 
-    <!-- 闲置提醒 -->
-    <section class="card">
-      <div class="card-header">
-        <span class="card-icon"><AppIcon name="clock" :size="15" /></span>
-        <div class="card-head-main">
-          <div class="card-title">闲置提醒</div>
-          <div class="card-sub">久未互动时让本喵叫你一声</div>
-        </div>
-      </div>
-      <div class="card-body form inline">
-        <label class="check"><input type="checkbox" v-model="form.idleEnabled" /> 启用</label>
-        <label>闲置阈值（分钟）<input type="number" v-model.number="form.idleThreshold" min="1" class="num" /></label>
-        <label>提醒冷却（分钟）<input type="number" v-model.number="form.idleQuiet" min="1" class="num" /></label>
-      </div>
-    </section>
+            <div class="sgroup">
+              <div class="field-grid">
+                <div class="field">
+                  <div class="field-label-row">
+                    <label class="field-label" for="tts-rate">语速</label>
+                    <span class="inline-val">{{ form.voiceRate.toFixed(1) }}</span>
+                  </div>
+                  <input id="tts-rate" type="range" min="0.5" max="2" step="0.1" v-model.number="form.voiceRate" :disabled="!form.voiceEnabled" />
+                </div>
+                <div class="field">
+                  <div class="field-label-row">
+                    <label class="field-label" for="tts-pitch">音调</label>
+                    <span class="inline-val">{{ form.voicePitch.toFixed(1) }}</span>
+                  </div>
+                  <input id="tts-pitch" type="range" min="0.5" max="2" step="0.1" v-model.number="form.voicePitch" :disabled="!form.voiceEnabled" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
 
-    <!-- 提醒事项 -->
-    <section class="card">
-      <div class="card-header">
-        <span class="card-icon"><AppIcon name="bell" :size="15" /></span>
-        <div class="card-head-main">
-          <div class="card-title">提醒事项</div>
-          <div class="card-sub">检查频率与气泡停留时长</div>
-        </div>
-      </div>
-      <div class="card-body form">
-        <div class="field">
-          <label>检查间隔（秒）</label>
-          <div class="stepper">
-            <button type="button" class="step-btn" @click="step('reminderPoll', -1, 3, 30)" :disabled="form.reminderPoll <= 3"><AppIcon name="minus" :size="14" /></button>
-            <input type="number" v-model.number="form.reminderPoll" min="3" max="30" class="step-input"
-              @blur="clamp('reminderPoll', 3, 30, 5)" />
-            <button type="button" class="step-btn" @click="step('reminderPoll', 1, 3, 30)" :disabled="form.reminderPoll >= 30"><AppIcon name="plus" :size="14" /></button>
-          </div>
-          <span class="hint">后台检查提醒是否到点的频率，范围 3~30 秒（默认 5 秒，越小触发越及时）</span>
-        </div>
-        <div class="field">
-          <label>气泡显示时长（秒）</label>
-          <select v-model.number="form.reminderDuration">
-            <option v-for="d in reminderDurationOptions" :key="d" :value="d">{{ d }} 秒</option>
-          </select>
-          <span class="hint">提醒弹出时桌宠气泡的停留时长，可选 3~30 秒（默认 8 秒）</span>
-        </div>
-      </div>
-    </section>
+        <!-- 模型连接 -->
+        <section v-show="activeSection === 'llm'" class="panel" aria-labelledby="sec-llm">
+          <header class="panel-head">
+            <span class="panel-icon"><AppIcon name="plug" :size="16" /></span>
+            <div class="panel-head-text">
+              <h2 id="sec-llm" class="panel-title">模型连接</h2>
+              <p class="panel-sub">主 Agent 的 LLM 连接、采样与上下文策略</p>
+            </div>
+          </header>
+          <div class="panel-body">
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">配置档</h3>
+                <p class="sgroup-desc">一套连接参数存为一个配置档，可随时切换</p>
+              </div>
+              <div class="profile-row">
+                <select :value="activeProfile" @change="switchProfile($event.target.value)" aria-label="当前配置档">
+                  <option v-for="(p, name) in profiles" :key="name" :value="name">{{ p.label || name }}</option>
+                </select>
+                <button class="btn" type="button" @click="showAddProfile = true" title="新增配置档"><AppIcon name="plus" :size="14" />新增</button>
+                <button class="btn warn" type="button" @click="deleteProfile" :disabled="activeProfile === 'default'" title="删除当前配置档（default 不可删除）"><AppIcon name="trash" :size="14" />删除</button>
+              </div>
+            </div>
 
-    <!-- 桌宠 -->
-    <section class="card">
-      <div class="card-header">
-        <span class="card-icon"><AppIcon name="bot" :size="15" /></span>
-        <div class="card-head-main">
-          <div class="card-title">桌宠</div>
-          <div class="card-sub">显示开关与快速提问快捷键</div>
-        </div>
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">连接</h3>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <label class="field-label" for="llm-provider">Provider</label>
+                  <select id="llm-provider" v-model="form.provider">
+                    <option value="openai">OpenAI‑Compatible</option>
+                    <option value="deepseek">DeepSeek-Compatible</option>
+                  </select>
+                  <p class="field-hint">OpenAI: reasoning 放在 content 中；DeepSeek: 放在 reasoning_content 中</p>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="llm-model">模型名称</label>
+                  <input id="llm-model" v-model="form.model" placeholder="Qwen3.6-35B" />
+                </div>
+                <div class="field span-2">
+                  <label class="field-label" for="llm-base-url">Base URL</label>
+                  <input id="llm-base-url" v-model="form.baseUrl" placeholder="http://localhost:8080/v1" />
+                </div>
+                <div class="field span-2">
+                  <label class="field-label" for="llm-api-key">API Key</label>
+                  <div class="key-row">
+                    <input id="llm-api-key" v-model="form.apiKey" :type="showKey ? 'text' : 'password'" placeholder="sk-..." @focus="revealKey" />
+                    <button class="mini" type="button" @click="showKey = !showKey">{{ showKey ? '隐藏' : '显示' }}</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">生成参数</h3>
+              </div>
+              <div class="field">
+                <div class="field-label-row">
+                  <label class="field-label" for="llm-temp">采样温度（Temperature）</label>
+                  <span class="inline-val">{{ Number(form.temperature).toFixed(2) }}</span>
+                </div>
+                <input id="llm-temp" type="range" min="0" max="2" step="0.05" v-model.number="form.temperature" />
+                <p class="field-hint">范围 0~2，越低回答越稳定、越高越发散（默认 0.7）；仅作用于当前配置档。</p>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <label class="field-label">最大输出 token（maxTokens）</label>
+                  <div class="stepper">
+                    <button type="button" class="step-btn" @click="step('maxTokens', -1024, MAX_TOKENS_MIN, MAX_TOKENS_MAX)" :disabled="form.maxTokens <= MAX_TOKENS_MIN"><AppIcon name="minus" :size="14" /></button>
+                    <input type="number" v-model.number="form.maxTokens" :min="MAX_TOKENS_MIN" :max="MAX_TOKENS_MAX" class="step-input"
+                      @blur="clamp('maxTokens', MAX_TOKENS_MIN, MAX_TOKENS_MAX, DEFAULT_MAX_TOKENS)" />
+                    <button type="button" class="step-btn" @click="step('maxTokens', 1024, MAX_TOKENS_MIN, MAX_TOKENS_MAX)" :disabled="form.maxTokens >= MAX_TOKENS_MAX"><AppIcon name="plus" :size="14" /></button>
+                  </div>
+                  <p class="field-hint">单次回复上限，范围 256~1048576，默认 8192；实际请求会按上下文窗口自动收缩。</p>
+                </div>
+                <div class="field">
+                  <label class="field-label">上下文窗口（contextWindow）</label>
+                  <div class="stepper">
+                    <button type="button" class="step-btn" @click="step('contextWindow', -8192, CONTEXT_WINDOW_MIN, CONTEXT_WINDOW_MAX)" :disabled="form.contextWindow <= CONTEXT_WINDOW_MIN"><AppIcon name="minus" :size="14" /></button>
+                    <input type="number" v-model.number="form.contextWindow" :min="CONTEXT_WINDOW_MIN" :max="CONTEXT_WINDOW_MAX" class="step-input"
+                      @blur="clamp('contextWindow', CONTEXT_WINDOW_MIN, CONTEXT_WINDOW_MAX, DEFAULT_CONTEXT_WINDOW)" />
+                    <button type="button" class="step-btn" @click="step('contextWindow', 8192, CONTEXT_WINDOW_MIN, CONTEXT_WINDOW_MAX)" :disabled="form.contextWindow >= CONTEXT_WINDOW_MAX"><AppIcon name="plus" :size="14" /></button>
+                  </div>
+                  <p class="field-hint">单次可处理的最大 token 数（输入 + 输出），范围 8192~1048576，默认 262144。</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">上下文</h3>
+                <p class="sgroup-desc">接近模型窗口上限时，自动把久远历史总结成一条摘要</p>
+              </div>
+              <div class="switch-row">
+                <div class="switch-text">
+                  <div class="switch-title">启用上下文自动压缩</div>
+                  <p class="switch-desc">保留近期原文、摘要替换旧历史，避免请求溢出；关闭后不再自动裁剪，请自行控制会话长度。</p>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.contextCompressionEnabled" aria-label="启用上下文自动压缩" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+              <div v-if="form.contextCompressionEnabled" class="sub-panel">
+                <div class="field-grid">
+                  <div class="field span-2">
+                    <label class="field-label" for="cc-model">压缩使用的模型</label>
+                    <select id="cc-model" v-model="form.contextCompressionModel">
+                      <option value="">跟随当前配置档（{{ profiles[activeProfile]?.label || activeProfile }}）</option>
+                      <option v-for="(p, name) in profiles" :key="name" :value="name">{{ p.label || name }}</option>
+                    </select>
+                    <p class="field-hint">生成摘要所用的 LLM；留空则复用当前激活的模型。</p>
+                  </div>
+                  <div class="field span-2">
+                    <div class="field-label-row">
+                      <label class="field-label" for="cc-threshold">触发压缩的上下文占用</label>
+                      <span class="inline-val">{{ form.contextCompressionThreshold }}%</span>
+                    </div>
+                    <input id="cc-threshold" type="range" :min="CC_THRESHOLD_MIN" :max="CC_THRESHOLD_MAX" step="5" v-model.number="form.contextCompressionThreshold" />
+                    <p class="field-hint">估算 token 达到窗口的该比例时触发，范围 10~95%（默认 80%）。</p>
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="cc-retain">压缩后保留最近原文（tokens）</label>
+                    <input id="cc-retain" type="number" v-model.number="form.contextCompressionRetainTokens" min="0" :max="CC_RETAIN_TOKENS_MAX" step="1024" />
+                    <p class="field-hint">默认 0 = 按窗口的 16% 自动计算（上限 64k）。</p>
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="cc-summary-input">摘要输入上限（tokens）</label>
+                    <input id="cc-summary-input" type="number" v-model.number="form.contextCompressionSummaryInput" min="0" :max="CC_SUMMARY_INPUT_MAX" step="8192" />
+                    <p class="field-hint">默认 65536；0 = 不截断，交给摘要模型自身窗口兜底。</p>
+                  </div>
+                  <div class="field span-2">
+                    <label class="field-label" for="cc-headroom">触发预留 headroom（tokens）</label>
+                    <input id="cc-headroom" type="number" v-model.number="form.contextCompressionHeadroom" min="0" :max="CC_HEADROOM_MAX" step="4096" />
+                    <p class="field-hint">阈值同时受 maxTokens 与 headroom 约束：min(窗口 × 比例, 窗口 − maxTokens − headroom)，默认 8192。</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 媒体守卫与自动压缩相互独立：关掉压缩只是不做摘要，历史图片的压缩 / 预算照常生效 -->
+              <details class="fold">
+                <summary>
+                  <AppIcon name="play" :size="10" class="fold-chevron" />
+                  <span class="fold-title">媒体守卫</span>
+                  <span class="fold-meta">5 项 · 历史图片压缩与预算</span>
+                </summary>
+                <div class="fold-body">
+                  <p class="field-hint fold-tip">与上面的自动压缩相互独立：关闭压缩只是不做摘要，历史图片的体积 / 张数预算照常生效。</p>
+                  <div class="field-grid">
+                    <div class="field">
+                      <label class="field-label" for="media-kb">单张图片压缩目标（KB）</label>
+                      <input id="media-kb" type="number" v-model.number="form.contextMediaMaxKB" :min="MEDIA_MAX_KB_MIN" :max="MEDIA_MAX_KB_MAX" step="128" />
+                      <p class="field-hint">默认 1024KB；压不到目标也保留最小产物，不因体积丢图；0 = 不设目标。</p>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="media-px">压缩后图片最长边（px）</label>
+                      <input id="media-px" type="number" v-model.number="form.contextMediaMaxPx" :min="MEDIA_MAX_PX_MIN" :max="MEDIA_MAX_PX_MAX" step="128" />
+                      <p class="field-hint">按最长边等比缩放，默认 1568px；越小越省视觉 token，截图文字越糊。</p>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="media-budget">历史媒体总预算（KB）</label>
+                      <input id="media-budget" type="number" v-model.number="form.contextMediaBudgetKB" min="0" :max="MEDIA_BUDGET_KB_MAX" step="1024" />
+                      <p class="field-hint">默认 8192KB；0 = 不限制，永远只压缩不 offload。</p>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="media-images">历史图片张数预算</label>
+                      <input id="media-images" type="number" v-model.number="form.contextMediaMaxImages" min="0" :max="MEDIA_MAX_IMAGES_MAX" step="1" />
+                      <p class="field-hint">默认 24 张；0 = 不限制。</p>
+                    </div>
+                    <div class="field span-2">
+                      <label class="field-label" for="media-offload">offload 阶梯（KB）</label>
+                      <input id="media-offload" type="number" v-model.number="form.contextMediaOffloadKB" min="0" :max="MEDIA_OFFLOAD_KB_MAX" step="512" />
+                      <p class="field-hint">总预算超限时一次释放的额度，默认 1024KB；阶梯式高水位可避免每来一张图就改写旧前缀。</p>
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </div>
+
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">高级</h3>
+              </div>
+              <div class="field">
+                <label class="field-label" for="llm-extra">额外参数（JSON）</label>
+                <textarea id="llm-extra" v-model="form.extraParamsText" rows="3" class="mono" @input="validateExtra"></textarea>
+                <p class="field-hint" :class="{ bad: extraError }">{{ extraError || '个性化模型参数，例如 {"enable_thinking": true}、{"reasoning_effort": "high"}' }}</p>
+              </div>
+              <div class="actions">
+                <button class="btn" type="button" @click="testConnection" :disabled="testing">{{ testing ? '测试中…' : '测试连接' }}</button>
+                <span v-if="testResult" :class="testResult.ok ? 'ok' : 'bad-text'" class="field-hint">{{ testResult.text }}</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Agent 配置 -->
+        <section v-show="activeSection === 'agent'" class="panel" aria-labelledby="sec-agent">
+          <header class="panel-head">
+            <span class="panel-icon"><AppIcon name="brain" :size="16" /></span>
+            <div class="panel-head-text">
+              <h2 id="sec-agent" class="panel-title">Agent 配置</h2>
+              <p class="panel-sub">人设提示词、运行限制与高危操作确认</p>
+            </div>
+          </header>
+          <div class="panel-body">
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">配置档</h3>
+              </div>
+              <div class="profile-row">
+                <select :value="activeAgentProfile" @change="switchAgentProfile($event.target.value)" aria-label="当前 Agent 配置档">
+                  <option v-for="(p, name) in agentProfiles" :key="name" :value="name">{{ p.label || name }}</option>
+                </select>
+                <button class="btn" type="button" @click="showAddAgentProfile = true" title="新增 Agent 配置档"><AppIcon name="plus" :size="14" />新增</button>
+                <button class="btn warn" type="button" @click="deleteAgentProfile" :disabled="activeAgentProfile === 'default'" title="删除当前 Agent 配置档（default 不可删除）"><AppIcon name="trash" :size="14" />删除</button>
+              </div>
+            </div>
+
+            <div class="sgroup">
+              <div class="field">
+                <div class="field-label-row">
+                  <label class="field-label" for="agent-persona">人设提示词</label>
+                  <span class="inline-val">{{ form.persona.length }} 字</span>
+                </div>
+                <textarea id="agent-persona" v-model="form.persona" rows="8" class="mono persona"
+                  placeholder="你是「优墨」……（支持 {app_name} {time} {os_user} 变量）"></textarea>
+                <p class="field-hint">留空使用默认傲娇猫咪人设；支持 {app_name} / {time} / {os_user} 变量。</p>
+              </div>
+            </div>
+
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">运行限制</h3>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <label class="field-label">递归上限（步）</label>
+                  <div class="stepper">
+                    <button type="button" class="step-btn" @click="step('recursionLimit', -1, 1, 9999)" :disabled="form.recursionLimit <= 1"><AppIcon name="minus" :size="14" /></button>
+                    <input type="number" v-model.number="form.recursionLimit" min="1" max="9999" class="step-input"
+                      @blur="clamp('recursionLimit', 1, 9999, 100)" />
+                    <button type="button" class="step-btn" @click="step('recursionLimit', 1, 1, 9999)" :disabled="form.recursionLimit >= 9999"><AppIcon name="plus" :size="14" /></button>
+                  </div>
+                  <p class="field-hint">单轮对话可执行的最大步数（含工具调用），范围 1~9999，默认 100。</p>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="agent-ocr-engine">对话文档解析引擎</label>
+                  <select id="agent-ocr-engine" v-model="form.agentOcrEngine" :disabled="!form.agentEnableOcr">
+                    <option value="markitdown">MarkItDown（快速）</option>
+                    <option value="docling">Docling（更精细，支持图片识别）</option>
+                  </select>
+                  <p class="field-hint">需先开启下方的「对话文档解析」。</p>
+                </div>
+              </div>
+              <div class="switch-row">
+                <div class="switch-text">
+                  <div class="switch-title">启用对话文档解析（OCR）</div>
+                  <p class="switch-desc">开启后对话中上传的文档会 OCR 解析并入库；关闭则只保存文件，不做解析。</p>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.agentEnableOcr" aria-label="启用对话文档解析（OCR）" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">检索与工具</h3>
+              </div>
+              <div class="field">
+                <label class="field-label" for="agent-tavily">Tavily API Key（网络搜索）</label>
+                <div class="key-row">
+                  <input id="agent-tavily" v-model="form.tavilyApiKey" :type="showTavilyKey ? 'text' : 'password'" placeholder="tvly-..." />
+                  <button class="mini" type="button" @click="showTavilyKey = !showTavilyKey">{{ showTavilyKey ? '隐藏' : '显示' }}</button>
+                </div>
+                <p class="field-hint">用于 internet_search 工具，留空则无法使用网络搜索。</p>
+              </div>
+              <div class="field">
+                <label class="field-label" for="agent-ds">DeepSeek API Key（搜索 / 网页抓取）</label>
+                <div class="key-row">
+                  <input id="agent-ds" v-model="form.dsApiKey" :type="showDsKey ? 'text' : 'password'" placeholder="sk-..." />
+                  <button class="mini" type="button" @click="showDsKey = !showDsKey">{{ showDsKey ? '隐藏' : '显示' }}</button>
+                </div>
+                <p class="field-hint">用于 deepseek_web_search / deepseek_web_fetch，留空则这两个工具不可用。</p>
+              </div>
+            </div>
+
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">高危操作确认</h3>
+                <p class="sgroup-desc">勾选的工具在执行前会中断并等待你确认</p>
+              </div>
+              <div class="interrupt-grid">
+                <label v-for="t in interruptTools" :key="t.name" class="check">
+                  <input type="checkbox" v-model="form.interruptOn[t.name]" /> {{ t.label }}
+                </label>
+              </div>
+              <div class="actions">
+                <button class="mini" type="button" @click="setAllInterrupt(true)">全部打断</button>
+                <button class="mini" type="button" @click="setAllInterrupt(false)">全部放行</button>
+              </div>
+              <div class="switch-row">
+                <div class="switch-text">
+                  <div class="switch-title">技能脚本免确认</div>
+                  <p class="switch-desc">运行技能自带脚本（skills/技能名/scripts/脚本.py）不再弹确认；含管道 / 重定向 / 变量等拼接写法的命令仍会打断。仅在勾选「执行命令（execute）」时生效。</p>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.autoApproveSkillScripts" aria-label="技能脚本免确认" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">提示词</h3>
+              </div>
+              <div class="actions">
+                <button class="btn" type="button" @click="togglePreview">{{ preview ? '隐藏完整提示词' : '预览完整提示词' }}</button>
+                <button class="btn" type="button" @click="resetPersona">恢复默认人设</button>
+              </div>
+              <pre v-if="preview" class="preview-box">{{ preview }}</pre>
+            </div>
+          </div>
+        </section>
+
+        <!-- dsh 子代理 -->
+        <section v-show="activeSection === 'dsh'" class="panel" aria-labelledby="sec-dsh">
+          <header class="panel-head">
+            <span class="panel-icon"><AppIcon name="layers" :size="16" /></span>
+            <div class="panel-head-text">
+              <h2 id="sec-dsh" class="panel-title">dsh 子代理</h2>
+              <p class="panel-sub">DeepSeek Harness 的连接方式、输出上限与系统提示词</p>
+            </div>
+          </header>
+          <div class="panel-body">
+            <div class="sgroup">
+              <p class="notice">
+                <AppIcon name="info" :size="14" />
+                <span>dsh 会自动带上主 Agent 的技能：委托执行时挂载「技能管理」里的同一套技能，按需加载，无需重复配置。</span>
+              </p>
+              <div class="switch-row no-line">
+                <div class="switch-text">
+                  <div class="switch-title">复用主 Agent 的 LLM</div>
+                  <p class="switch-desc">勾选时 dsh 直接使用「模型连接」中当前激活的配置档（{{ mainLlmSummary }}）；取消勾选则使用下方独立连接参数。</p>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.dshUseMainLlm" aria-label="复用主 Agent 的 LLM" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+              <!-- 复用主 Agent LLM 时，独立连接参数整组隐藏（值仍随保存一起落盘，不丢失） -->
+              <div v-if="!form.dshUseMainLlm" class="sub-panel">
+                <div class="field-grid">
+                  <div class="field">
+                    <label class="field-label" for="dsh-base">Base URL</label>
+                    <input id="dsh-base" v-model="form.dshBaseUrl" placeholder="http://localhost:8080/v1" />
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="dsh-model">模型名称</label>
+                    <input id="dsh-model" v-model="form.dshModel" placeholder="Qwen3.6-35B" />
+                  </div>
+                  <div class="field span-2">
+                    <label class="field-label" for="dsh-key">API Key</label>
+                    <div class="key-row">
+                      <input id="dsh-key" v-model="form.dshApiKey" :type="showDshKey ? 'text' : 'password'" placeholder="sk-..." @focus="revealDshKey" />
+                      <button class="mini" type="button" @click="showDshKey = !showDshKey">{{ showDshKey ? '隐藏' : '显示' }}</button>
+                    </div>
+                  </div>
+                </div>
+                <p class="field-hint">dsh 路由名固定为 deepseek-official，模型 id 原样透传给网关，填服务商 / 自建服务实际使用的模型名。</p>
+              </div>
+            </div>
+
+            <div class="sgroup">
+              <div class="field">
+                <div class="field-label-row">
+                  <label class="field-label" for="dsh-prompt">系统提示词</label>
+                  <span class="inline-val">{{ form.dshSystemPrompt.length }} 字</span>
+                </div>
+                <textarea id="dsh-prompt" v-model="form.dshSystemPrompt" rows="10" class="mono persona"
+                  placeholder="留空则使用内置默认 dsh 提示词"></textarea>
+                <p class="field-hint">支持 {shell_guidance} 变量，会在运行平台展开为 pwsh / bash 指引。</p>
+              </div>
+            </div>
+
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">输出</h3>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <label class="field-label">最大输出 tokens</label>
+                  <div class="stepper">
+                    <button type="button" class="step-btn" @click="step('dshMaxTokens', -1024, 1, DSH_MAX_TOKENS_LIMIT)" :disabled="form.dshMaxTokens <= 1"><AppIcon name="minus" :size="14" /></button>
+                    <input type="number" v-model.number="form.dshMaxTokens" min="1" :max="DSH_MAX_TOKENS_LIMIT" class="step-input"
+                      @blur="clamp('dshMaxTokens', 1, DSH_MAX_TOKENS_LIMIT, DSH_MAX_TOKENS_LIMIT)" />
+                    <button type="button" class="step-btn" @click="step('dshMaxTokens', 1024, 1, DSH_MAX_TOKENS_LIMIT)" :disabled="form.dshMaxTokens >= DSH_MAX_TOKENS_LIMIT"><AppIcon name="plus" :size="14" /></button>
+                  </div>
+                  <p class="field-hint">范围 1~131072，默认 131072（DashScope qwen 系只接受该区间）。</p>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="dsh-reasoning">推理强度（reasoningEffort）</label>
+                  <select id="dsh-reasoning" v-model="form.dshReasoningEffort">
+                    <option v-for="o in dshReasoningEffortOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  </select>
+                  <p class="field-hint">仅 dsh 适配器识别（deepseek-official），与主 Agent 的「额外参数」互不影响。</p>
+                </div>
+              </div>
+              <div class="actions">
+                <button class="btn" type="button" @click="resetDshPrompt">恢复默认提示词</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 知识库（RAG） -->
+        <section v-show="activeSection === 'rag'" class="panel" aria-labelledby="sec-rag">
+          <header class="panel-head">
+            <span class="panel-icon"><AppIcon name="database" :size="16" /></span>
+            <div class="panel-head-text">
+              <h2 id="sec-rag" class="panel-title">知识库（RAG）</h2>
+              <p class="panel-sub">入库行为、检索参数与向量模型</p>
+            </div>
+          </header>
+          <div class="panel-body">
+            <div class="sgroup">
+              <div class="switch-row">
+                <div class="switch-text">
+                  <div class="switch-title">聊天上传文件自动入库</div>
+                  <p class="switch-desc">开启后，普通对话中上传的文件将异步自动 Embedding 到默认知识库。</p>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.ragAutoEmbedding" aria-label="聊天上传文件自动入库" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+              <div class="switch-row">
+                <div class="switch-text">
+                  <div class="switch-title">混合检索（向量 + 关键词）</div>
+                  <p class="switch-desc">向量语义召回 + BM25 关键词召回，再用 RRF 融合；对编号、专有名词、代码标识符更稳。关闭后回到纯向量 top-k。</p>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.ragHybrid" aria-label="混合检索" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">分块与召回</h3>
+              </div>
+              <div class="rag-retrieval-row">
+                <label class="rag-num">
+                  分块大小
+                  <input type="number" v-model.number="form.ragChunkSize" min="100" max="8000" step="100" />
+                </label>
+                <label class="rag-num">
+                  重叠
+                  <input type="number" v-model.number="form.ragChunkOverlap" min="0" max="4000" step="50" />
+                </label>
+                <label class="rag-num">
+                  候选倍数
+                  <input type="number" v-model.number="form.ragCandidateMultiplier" min="1" max="10" step="1" />
+                </label>
+              </div>
+              <p class="field-hint">分块大小 / 重叠单位为字符；候选倍数用于混合检索（实际召回数 = k × 倍数）。修改分块参数后需重建索引才会应用到已有文档。</p>
+            </div>
+
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">索引健康</h3>
+                <p class="sgroup-desc">向量维度、分块数与失败原因</p>
+              </div>
+              <div class="rag-health" :class="{ bad: ragHealth && !ragHealth.dimensionMatch && !ragHealth.empty }">
+                <div class="rag-health-grid">
+                  <span class="rh-item"><span class="rh-label">模型</span>{{ ragHealth?.embeddingModel?.model || '—' }}</span>
+                  <span class="rh-item">
+                    <span class="rh-label">维度</span>
+                    {{ ragHealth ? `${ragHealth.embeddingDim ?? '—'} / 集合 ${ragHealth.collectionDim ?? '—'}` : '检测中…' }}
+                  </span>
+                  <span class="rh-item">
+                    <span class="rh-label">分块 / 文档</span>
+                    {{ ragHealth ? `${ragHealth.count ?? '—'} / ${ragHealth.documentCount ?? '—'}` : '—' }}
+                  </span>
+                </div>
+                <div v-if="ragHealth && ragHealth.embeddingDim && ragHealth.collectionDim && !ragHealth.dimensionMatch && !ragHealth.empty" class="rag-warn">
+                  <AppIcon name="alert" :size="13" />
+                  <span>当前模型输出 {{ ragHealth.embeddingDim }} 维，索引是 {{ ragHealth.collectionDim }} 维；向量召回会降级为关键词。请重建索引，或切回建库时的模型。</span>
+                </div>
+                <div v-if="ragHealth?.embeddingError" class="rag-warn">
+                  <AppIcon name="alert" :size="13" />
+                  <span :title="ragHealth.embeddingError">Embedding 模型调用失败：{{ shortError(ragHealth.embeddingError, 140) }}。请检查模型地址 / API Key，或先修复模型再重建索引。</span>
+                </div>
+                <div v-if="ragHealth?.missingFileCount" class="rag-warn">
+                  <AppIcon name="alert" :size="13" />
+                  <span>{{ ragHealth.missingFileCount }} 篇文档的原始文件已缺失，重建后这些文档会标记为失败。</span>
+                </div>
+                <div class="rag-health-actions">
+                  <button class="mini" type="button" @click="loadRagHealth" :disabled="ragHealthLoading">刷新状态</button>
+                  <button class="mini danger" type="button" @click="startRagRebuild" :disabled="ragRebuild.running || ragHealthLoading || !!ragHealth?.embeddingError" :title="ragHealth?.embeddingError ? '请先修复 Embedding 模型' : ''">
+                    {{ ragRebuild.running ? '重建中…' : '重建全部索引' }}
+                  </button>
+                  <span class="rag-health-tip">重建会清空现有向量，并按原始文件重新 OCR / 分块 / embedding</span>
+                </div>
+                <div v-if="ragRebuild.running" class="rag-progress">
+                  <div class="rag-progress-bar"><span :style="{ width: ragRebuildPercent + '%' }"></span></div>
+                  <div class="rag-progress-text">
+                    {{ ragRebuild.done }} / {{ ragRebuild.total }} · {{ ragRebuild.current || '准备中' }}
+                  </div>
+                </div>
+                <div v-else-if="ragRebuild.finishedAt" class="rag-progress-text">
+                  上次重建：{{ ragRebuild.failed ? `${ragRebuild.failed} 篇失败` : '全部成功' }}
+                  （{{ ragRebuild.done }} / {{ ragRebuild.total }}）
+                </div>
+              </div>
+            </div>
+
+            <div class="sgroup">
+              <div class="sgroup-head">
+                <h3 class="sgroup-title">向量模型</h3>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <label class="field-label" for="rag-embed-type">Embedding 模型来源</label>
+                  <select id="rag-embed-type" v-model="form.ragEmbedType" @change="onEmbedTypeChange">
+                    <option value="local">本地模型（Local）</option>
+                    <option value="remote">远程 API（OpenAI-Compatible）</option>
+                  </select>
+                  <p class="field-hint">本地模式无需 Base URL / API Key，首次使用时自动下载模型。</p>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="rag-embed-model">Embedding 模型名称</label>
+                  <input id="rag-embed-model" v-model="form.ragEmbedModel" :placeholder="form.ragEmbedType === 'local' ? '由智能下载自动确定' : 'text-embedding-3-small'"
+                    :disabled="form.ragEmbedType === 'local'" @change="onEmbedModelChange" />
+                  <p class="field-hint">本地模式按显卡自动确定（N 卡 ≥4G 显存用 bge-large，否则 bge-small）；远程模式填服务商模型名。</p>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="rag-base-url">Base URL</label>
+                  <input id="rag-base-url" v-model="form.ragEmbedBaseUrl" placeholder="https://api.openai.com/v1" :disabled="form.ragEmbedType !== 'remote'" />
+                </div>
+                <div class="field">
+                  <label class="field-label" for="rag-api-key">API Key</label>
+                  <div class="key-row">
+                    <input id="rag-api-key" v-model="form.ragEmbedApiKey" :type="showRagKey ? 'text' : 'password'" placeholder="sk-..." :disabled="form.ragEmbedType !== 'remote'" />
+                    <button class="mini" type="button" @click="showRagKey = !showRagKey">{{ showRagKey ? '隐藏' : '显示' }}</button>
+                  </div>
+                  <p class="field-hint">仅远程模式需要。</p>
+                </div>
+                <div class="field span-2">
+                  <label class="field-label" for="rag-ocr">知识库文档解析引擎（OCR）</label>
+                  <select id="rag-ocr" v-model="form.ragOcrEngine">
+                    <option value="docling">Docling（更精细，支持图片识别）</option>
+                    <option value="markitdown">MarkItDown（快速）</option>
+                  </select>
+                  <p class="field-hint">知识库维护上传时解析文档所使用的引擎，默认 Docling。</p>
+                </div>
+              </div>
+
+              <div v-if="form.ragEmbedType === 'local' && !form.ragLocalDownloaded" id="rag-model" class="download-box">
+                <div class="download-text">
+                  <div class="switch-title">本地模型下载</div>
+                  <p class="field-hint">自动检测网络（不可直连时走 hf-mirror 镜像）与显卡（N 卡 ≥4G 显存下载 bge-large，否则 bge-small），模型较大请耐心等待。</p>
+                </div>
+                <div class="actions">
+                  <button class="btn primary" type="button" @click="downloadModel" :disabled="downloading">
+                    <span v-if="downloading" class="btn-spinner"></span>
+                    <span v-else class="btn-label"><AppIcon name="download" :size="14" />下载模型</span>
+                    <span v-if="downloading">下载中…</span>
+                  </button>
+                  <span v-if="downloadResult" :class="downloadResult.ok ? 'ok' : 'bad-text'" class="field-hint">{{ downloadResult.text }}</span>
+                </div>
+              </div>
+              <div v-else-if="form.ragEmbedType === 'local'" id="rag-model" class="download-box">
+                <div class="download-text">
+                  <div class="switch-title">本地模型状态</div>
+                  <p class="field-hint">模型已下载{{ form.ragEmbedModel ? `：${form.ragEmbedModel}` : '' }}，可直接用于入库与检索。</p>
+                </div>
+                <div class="actions">
+                  <span class="ok"><AppIcon name="check" :size="13" />已就绪</span>
+                  <button class="mini" type="button" @click="redownloadModel" :disabled="downloading" title="清除已下载状态并重新下载">重新下载</button>
+                  <span v-if="downloadResult" :class="downloadResult.ok ? 'ok' : 'bad-text'" class="field-hint">{{ downloadResult.text }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 工作区 -->
+        <section v-show="activeSection === 'workspace'" class="panel" aria-labelledby="sec-workspace">
+          <header class="panel-head">
+            <span class="panel-icon"><AppIcon name="folder" :size="16" /></span>
+            <div class="panel-head-text">
+              <h2 id="sec-workspace" class="panel-title">工作区</h2>
+              <p class="panel-sub">Agent 读写文件、执行命令的根目录</p>
+            </div>
+          </header>
+          <div class="panel-body">
+            <div class="sgroup">
+              <div class="field">
+                <label class="field-label" for="workspace-path">当前工作区</label>
+                <div class="workspace-row">
+                  <input id="workspace-path" :value="workspaceDisplay" readonly class="mono workspace-path" />
+                  <button class="btn" type="button" @click="pickWorkspace">
+                    <AppIcon name="folder" :size="14" />选择目录
+                  </button>
+                  <button class="btn" type="button" @click="resetWorkspace" :disabled="!form.workspace">恢复默认</button>
+                </div>
+                <p class="field-hint">
+                  文件工具（ls / read_file / write_file / edit_file / glob / grep）与 shell 都以此目录为根，相对路径相对它解析；留空则使用应用内部 runtime 目录。
+                </p>
+                <p class="field-hint">
+                  技能库与任务清单始终留在应用数据目录，不受工作区影响；正在生成的那一轮仍使用旧工作区，下一条消息起生效。
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 数据与备份 -->
+        <section v-show="activeSection === 'backup'" class="panel" aria-labelledby="sec-backup">
+          <header class="panel-head">
+            <span class="panel-icon"><AppIcon name="package" :size="16" /></span>
+            <div class="panel-head-text">
+              <h2 id="sec-backup" class="panel-title">数据与备份</h2>
+              <p class="panel-sub">导出配置、对话与向量库，方便换机迁移</p>
+            </div>
+          </header>
+          <div class="panel-body">
+            <div class="sgroup">
+              <div class="field">
+                <label class="field-label">导出备份</label>
+                <div class="actions">
+                  <button class="btn primary" type="button" :disabled="backupBusy" @click="exportBackupAction">
+                    <span v-if="backupBusy" class="btn-spinner"></span>
+                    {{ backupBusy ? '正在导出…' : '选择目录并导出' }}
+                  </button>
+                  <span class="field-hint">会生成独立的 sassy-cat-backup-日期-时间 目录</span>
+                </div>
+                <ul class="backup-list">
+                  <li><span class="bl-key">包含</span>config.user.json、messages.sqlite（一致性快照）、Chroma 向量库、上传文件、MCP 服务器配置与技能库</li>
+                  <li><span class="bl-key">不含</span>体积通常很大的 checkpoints.sqlite（Agent 现场）</li>
+                  <li><span class="bl-key">注意</span>备份内含 API Key 等敏感配置，请妥善保管</li>
+                  <li><span class="bl-key">迁移</span>退出优墨后，把备份目录内容覆盖到新机器的 userData 目录（Windows 默认 %APPDATA%\sassy-cat）</li>
+                </ul>
+                <div v-if="backupError" class="bad-text backup-result">{{ backupError }}</div>
+                <div v-if="backupResult" class="backup-result">
+                  <span class="ok">
+                    <AppIcon name="check" :size="13" />
+                    已导出 {{ backupResult.items?.length || 0 }} 项 · {{ formatBytes(backupResult.totalSize) }}
+                  </span>
+                  <code class="backup-path" :title="backupResult.path">{{ backupResult.path }}</code>
+                  <button class="mini" type="button" @click="openBackupFolder">打开文件夹</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 闲置提醒 -->
+        <section v-show="activeSection === 'idle'" class="panel" aria-labelledby="sec-idle">
+          <header class="panel-head">
+            <span class="panel-icon"><AppIcon name="clock" :size="16" /></span>
+            <div class="panel-head-text">
+              <h2 id="sec-idle" class="panel-title">闲置提醒</h2>
+              <p class="panel-sub">久未互动时让本喵叫你一声</p>
+            </div>
+          </header>
+          <div class="panel-body">
+            <div class="sgroup">
+              <div class="switch-row no-line">
+                <div class="switch-text">
+                  <div class="switch-title">启用闲置提醒</div>
+                  <p class="switch-desc">长时间没有互动时，桌宠会主动冒个泡；关闭后不再打扰。</p>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.idleEnabled" aria-label="启用闲置提醒" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <label class="field-label" for="idle-threshold">闲置阈值（分钟）</label>
+                  <input id="idle-threshold" type="number" v-model.number="form.idleThreshold" min="1" :disabled="!form.idleEnabled" />
+                </div>
+                <div class="field">
+                  <label class="field-label" for="idle-quiet">提醒冷却（分钟）</label>
+                  <input id="idle-quiet" type="number" v-model.number="form.idleQuiet" min="1" :disabled="!form.idleEnabled" />
+                  <p class="field-hint">两次提醒之间至少间隔这么久，避免连续打扰。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 提醒事项 -->
+        <section v-show="activeSection === 'reminder'" class="panel" aria-labelledby="sec-reminder">
+          <header class="panel-head">
+            <span class="panel-icon"><AppIcon name="bell" :size="16" /></span>
+            <div class="panel-head-text">
+              <h2 id="sec-reminder" class="panel-title">提醒事项</h2>
+              <p class="panel-sub">检查频率与气泡停留时长</p>
+            </div>
+          </header>
+          <div class="panel-body">
+            <div class="sgroup">
+              <div class="field-grid">
+                <div class="field">
+                  <label class="field-label">检查间隔（秒）</label>
+                  <div class="stepper">
+                    <button type="button" class="step-btn" @click="step('reminderPoll', -1, 3, 30)" :disabled="form.reminderPoll <= 3"><AppIcon name="minus" :size="14" /></button>
+                    <input type="number" v-model.number="form.reminderPoll" min="3" max="30" class="step-input"
+                      @blur="clamp('reminderPoll', 3, 30, 5)" />
+                    <button type="button" class="step-btn" @click="step('reminderPoll', 1, 3, 30)" :disabled="form.reminderPoll >= 30"><AppIcon name="plus" :size="14" /></button>
+                  </div>
+                  <p class="field-hint">范围 3~30 秒，默认 5 秒；越小触发越及时。</p>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="reminder-duration">气泡显示时长（秒）</label>
+                  <select id="reminder-duration" v-model.number="form.reminderDuration">
+                    <option v-for="d in reminderDurationOptions" :key="d" :value="d">{{ d }} 秒</option>
+                  </select>
+                  <p class="field-hint">提醒弹出时桌宠气泡的停留时长，默认 8 秒。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 网络代理 -->
+        <section v-show="activeSection === 'proxy'" class="panel" aria-labelledby="sec-proxy">
+          <header class="panel-head">
+            <span class="panel-icon"><AppIcon name="globe" :size="16" /></span>
+            <div class="panel-head-text">
+              <h2 id="sec-proxy" class="panel-title">网络代理</h2>
+              <p class="panel-sub">HTTP / HTTPS 代理与直连白名单</p>
+            </div>
+          </header>
+          <div class="panel-body">
+            <div class="sgroup">
+              <div class="switch-row no-line">
+                <div class="switch-text">
+                  <div class="switch-title">启用 HTTP / HTTPS 代理</div>
+                  <p class="switch-desc">保存后 Electron 立即生效；Python Agent 需在启用 / 停用后点击顶部「重启服务进程」以刷新代理环境变量。</p>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.proxyEnabled" aria-label="启用 HTTP / HTTPS 代理" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <label class="field-label" for="proxy-http">HTTP 代理</label>
+                  <input id="proxy-http" v-model="form.proxyHttp" placeholder="http://127.0.0.1:7890" :disabled="!form.proxyEnabled" />
+                  <p class="field-hint">支持 http:// 或 socks5:// 前缀。</p>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="proxy-https">HTTPS 代理</label>
+                  <input id="proxy-https" v-model="form.proxyHttps" placeholder="留空则与 HTTP 代理相同" :disabled="!form.proxyEnabled" />
+                </div>
+                <div class="field span-2">
+                  <label class="field-label" for="proxy-no">绕过代理（NO_PROXY）</label>
+                  <input id="proxy-no" v-model="form.proxyNoProxy" placeholder="localhost,127.0.0.1,*.example.com" :disabled="!form.proxyEnabled" />
+                  <p class="field-hint">逗号分隔的主机名单，命中这些地址的请求不走代理。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
-      <div class="card-body form">
-        <div class="field">
-          <label class="check"><input type="checkbox" v-model="form.petEnabled" /> 启用桌宠</label>
-          <span class="hint">桌宠不可见时（关闭或右键临时隐藏），提醒事项与闲置提醒将以系统通知呈现，不再使用桌宠气泡</span>
-        </div>
-        <div class="field">
-          <label>快速提问快捷键（全局生效，唤起桌宠输入框）</label>
-          <div class="hotkey-row">
-            <div
-              class="hotkey-box" :class="{ recording: recordingKey, bad: hotkeyError }"
-              tabindex="0" title="点击后按下组合键进行录制"
-              @click="startRecord" @blur="stopRecord"
-              @keydown.prevent="onRecordKeydown"
-            >{{ hotkeyDisplay }}</div>
-            <button v-if="form.quickAskShortcut" class="mini" @click="form.quickAskShortcut = ''">禁用</button>
-          </div>
-          <span class="hint" :class="{ bad: hotkeyError }">
-            {{ hotkeyError || (recordingKey ? '请按下组合键（需包含 Ctrl / Alt / Shift / Win），Esc 取消' : '例如 Alt+Shift+Q；留空表示禁用') }}
-          </span>
-          <span v-if="hotkeyStatus" :class="hotkeyStatus.ok ? 'ok' : 'bad-text'">{{ hotkeyStatus.text }}</span>
-        </div>
-        <div class="field">
-          <label>桌宠大小与透明度</label>
-          <div class="pet-style-row">
-            <label class="pet-range">
-              大小
-              <input type="range" v-model.number="form.petSize" min="0.75" max="1.3" step="0.05" />
-              <span class="pet-range-val">{{ Number(form.petSize).toFixed(2) }}×</span>
-            </label>
-            <label class="pet-range">
-              透明度
-              <input type="range" v-model.number="form.petOpacity" min="0.35" max="1" step="0.05" />
-              <span class="pet-range-val">{{ Math.round(Number(form.petOpacity) * 100) }}%</span>
-            </label>
-          </div>
-          <span class="hint">保存后桌宠即时缩放 / 变透明，不影响气泡与主窗口</span>
-        </div>
-        <div class="field">
-          <label class="check"><input type="checkbox" v-model="form.dndEnabled" /> 勿扰时段</label>
-          <div v-if="form.dndEnabled" class="pet-style-row">
-            <label class="rag-num">开始 <input type="time" v-model="form.dndStart" /></label>
-            <label class="rag-num">结束 <input type="time" v-model="form.dndEnd" /></label>
-          </div>
-          <span class="hint">勿扰时段内不弹提醒气泡与系统通知；支持跨午夜（如 22:00 → 08:00）</span>
-        </div>
-      </div>
-    </section>
     </div>
 
-    <div v-if="toast" class="toast">{{ toast }}</div>
+    <div v-if="toast" class="toast" role="status">{{ toast }}</div>
 
     <!-- 新增 LLM 配置档弹窗 -->
     <div v-if="showAddProfile" class="modal-overlay" @click.self="showAddProfile = false">
-      <div class="modal">
-        <h3>新增 LLM 配置档</h3>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="add-profile-title">
+        <h3 id="add-profile-title">新增 LLM 配置档</h3>
         <div class="field">
-          <label>配置档名称</label>
-          <input v-model="newProfileName" placeholder="例如 work、personal" @keydown.enter="addProfile" ref="profileNameInput" />
-          <span class="hint" :class="{ bad: newProfileError }">{{ newProfileError || '仅允许字母、数字、下划线和短横线' }}</span>
+          <label class="field-label" for="new-profile-name">配置档名称</label>
+          <input id="new-profile-name" v-model="newProfileName" placeholder="例如 work、personal" @keydown.enter="addProfile" ref="profileNameInput" />
+          <p class="field-hint" :class="{ bad: newProfileError }">{{ newProfileError || '仅允许字母、数字、下划线和短横线' }}</p>
         </div>
         <div class="modal-actions">
-          <button class="btn" @click="showAddProfile = false">取消</button>
-          <button class="btn primary" @click="addProfile">确定</button>
+          <button class="btn" type="button" @click="showAddProfile = false">取消</button>
+          <button class="btn primary" type="button" @click="addProfile">确定</button>
         </div>
       </div>
     </div>
 
     <!-- 新增 Agent 配置档弹窗 -->
     <div v-if="showAddAgentProfile" class="modal-overlay" @click.self="showAddAgentProfile = false">
-      <div class="modal">
-        <h3>新增 Agent 配置档</h3>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="add-agent-title">
+        <h3 id="add-agent-title">新增 Agent 配置档</h3>
         <div class="field">
-          <label>配置档名称</label>
-          <input v-model="newAgentProfileName" placeholder="例如 work、personal" @keydown.enter="addAgentProfile" ref="agentProfileNameInput" />
-          <span class="hint" :class="{ bad: newAgentProfileError }">{{ newAgentProfileError || '仅允许字母、数字、下划线和短横线' }}</span>
+          <label class="field-label" for="new-agent-name">配置档名称</label>
+          <input id="new-agent-name" v-model="newAgentProfileName" placeholder="例如 work、personal" @keydown.enter="addAgentProfile" ref="agentProfileNameInput" />
+          <p class="field-hint" :class="{ bad: newAgentProfileError }">{{ newAgentProfileError || '仅允许字母、数字、下划线和短横线' }}</p>
         </div>
         <div class="modal-actions">
-          <button class="btn" @click="showAddAgentProfile = false">取消</button>
-          <button class="btn primary" @click="addAgentProfile">确定</button>
+          <button class="btn" type="button" @click="showAddAgentProfile = false">取消</button>
+          <button class="btn primary" type="button" @click="addAgentProfile">确定</button>
         </div>
       </div>
     </div>
 
     <!-- 切换 Embedding 模型确认弹窗 -->
     <div v-if="showEmbedConfirm" class="modal-overlay" @click.self="cancelEmbedChange">
-      <div class="modal">
-        <h3>确认切换 Embedding 模型？</h3>
-        <p class="hint" style="line-height: 1.6; margin: 0 0 8px;">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="embed-confirm-title">
+        <h3 id="embed-confirm-title">确认切换 Embedding 模型？</h3>
+        <p class="field-hint modal-copy">
           切换后，知识库中所有已入库文档的向量数据将不再匹配，需要重新 Embedding 才能继续使用。
           <br />
           是否确认切换？
         </p>
         <div class="modal-actions">
-          <button class="btn" @click="cancelEmbedChange">取消</button>
-          <button class="btn primary" @click="confirmEmbedChange">确认切换</button>
+          <button class="btn" type="button" @click="cancelEmbedChange">取消</button>
+          <button class="btn primary" type="button" @click="confirmEmbedChange">确认切换</button>
         </div>
       </div>
     </div>
@@ -826,6 +1114,62 @@ const themeOptions = [
   { value: 'system', label: '跟随系统', icon: 'monitor' },
 ]
 const route = useRoute()
+
+// 分类导航：左侧分类 + 右侧单面板。整页原本是 12 张卡片纵向堆叠，
+// 模型连接一张就有 20+ 字段，改成「一次只看一组」，面板内部再分组/折叠。
+const pageEl = ref(null)
+const activeSection = ref('theme')
+const navGroups = [
+  {
+    title: '常规',
+    items: [
+      { id: 'theme', label: '外观主题', icon: 'sun' },
+      { id: 'pet', label: '桌宠', icon: 'bot' },
+      { id: 'voice', label: '语音朗读', icon: 'volume' },
+    ],
+  },
+  {
+    title: '模型与 Agent',
+    items: [
+      { id: 'llm', label: '模型连接', icon: 'plug' },
+      { id: 'agent', label: 'Agent 配置', icon: 'brain' },
+      { id: 'dsh', label: 'dsh 子代理', icon: 'layers' },
+    ],
+  },
+  {
+    title: '知识与数据',
+    items: [
+      { id: 'rag', label: '知识库', icon: 'database' },
+      { id: 'workspace', label: '工作区', icon: 'folder' },
+      { id: 'backup', label: '数据与备份', icon: 'package' },
+    ],
+  },
+  {
+    title: '提醒与系统',
+    items: [
+      { id: 'idle', label: '闲置提醒', icon: 'clock' },
+      { id: 'reminder', label: '提醒事项', icon: 'bell' },
+      { id: 'proxy', label: '网络代理', icon: 'globe' },
+    ],
+  },
+]
+
+function selectSection(id) {
+  activeSection.value = id
+  // 切换分类时回到页面顶部，否则会停在上一组滚动到一半的位置
+  pageEl.value?.closest('.content')?.scrollTo({ top: 0 })
+}
+
+// 「前往下载模型」深链：面板是 v-show 隐藏的，必须先激活知识库再滚动定位
+function revealRagModel() {
+  activeSection.value = 'rag'
+  nextTick(() => {
+    setTimeout(() => {
+      document.getElementById('rag-model')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 300)
+  })
+}
+
 // 语音朗读（TTS）：中文语音枚举、试听、配置刷新
 const { getZhVoices, testVoice, loadConfig: loadTtsConfig, ttsState, speaking } = useTTS()
 
@@ -1561,8 +1905,13 @@ async function saveAll() {
   if (!String(form.dshApiKey).startsWith('***')) {
     patches.push({ path: 'dsh.llm.apiKey', value: form.dshApiKey.trim() })
   }
-  const res = await api.setConfigMany(patches)
-  if (!res.success) return showToast('保存失败: ' + (res.message || ''))
+  let res
+  try {
+    res = await api.setConfigMany(patches)
+  } catch (e) {
+    return showToast('保存失败: ' + ((e && e.message) || e))
+  }
+  if (!res || !res.success) return showToast('保存失败: ' + ((res && res.message) || '未知错误'))
   keyRevealed.value = false
   // 通知 Python 热重建 agent（同时让 agent.ocrEngine / rag 配置热重载）
   send('config.invalidate', { paths: ['llm', 'agent', 'rag', 'dsh'] })
@@ -1741,14 +2090,8 @@ onMounted(() => {
   loadConfig()
   loadRagHealth()
   connect()
-  // 知识库页「前往下载模型」跳转过来时，滚动定位到模型下载区域
-  if (route.hash === '#rag-model') {
-    nextTick(() => {
-      setTimeout(() => {
-        document.getElementById('rag-model')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      }, 300)
-    })
-  }
+  // 知识库页「前往下载模型」跳转过来时，切到知识库面板并滚动到模型下载区域
+  if (route.hash === '#rag-model') revealRagModel()
   on('prompt.preview.result', (p) => { preview.value = p.prompt })
   // 快捷键注册结果：主进程注册/重注册后经 shortcut-status 广播
   api.onShortcutStatus?.((p) => {
@@ -1766,49 +2109,54 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopRagPoll()
 })
+
+// 已停留在设置页时再次点「前往下载模型」不会重挂载组件，hash 变化单独监听
+watch(() => route.hash, (hash) => {
+  if (hash === '#rag-model') revealRagModel()
+})
 </script>
 
 <style scoped>
+/* =========================================================
+   设置页 · 分栏导航 + 单面板
+   左侧分类导航（常规 / 模型与 Agent / 知识与数据 / 提醒与系统），
+   右侧只渲染当前面板，长表单靠「分组 + 双列 + 折叠」收敛。
+   所有颜色都走 token / color-mix，浅色主题自动适配。
+   ========================================================= */
+
 .settings-page {
-  max-width: 1200px;
+  --pad-x: 32px;
+  --pad-top: 26px;
+  max-width: 1180px;
   margin: 0 auto;
+  padding-bottom: 4px;
   animation: fadeUp var(--dur-slow) var(--ease-out) backwards;
 }
 
-.settings-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 16px;
-}
-@media (min-width: 1080px) {
-  .settings-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-/* 内容较长的卡片（主题/模型/Agent/备份等）显式占满整行，不依赖 nth-child 位置 */
-.settings-grid .card.wide {
-  grid-column: 1 / -1;
-}
-/* ===== 页头 ===== */
-/* 设置页很长：页头（含保存 / 重启）吸顶，滚到任何位置都能一键保存。
-   半透明 + 模糊，避免破坏整页的「墨面」质感 */
-.page-header {
-  position: sticky;
-  top: -26px;
-  z-index: 20;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 20px;
-  flex-wrap: wrap;
-  margin: 0 -32px 22px;
-  padding: 20px 32px 16px;
-  background: rgba(9, 12, 17, 0.82);
-  backdrop-filter: blur(14px);
-  border-bottom: 1px solid var(--line-1);
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
 }
 
-.page-head-main {
+/* ===== 顶部：标题 + 全局保存 ===== */
+.settings-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin: 0 calc(-1 * var(--pad-x)) 0;
+  padding: 13px var(--pad-x) 13px;
+  background: color-mix(in srgb, var(--ink-950) 84%, transparent);
+  border-bottom: 1px solid var(--line-1);
+  backdrop-filter: blur(18px) saturate(130%);
+  -webkit-backdrop-filter: blur(18px) saturate(130%);
+}
+
+.topbar-head {
   min-width: 0;
 }
 
@@ -1818,23 +2166,29 @@ onBeforeUnmount(() => {
   gap: 6px;
   font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.18em;
   color: var(--amber-500);
-  margin-bottom: 8px;
+}
+
+.topbar-line {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 2px;
 }
 
 .page-title {
-  font-size: 26px;
+  font-size: 24px;
   font-weight: 700;
   letter-spacing: -0.02em;
+  line-height: 1.2;
   color: var(--text-1);
-  line-height: 1.25;
 }
 
-.page-subtitle {
-  margin-top: 7px;
-  font-size: 13px;
-  color: var(--text-3);
+.topbar-note {
+  font-size: 11.5px;
+  color: var(--text-4);
+  white-space: nowrap;
 }
 
 .global-actions {
@@ -1862,8 +2216,7 @@ onBeforeUnmount(() => {
   cursor: pointer;
   white-space: nowrap;
   transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast),
-    color var(--dur-fast), transform var(--dur-fast), box-shadow var(--dur-fast),
-    filter var(--dur-fast);
+    color var(--dur-fast), transform var(--dur-fast), box-shadow var(--dur-fast), filter var(--dur-fast);
 }
 
 .btn:hover:not(:disabled) {
@@ -1881,801 +2234,80 @@ onBeforeUnmount(() => {
 }
 
 .btn.primary {
+  color: var(--amber-ink);
   background: var(--amber-grad);
   border-color: transparent;
-  color: var(--amber-ink);
   font-weight: 650;
   box-shadow: var(--shadow-1), inset 0 1px 0 color-mix(in srgb, var(--amber-100) 30%, transparent);
 }
 
 .btn.primary:hover:not(:disabled) {
-  background: var(--amber-grad);
   filter: brightness(1.06);
-  box-shadow: var(--shadow-amber), inset 0 1px 0 color-mix(in srgb, var(--amber-100) 34%, transparent);
+  box-shadow: var(--shadow-amber), inset 0 1px 0 color-mix(in srgb, var(--amber-100) 32%, transparent);
 }
 
 .btn.warn {
-  background: var(--coral-a12);
-  border-color: color-mix(in srgb, var(--coral-400) 32%, transparent);
-  color: var(--coral-400);
+  color: var(--warn-400);
+  background: color-mix(in srgb, var(--warn-400) 8%, transparent);
+  border-color: color-mix(in srgb, var(--warn-400) 28%, transparent);
 }
 
 .btn.warn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--coral-400) 18%, transparent);
-  border-color: color-mix(in srgb, var(--coral-400) 52%, transparent);
+  color: var(--warn-400);
+  background: color-mix(in srgb, var(--warn-400) 14%, transparent);
+  border-color: color-mix(in srgb, var(--warn-400) 44%, transparent);
 }
 
-/* 重启完成：同一颗按钮转为「安静的绿灯」，避免珊瑚色里跳出一枚绿勾 */
 .btn.warn.is-done {
+  color: var(--jade-400);
   background: var(--jade-a12);
   border-color: color-mix(in srgb, var(--jade-400) 32%, transparent);
-  color: var(--jade-400);
-}
-
-.btn-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.btn-check {
-  color: var(--jade-400);
 }
 
 .btn-spinner {
-  width: 13px;
-  height: 13px;
-  flex-shrink: 0;
-  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid color-mix(in srgb, currentColor 30%, transparent);
   border-top-color: currentColor;
   border-radius: 50%;
-  animation: spin 0.75s linear infinite;
+  animation: spin 0.7s linear infinite;
 }
 
-/* ===== 主题选择 ===== */
-.theme-picker {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+.btn-check {
+  color: currentColor;
 }
 
-.theme-option {
-  flex: 1;
-  min-width: 120px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  height: 38px;
-  color: var(--text-3);
-  font-family: inherit;
-  font-size: 12px;
-  background: var(--bg-input);
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
-}
-
-.theme-option:hover {
-  color: var(--text-1);
-  border-color: var(--line-3);
-}
-
-.theme-option.active {
-  color: var(--amber-200);
-  background: var(--amber-a12);
-  border-color: var(--amber-a35);
-}
-
-/* ===== 数据备份 ===== */
-.pet-style-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px 20px;
-}
-
-.pet-range {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-3);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-
-.pet-range input[type='range'] {
-  width: 140px;
-  accent-color: var(--amber-400);
-}
-
-.pet-range-val {
-  min-width: 42px;
-  color: var(--text-2);
-  font-variant-numeric: tabular-nums;
-}
-
-.backup-result {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-  font-size: 11.5px;
-}
-
-.backup-path {
-  max-width: min(100%, 520px);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 3px 7px;
-  color: var(--text-3);
-  font-size: 10.5px;
-  background: rgba(0, 0, 0, 0.22);
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-xs);
-}
-
-/* ===== RAG 索引健康 ===== */
-.rag-retrieval-row {  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-}
-
-.rag-num {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-3);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-
-.rag-num input {
-  width: 86px;
-  height: 32px;
-  padding: 0 8px;
-}
-
-.rag-health {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.025);
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-sm);
-}
-
-.rag-health.bad {
-  border-color: rgba(233, 119, 110, 0.28);
-  background: rgba(233, 119, 110, 0.045);
-}
-
-.rag-health-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 18px;
-}
-
-.rh-item {
-  color: var(--text-2);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.rh-label {
-  margin-right: 5px;
-  color: var(--text-4);
-  font-size: 10.5px;
-}
-
-.rag-warn {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  color: var(--coral-400);
-  font-size: 11.5px;
-  line-height: 1.55;
-}
-
-.rag-warn :deep(svg) {
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
-.rag-health-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.rag-health-tip {
-  color: var(--text-4);
-  font-size: 10.5px;
-}
-
-.rag-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.rag-progress-bar {
-  height: 5px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 999px;
-}
-
-.rag-progress-bar span {
-  display: block;
-  height: 100%;
-  background: var(--amber-grad);
-  border-radius: inherit;
-  transition: width 0.3s ease;
-}
-
-.rag-progress-text {
-  color: var(--text-4);
-  font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
-}
-
-/* ===== 卡片 ===== */
-.card {  position: relative;
-  background: linear-gradient(180deg, var(--ink-850), var(--ink-800));
-  border: 1px solid var(--line-1);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-1), var(--hairline);
-  overflow: hidden;
-}
-
-.card-header {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--line-1);
-}
-
-.card-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-  border-radius: var(--r-sm);
-  color: var(--amber-300);
-  background: var(--amber-a08);
-  border: 1px solid var(--amber-a20);
-}
-
-.card-head-main {
-  min-width: 0;
-}
-
-.card-title {
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--text-1);
-}
-
-.card-sub {
-  margin-top: 1px;
-  font-size: 11.5px;
-  color: var(--text-4);
-}
-
-.card-body {
-  padding: 20px;
-}
-
-/* ===== 字段节奏：统一 20px 分组间距 ===== */
-.form {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.form .field {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-
-.form.inline {
-  flex-direction: row;
-  align-items: center;
-  gap: 22px;
-  flex-wrap: wrap;
-}
-.interrupt-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 8px 14px;
-  padding: 12px 14px;
-  background: var(--ink-1000);
-  border: 1px solid var(--line-1);
-  border-radius: var(--r-md);
-}
-
-.check {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
-  color: var(--text-2);
-  cursor: pointer;
-  user-select: none;
-}
-
-.form.inline label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
-  color: var(--text-3);
-}
-
-.form.inline label.check {
-  color: var(--text-2);
-}
-
-.form.inline input.num {
-  width: 84px;
-}
-
-label {
-  font-size: 12px;
-  color: var(--text-3);
-}
-
-/* ===== 输入控件：36px 高，深墨底，琥珀焦点环 ===== */
-input:not([type]),
-input[type='text'],
-input[type='password'],
-input[type='number'],
-input[type='search'],
-select,
-textarea {
-  width: 100%;
-  height: 36px;
-  padding: 0 12px;
-  font-family: inherit;
-  font-size: 13px;
-  color: var(--text-1);
-  background: var(--ink-1000);
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-sm);
-  transition: border-color var(--dur-fast), background var(--dur-fast), box-shadow var(--dur-fast);
-}
-
-textarea {
-  height: auto;
-  min-height: 88px;
-  padding: 10px 12px;
-  line-height: 1.6;
-  resize: vertical;
-}
-
-input::placeholder,
-textarea::placeholder {
-  color: var(--text-4);
-}
-
-input:not([type]):hover:not(:disabled),
-input[type='text']:hover:not(:disabled),
-input[type='password']:hover:not(:disabled),
-input[type='number']:hover:not(:disabled),
-input[type='search']:hover:not(:disabled),
-select:hover:not(:disabled),
-textarea:hover:not(:disabled) {
-  border-color: var(--line-3);
-}
-
-input:not([type]):focus,
-input[type='text']:focus,
-input[type='password']:focus,
-input[type='number']:focus,
-input[type='search']:focus,
-select:focus,
-textarea:focus {
-  outline: none;
-  border-color: var(--amber-a55);
-  background-color: var(--ink-900);
-  box-shadow: 0 0 0 3px var(--amber-a12);
-}
-
-input:disabled,
-select:disabled,
-textarea:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* 下拉：去掉原生箭头，改为发丝线三角 */
-select {
-  appearance: none;
-  -webkit-appearance: none;
-  padding-right: 32px;
-  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
-    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
-  background-position: calc(100% - 16px) 15px, calc(100% - 11px) 15px;
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
-  cursor: pointer;
-}
-
-select:disabled {
-  cursor: not-allowed;
-}
-
-select option {
-  background: var(--ink-800);
-  color: var(--text-1);
-}
-
-/* 复选框：琥珀实心块 + 墨色对勾 */
-input[type='checkbox'] {
-  appearance: none;
-  -webkit-appearance: none;
-  position: relative;
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  margin: 0;
-  border: 1px solid var(--line-4);
-  border-radius: 5px;
-  background: var(--ink-1000);
-  cursor: pointer;
-  transition: background var(--dur-fast), border-color var(--dur-fast), box-shadow var(--dur-fast);
-}
-
-input[type='checkbox']:hover:not(:disabled) {
-  border-color: var(--amber-a55);
-}
-
-input[type='checkbox']:checked {
-  background: var(--amber-grad);
-  border-color: transparent;
-}
-
-input[type='checkbox']:checked::after {
-  content: '';
-  position: absolute;
-  left: 5px;
-  top: 1px;
-  width: 4px;
-  height: 8px;
-  border: solid var(--amber-ink);
-  border-width: 0 2px 2px 0;
-  transform: rotate(43deg);
-}
-
-input[type='checkbox']:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-/* 滑杆：轨道与滑块由全局主题提供，这里只控宽度 */
-input[type='range'] {
-  width: 100%;
-}
-
-input[type='range']:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.mono {
-  font-family: var(--font-mono);
-}
-
-.persona {
-  line-height: 1.6;
-}
-
-.num {
-  width: 84px;
-  -moz-appearance: textfield;
-  appearance: textfield;
-}
-
-.num::-webkit-outer-spin-button,
-.num::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-
-/* ===== 步进器 ===== */
-.stepper {
-  display: inline-flex;
-  align-items: stretch;
-  width: fit-content;
-  height: 36px;
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-sm);
-  overflow: hidden;
-  background: var(--ink-1000);
-  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
-}
-
-.stepper:focus-within {
-  border-color: var(--amber-a55);
-  box-shadow: 0 0 0 3px var(--amber-a12);
-}
-
-.stepper .step-input {
-  width: 76px;
-  height: 100%;
-  padding: 0 4px;
-  text-align: center;
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-1);
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  box-shadow: none;
-  -moz-appearance: textfield;
-  appearance: textfield;
-}
-
-.stepper .step-input:focus {
-  outline: none;
-  border: none;
-  background: transparent;
-  box-shadow: none;
-}
-
-.stepper .step-input::-webkit-outer-spin-button,
-.stepper .step-input::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-
-.step-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  transition: background var(--dur-fast), color var(--dur-fast);
-}
-
-.step-btn:first-child {
-  border-right: 1px solid var(--line-1);
-}
-
-.step-btn:last-child {
-  border-left: 1px solid var(--line-1);
-}
-
-.step-btn:hover:not(:disabled) {
-  background: var(--ink-750);
-  color: var(--amber-300);
-}
-
-.step-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-.hotkey-row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.hotkey-box {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 180px;
-  height: 36px;
-  padding: 0 14px;
-  border-radius: var(--r-sm);
-  background: var(--ink-1000);
-  border: 1px solid var(--line-2);
-  color: var(--text-1);
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  letter-spacing: 0.04em;
-  cursor: pointer;
-  user-select: none;
-  text-align: center;
-  transition: border-color var(--dur-fast), color var(--dur-fast), box-shadow var(--dur-fast);
-}
-
-.hotkey-box:hover {
-  border-color: var(--line-3);
-}
-
-.hotkey-box.recording {
-  border-color: var(--amber-a55);
-  color: var(--amber-300);
-  box-shadow: 0 0 0 3px var(--amber-a12);
-  animation: hotkey-pulse 1.4s ease-in-out infinite;
-}
-
-.hotkey-box.bad {
-  border-color: color-mix(in srgb, var(--coral-400) 55%, transparent);
-  color: var(--coral-400);
-}
-
-@keyframes hotkey-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
-}
-
-.key-row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.key-row input {
-  flex: 1;
-  min-width: 0;
-}
-
-/* 工作区：路径占满剩余宽度，按钮与 36px 输入框对齐 */
-.workspace-row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.workspace-row .workspace-path {
-  flex: 1 1 260px;
-  min-width: 0;
-}
-
-.workspace-row .btn {
-  height: 36px;
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .mini {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 36px;
-  padding: 0 12px;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 11.5px;
   font-weight: 500;
   color: var(--text-2);
-  background: var(--ink-750);
+  background: transparent;
   border: 1px solid var(--line-2);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-xs);
   cursor: pointer;
   white-space: nowrap;
   transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast);
 }
 
 .mini:hover:not(:disabled) {
-  background: var(--ink-700);
-  border-color: var(--line-3);
   color: var(--text-1);
+  background: var(--ink-750);
+  border-color: var(--line-3);
 }
 
 .mini:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
-}
-
-.hint {
-  font-size: 11.5px;
-  line-height: 1.65;
-  color: var(--text-4);
-}
-
-.hint.bad {
-  color: var(--coral-400);
-}
-
-/* 语音朗读（TTS）：滑杆与数值样式 */
-.inline-val {
-  margin-left: 6px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--amber-300);
-  font-variant-numeric: tabular-nums;
-}
-/* 语音下拉：压缩宽度（min-width:0 允许 flex 收缩），防止长语音名把「试听」按钮挤出可视区 */
-.profile-row .voice-select { min-width: 0; flex: 1 1 150px; }
-
-/* 试听按钮：播放中「均衡器」动画 */
-.voice-preview-btn { gap: 6px; }
-.eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
-.eq i { width: 3px; border-radius: 1px; background: var(--amber-300); animation: eq-bounce 0.9s ease-in-out infinite; }
-.eq i:nth-child(2) { animation-delay: 0.15s; }
-.eq i:nth-child(3) { animation-delay: 0.3s; }
-@keyframes eq-bounce { 0%, 100% { height: 4px; } 50% { height: 12px; } }
-
-/* ===== 行内操作区 ===== */
-.actions {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  margin-top: 2px;
-  flex-wrap: wrap;
-}
-
-/* 状态提示：胶囊徽章 */
-.ok,
-.bad-text {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 20px;
-  padding: 2px 9px;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.5;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  border-radius: var(--r-full);
-  border: 1px solid transparent;
-}
-
-.ok {
-  color: var(--jade-400);
-  background: var(--jade-a12);
-  border-color: color-mix(in srgb, var(--jade-400) 24%, transparent);
-}
-
-.bad-text {
-  color: var(--coral-400);
-  background: var(--coral-a12);
-  border-color: color-mix(in srgb, var(--coral-400) 24%, transparent);
-}
-
-.preview-box {
-  margin-top: 0;
-  max-height: 320px;
-  padding: 14px;
-  overflow: auto;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--text-2);
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: var(--ink-1000);
-  border: 1px dashed var(--line-3);
-  border-radius: var(--r-md);
-}
-
-.profile-row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.profile-row select {
-  flex: 1 1 160px;
-  min-width: 0;
-}
-
-/* 与同排 36px 的下拉框对齐 */
-.profile-row .btn {
-  height: 36px;
 }
 
 .mini.danger {
@@ -2692,7 +2324,1096 @@ input[type='range']:disabled {
 
 .mini.danger:disabled {
   opacity: 0.35;
+}
+
+/* ===== 两栏：分类导航 + 内容 ===== */
+.settings-shell {
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  gap: 34px;
+  align-items: start;
+  padding-top: 24px;
+}
+
+.settings-nav {
+  position: sticky;
+  top: 82px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
+  padding: 2px 4px 8px 0;
+}
+
+.settings-nav::-webkit-scrollbar {
+  width: 6px;
+}
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-group-title {
+  padding: 0 10px;
+  margin-bottom: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--text-4);
+}
+
+.nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 450;
+  text-align: left;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast), border-color var(--dur-fast);
+}
+
+.nav-item:hover {
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--ink-750) 60%, transparent);
+}
+
+.nav-item.active {
+  color: var(--amber-200);
+  background: var(--amber-a08);
+  border-color: var(--amber-a20);
+  box-shadow: inset 2px 0 0 var(--amber-400);
+}
+
+.nav-icon {
+  color: currentColor;
+  opacity: 0.8;
+}
+
+.nav-item.active .nav-icon {
+  opacity: 1;
+}
+
+.nav-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-note {
+  padding: 2px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-5);
+}
+
+/* ===== 面板 ===== */
+.settings-main {
+  width: 100%;
+  min-width: 0;
+  max-width: 1000px;
+}
+
+.panel {
+  background: linear-gradient(180deg, var(--ink-850), var(--ink-800));
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1), var(--hairline);
+  overflow: hidden;
+  animation: panel-in var(--dur) var(--ease-out);
+}
+
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 17px 22px;
+  border-bottom: 1px solid var(--line-1);
+}
+
+.panel-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  color: var(--amber-300);
+  background: var(--amber-a08);
+  border: 1px solid var(--amber-a20);
+  border-radius: var(--r-sm);
+}
+
+.panel-head-text {
+  min-width: 0;
+}
+
+.panel-title {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  color: var(--text-1);
+}
+
+.panel-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-4);
+}
+
+.panel-body {
+  padding: 4px 22px 20px;
+}
+
+/* ===== 分组 ===== */
+.sgroup {
+  padding: 16px 0;
+  border-top: 1px solid var(--line-1);
+}
+
+.sgroup:first-child {
+  border-top: 0;
+  padding-top: 12px;
+}
+
+.sgroup:last-child {
+  padding-bottom: 4px;
+}
+
+.sgroup-head {
+  margin-bottom: 2px;
+}
+
+.sgroup-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--text-3);
+}
+
+.sgroup-desc {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-4);
+}
+
+.sgroup > * + * {
+  margin-top: 14px;
+}
+
+/* ===== 字段 ===== */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.field-label,
+.field > label {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+
+.field-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.inline-val {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--amber-300);
+  font-variant-numeric: tabular-nums;
+}
+
+.field-hint {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-4);
+}
+
+.theme-picker + .field-hint {
+  margin-top: 10px;
+}
+
+.field-hint.bad {
+  color: var(--coral-400);
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 18px;
+}
+
+.field-grid > .field {
+  min-width: 0;
+}
+
+.span-2 {
+  grid-column: 1 / -1;
+}
+
+/* ===== 开关行 ===== */
+.switch-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 12px 0;
+}
+
+.switch-row + .switch-row {
+  border-top: 1px solid var(--line-1);
+}
+
+.switch-row.no-line {
+  border-top: 0;
+}
+
+.switch-text {
+  min-width: 0;
+}
+
+.switch-title {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-1);
+}
+
+.switch-desc {
+  margin-top: 3px;
+  max-width: 64ch;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-4);
+}
+
+.toggle {
+  position: relative;
+  flex-shrink: 0;
+  width: 38px;
+  height: 22px;
+  margin-top: 1px;
+  cursor: pointer;
+}
+
+.toggle input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.toggle-track {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--ink-700);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-full);
+  transition: background var(--dur) var(--ease-out), border-color var(--dur), box-shadow var(--dur);
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: var(--text-4);
+  border-radius: 50%;
+  transition: transform var(--dur) var(--ease-spring), background var(--dur);
+}
+
+.toggle input:checked + .toggle-track {
+  background: var(--amber-grad);
+  border-color: transparent;
+  box-shadow: 0 2px 8px -3px color-mix(in srgb, var(--amber-400) 55%, transparent);
+}
+
+.toggle input:checked + .toggle-track .toggle-thumb {
+  transform: translateX(16px);
+  background: var(--amber-ink);
+}
+
+.toggle input:focus-visible + .toggle-track {
+  outline: 2px solid var(--amber-a55);
+  outline-offset: 2px;
+}
+
+.toggle input:disabled + .toggle-track {
+  opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* ===== 子分组（父开关下的配置） ===== */
+.sub-panel {
+  padding: 14px;
+  background: color-mix(in srgb, var(--ink-1000) 46%, transparent);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+
+.sub-panel > * + * {
+  margin-top: 14px;
+}
+
+/* ===== 折叠区 ===== */
+.fold {
+  margin-top: 16px;
+  background: color-mix(in srgb, var(--ink-1000) 40%, transparent);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  transition: border-color var(--dur-fast);
+}
+
+.fold:hover {
+  border-color: var(--line-2);
+}
+
+.fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 14px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fold[open] > summary {
+  border-bottom: 1px solid var(--line-1);
+}
+
+.fold-chevron {
+  color: var(--text-4);
+  transition: transform var(--dur) var(--ease-out);
+}
+
+.fold[open] .fold-chevron {
+  transform: rotate(90deg);
+}
+
+.fold-title {
+  font-weight: 550;
+  color: var(--text-2);
+}
+
+.fold-meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-4);
+}
+
+.fold-body {
+  padding: 14px;
+}
+
+.fold-tip {
+  margin-bottom: 12px;
+}
+
+/* ===== 输入控件 ===== */
+.panel-body input:not([type='range']):not([type='checkbox']):not([type='radio']),
+.panel-body select,
+.panel-body textarea,
+.modal input {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--ink-1000);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  transition: border-color var(--dur-fast), background var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+.panel-body select,
+.modal select {
+  cursor: pointer;
+}
+
+.panel-body textarea,
+.modal textarea {
+  height: auto;
+  min-height: 78px;
+  padding: 9px 12px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.panel-body input:focus,
+.panel-body select:focus,
+.panel-body textarea:focus,
+.modal input:focus,
+.modal textarea:focus {
+  border-color: var(--amber-a55);
+  box-shadow: 0 0 0 3px var(--amber-a12);
+  outline: none;
+}
+
+.panel-body input:disabled,
+.panel-body select:disabled,
+.panel-body textarea:disabled {
+  color: var(--text-3);
+  background: color-mix(in srgb, var(--ink-900) 72%, transparent);
+  border-color: var(--line-1);
+  cursor: not-allowed;
+}
+
+.panel-body input::placeholder,
+.panel-body textarea::placeholder {
+  color: var(--text-5);
+}
+
+.panel-body input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--amber-400);
+  cursor: pointer;
+}
+
+.panel-body input[type='range'] {
+  accent-color: var(--amber-400);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  letter-spacing: -0.01em;
+}
+
+.persona {
+  min-height: 158px;
+  line-height: 1.65;
+}
+
+/* ===== 步进器 ===== */
+.stepper {
+  display: flex;
+  align-items: stretch;
+  height: 36px;
+  overflow: hidden;
+  background: var(--ink-1000);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+}
+
+.stepper:focus-within {
+  border-color: var(--amber-a55);
+  box-shadow: 0 0 0 3px var(--amber-a12);
+}
+
+.step-btn {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  flex-shrink: 0;
+  color: var(--text-3);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+
+.step-btn:hover:not(:disabled) {
+  color: var(--text-1);
+  background: var(--ink-750);
+}
+
+.step-btn:disabled {
+  color: var(--text-5);
+  cursor: not-allowed;
+}
+
+.stepper .step-input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 4px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.stepper .step-input:focus {
+  box-shadow: none;
+}
+
+/* ===== 键值 / 行内 ===== */
+.key-row,
+.workspace-row,
+.inline-row,
+.profile-row,
+.hotkey-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.key-row > input,
+.workspace-row > input,
+.inline-row > select,
+.profile-row > select {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.profile-row > select {
+  height: 36px;
+}
+
+.profile-row > .btn,
+.workspace-row > .btn,
+.inline-row > .btn {
+  height: 36px;
+}
+
+.key-row > .mini {
+  height: 36px;
+}
+
+.voice-select {
+  flex: 1 1 260px;
+}
+
+.workspace-path {
+  color: var(--text-2);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.actions .field-hint {
+  margin: 0;
+}
+
+.ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--jade-400);
+}
+
+.bad-text {
+  font-size: 12px;
+  color: var(--coral-400);
+}
+
+/* ===== 主题选择 ===== */
+.theme-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 10px;
+  font-family: inherit;
+  text-align: left;
+  background: var(--ink-1000);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: border-color var(--dur-fast), background var(--dur-fast), box-shadow var(--dur-fast), transform var(--dur-fast);
+}
+
+.theme-option:hover {
+  border-color: var(--line-3);
+  transform: translateY(-1px);
+}
+
+.theme-option.active {
+  border-color: var(--amber-a55);
+  box-shadow: 0 0 0 1px var(--amber-a20), var(--shadow-amber);
+}
+
+.theme-swatch {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  width: 100%;
+  height: 64px;
+  padding: 9px 11px;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+}
+
+.swatch-sample {
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+
+.swatch-dot {
+  width: 9px;
+  height: 9px;
+  margin-bottom: 2px;
+  border-radius: 50%;
+}
+
+.theme-dark .theme-swatch {
+  background:
+    radial-gradient(130% 120% at 96% 4%, rgba(239, 168, 76, 0.22), transparent 62%),
+    linear-gradient(150deg, #090C11, #12161F 60%, #1A202B);
+}
+
+.theme-dark .swatch-sample {
+  color: #EBE9E4;
+}
+
+.theme-dark .swatch-dot {
+  background: #EFA84C;
+  box-shadow: 0 0 10px rgba(239, 168, 76, 0.6);
+}
+
+.theme-light .theme-swatch {
+  background:
+    radial-gradient(100% 110% at 96% 4%, rgba(18, 122, 102, 0.1), transparent 58%),
+    linear-gradient(150deg, #E9EEEC, #F7F9F8 60%, #FFFFFF);
+}
+
+.theme-light .swatch-sample {
+  color: #0F1C1A;
+}
+
+.theme-light .swatch-dot {
+  background: #127A66;
+  box-shadow: 0 0 10px rgba(18, 122, 102, 0.35);
+}
+
+.theme-system .theme-swatch {
+  background: linear-gradient(90deg, #090C11 0 50%, #F1F4F3 50% 100%);
+}
+
+.theme-system .swatch-sample {
+  color: #EBE9E4;
+}
+
+/* 跟随系统：左右各一个 Aa，直观表达「两套外观」 */
+.theme-system .theme-swatch::after {
+  position: absolute;
+  right: 11px;
+  bottom: 9px;
+  content: 'Aa';
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1;
+  color: #0F1C1A;
+}
+
+.theme-system .swatch-dot {
+  display: none;
+}
+
+.theme-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.theme-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.theme-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--amber-300);
+  background: var(--amber-a12);
+  border-radius: var(--r-full);
+}
+
+/* ===== 双滑杆 ===== */
+.range-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--ink-1000) 42%, transparent);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+
+.range-field {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.range-label {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.range-value {
+  min-width: 40px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-align: right;
+  color: var(--amber-300);
+}
+
+/* ===== 快捷键录制 ===== */
+.hotkey-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 220px;
+  height: 38px;
+  padding: 0 16px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-1);
+  background: var(--ink-1000);
+  border: 1px dashed var(--line-3);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast), color var(--dur-fast);
+}
+
+.hotkey-box:hover {
+  border-color: var(--amber-a35);
+}
+
+.hotkey-box.recording {
+  color: var(--amber-300);
+  border-color: var(--amber-a55);
+  border-style: solid;
+  box-shadow: 0 0 0 3px var(--amber-a12);
+}
+
+.hotkey-box.bad {
+  color: var(--coral-400);
+  border-color: color-mix(in srgb, var(--coral-400) 55%, transparent);
+}
+
+/* ===== TTS 试听 ===== */
+.eq {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+  margin-right: 2px;
+}
+
+.eq i {
+  width: 2px;
+  height: 4px;
+  background: currentColor;
+  animation: eq 900ms ease-in-out infinite;
+}
+
+.eq i:nth-child(2) { animation-delay: 150ms; }
+.eq i:nth-child(3) { animation-delay: 300ms; }
+
+@keyframes eq {
+  0%, 100% { height: 4px; }
+  50% { height: 12px; }
+}
+
+/* ===== 提示条 ===== */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 13px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-2);
+  background: var(--azure-a12);
+  border: 1px solid color-mix(in srgb, var(--azure-400) 24%, transparent);
+  border-radius: var(--r-md);
+}
+
+.notice svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--azure-400);
+}
+
+/* ===== RAG 参数 / 健康度 ===== */
+.rag-retrieval-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.rag-num {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.rag-num input {
+  height: 34px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rag-health {
+  padding: 14px;
+  background: color-mix(in srgb, var(--ink-1000) 44%, transparent);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+
+.rag-health.bad {
+  border-color: color-mix(in srgb, var(--warn-400) 34%, transparent);
+  background: color-mix(in srgb, var(--warn-400) 6%, transparent);
+}
+
+.rag-health-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 16px;
+}
+
+.rh-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.rh-label {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  color: var(--text-4);
+}
+
+.rag-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 9px 11px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--warn-400);
+  background: var(--warn-a12);
+  border: 1px solid color-mix(in srgb, var(--warn-400) 22%, transparent);
+  border-radius: var(--r-sm);
+}
+
+.rag-warn svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.rag-health-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.rag-health-tip {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-4);
+}
+
+.rag-progress {
+  margin-top: 12px;
+}
+
+.rag-progress-bar {
+  height: 5px;
+  overflow: hidden;
+  background: var(--ink-700);
+  border-radius: var(--r-full);
+}
+
+.rag-progress-bar span {
+  display: block;
+  height: 100%;
+  background: var(--amber-grad);
+  transition: width var(--dur-slow) var(--ease-out);
+}
+
+.rag-progress-text {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== 本地模型下载 ===== */
+.download-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--amber-400) 4%, transparent);
+  border: 1px dashed var(--line-3);
+  border-radius: var(--r-md);
+}
+
+.download-text {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.download-text .field-hint {
+  margin-top: 3px;
+}
+
+/* ===== 备份结果 ===== */
+.backup-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-4);
+}
+
+.backup-list li {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.bl-key {
+  color: var(--text-3);
+  font-weight: 500;
+}
+
+.backup-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding: 11px 13px;
+  background: var(--jade-a12);
+  border: 1px solid color-mix(in srgb, var(--jade-400) 24%, transparent);
+  border-radius: var(--r-md);
+}
+
+.backup-path {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+/* ===== 高危操作勾选 ===== */
+.interrupt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 2px 14px;
+  padding: 10px 14px;
+  background: var(--ink-1000);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* ===== 提示词预览 ===== */
+.preview-box {
+  max-height: 380px;
+  margin-top: 12px;
+  padding: 14px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  background: var(--ink-1000);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
 }
 
 /* ===== 弹窗 ===== */
@@ -2709,8 +3430,13 @@ input[type='range']:disabled {
   animation: fadeIn var(--dur) var(--ease-out);
 }
 
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 .modal {
-  width: 400px;
+  width: 410px;
   max-width: 100%;
   padding: 22px;
   background: linear-gradient(180deg, var(--ink-850), var(--ink-800));
@@ -2734,20 +3460,24 @@ input[type='range']:disabled {
 }
 
 .modal .field {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
   margin-bottom: 14px;
+}
+
+.modal-copy {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-3);
 }
 
 .modal-actions {
   display: flex;
-  gap: 10px;
   justify-content: flex-end;
+  gap: 10px;
   margin-top: 4px;
 }
 
-/* Toast 提示 - 顶部居中 */
+/* ===== Toast ===== */
 .toast {
   position: fixed;
   top: 22px;
@@ -2755,7 +3485,6 @@ input[type='range']:disabled {
   z-index: 9999;
   max-width: calc(100vw - 40px);
   padding: 10px 18px;
-  transform: translateX(-50%);
   font-size: 12.5px;
   font-weight: 600;
   text-align: center;
@@ -2765,6 +3494,7 @@ input[type='range']:disabled {
   border-radius: var(--r-full);
   box-shadow: var(--shadow-3), var(--hairline);
   backdrop-filter: blur(12px);
+  transform: translateX(-50%);
   animation: toast-in var(--dur) var(--ease-spring);
 }
 
@@ -2773,12 +3503,106 @@ input[type='range']:disabled {
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
-/* ===== 窄屏兜底：任何卡片都不横向溢出 ===== */
-@media (max-width: 720px) {
-  .page-header { align-items: flex-start; }
-  .global-actions { width: 100%; }
-  .card-header { padding: 13px 16px; }
-  .card-body { padding: 16px; }
+/* ===== 响应式 ===== */
+@media (max-width: 1080px) {
+  .settings-shell {
+    grid-template-columns: 186px minmax(0, 1fr);
+    gap: 26px;
+  }
 }
 
+@media (max-width: 980px) {
+  .settings-page {
+    --pad-x: 18px;
+    --pad-top: 20px;
+  }
+
+  .settings-topbar {
+    padding-top: 11px;
+    padding-bottom: 11px;
+  }
+}
+
+@media (max-width: 900px) {
+  .settings-shell {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    padding-top: 16px;
+  }
+
+  .settings-nav {
+    position: static;
+    flex-direction: row;
+    gap: 6px;
+    max-height: none;
+    padding: 0 0 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-bottom: 1px solid var(--line-1);
+    scrollbar-width: none;
+  }
+
+  .settings-nav::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+
+  .nav-group {
+    display: contents;
+  }
+
+  .nav-group-title,
+  .nav-note {
+    display: none;
+  }
+
+  .nav-item {
+    width: auto;
+    flex: 0 0 auto;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: var(--r-full);
+  }
+
+  .nav-item.active {
+    box-shadow: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .settings-topbar {
+    align-items: flex-start;
+  }
+
+  .global-actions {
+    width: 100%;
+  }
+
+  .panel-head {
+    padding: 14px 16px;
+  }
+
+  .panel-body {
+    padding: 2px 16px 16px;
+  }
+
+  .field-grid,
+  .range-grid,
+  .rag-retrieval-row,
+  .rag-health-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .theme-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .theme-swatch {
+    height: 52px;
+  }
+
+  .toggle {
+    margin-top: 0;
+  }
+}
 </style>
