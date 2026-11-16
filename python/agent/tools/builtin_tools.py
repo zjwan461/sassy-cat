@@ -34,22 +34,84 @@ def internet_search(
     topic: Literal["general", "news", "finance"] = "general",
     include_raw_content: bool = False,
 ):
-    """运行网络搜索"""
+    """运行Tavily网络搜索"""
     try:
         # 从配置中获取 Tavily API Key（支持热更新）
-            cfg = config_loader.current()
-            tavily_api_key = cfg.get("agent.tavilyApiKey", "")
-            if not tavily_api_key:
-                return "错误：未配置 Tavily API Key，请在设置中配置 agent.tavilyApiKey"
-            client = TavilyClient(api_key=tavily_api_key)
-            return client.search(
-                query,
-                max_results=max_results,
-                include_raw_content=include_raw_content,
-                topic=topic,
-            )
+        cfg = config_loader.current()
+        tavily_api_key = cfg.get("agent.tavilyApiKey", "")
+        if not tavily_api_key:
+            return "错误：未配置 Tavily API Key，请在设置中配置 agent.tavilyApiKey"
+        client = TavilyClient(api_key=tavily_api_key)
+        return client.search(
+            query,
+            max_results=max_results,
+            include_raw_content=include_raw_content,
+            topic=topic,
+        )
     except Exception as e:
         return f"查询失败：{e}"
+
+
+@tool
+def deepseek_web_search(query: str, max_results: int = 5, need_content: bool = True):
+    """使用 DeepSeek 官方搜索 API 进行网络搜索，返回搜索结果列表（标题/链接/摘要，need_content=True 时附正文）。
+
+    与 internet_search（Tavily）二选一即可：已配置 DeepSeek API Key 时优先用本工具；
+    需要新闻/财经分类检索时用 internet_search 的 topic 参数。
+    """
+    import json
+    import requests
+
+    try:
+        cfg = config_loader.current()
+        ds_api_key = cfg.get("agent.dsApiKey", "")
+        if not ds_api_key:
+            return "错误：尚未配置 DeepSeek API Key，请在设置 → Agent 配置中填写（agent.dsApiKey）"
+        # 搜索
+        response = requests.post(
+            "https://api.deepseek.com/v1/tools/search",
+            headers={"Authorization": f"Bearer {ds_api_key}"},
+            json={
+                "query": query,
+                "count": max_results,
+                "need_content": need_content,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        results = response.json().get("results", [])
+        return json.dumps(results, ensure_ascii=False)
+    except Exception as e:
+        return f"查询失败：{e}"
+
+
+@tool
+def deepseek_web_fetch(url: str):
+    """使用 DeepSeek 官方抓取 API 解析指定网页，返回网页标题与正文内容（JSON）。
+
+    配合 deepseek_web_search 使用：搜索拿到链接后，用本工具读取具体页面全文。
+    """
+    import json
+    import requests
+
+    try:
+        cfg = config_loader.current()
+        ds_api_key = cfg.get("agent.dsApiKey", "")
+        if not ds_api_key:
+            return "错误：尚未配置 DeepSeek API Key，请在设置 → Agent 配置中填写（agent.dsApiKey）"
+        # 抓取网页
+        response = requests.post(
+            "https://api.deepseek.com/v1/tools/fetch",
+            headers={"Authorization": f"Bearer {ds_api_key}"},
+            json={"url": url},
+            timeout=60,
+        )
+        response.raise_for_status()
+        page = response.json()
+        return json.dumps(page, ensure_ascii=False)
+    except Exception as e:
+        return f"查询失败：{e}"
+
 
 # 项目根目录（builtin_tools.py 位于 python/agent/tools/ 下，向上三级）
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -128,9 +190,27 @@ _WIN_SWITCH_RE = re.compile(r"^/[?A-Za-z](?::.*)?$")
 _WIN_UPPER_SWITCH_RE = re.compile(r"^/[A-Z][A-Z0-9]{1,4}$")
 # 常见长开关名（含 start 的 /wait、/min、/max、/node 等），避免被误当虚拟路径
 _LONG_SWITCH_NAMES = {
-    "help", "version", "quiet", "silent", "yes", "no", "force", "verbose",
-    "wait", "min", "max", "node", "affinity", "low", "normal", "high",
-    "realtime", "abovenormal", "belownormal", "separate", "shared",
+    "help",
+    "version",
+    "quiet",
+    "silent",
+    "yes",
+    "no",
+    "force",
+    "verbose",
+    "wait",
+    "min",
+    "max",
+    "node",
+    "affinity",
+    "low",
+    "normal",
+    "high",
+    "realtime",
+    "abovenormal",
+    "belownormal",
+    "separate",
+    "shared",
 }
 
 
@@ -177,7 +257,7 @@ def _convert_virtual_path(segment: str, idx: int, prev: str | None = None) -> li
     # 检测 Windows 盘符模式：单个字母 + 冒号（如 C:、D: 等）
     # if len(segment) >= 2 and segment[0].isalpha() and segment[1] == ":":
     #     raise ValueError("Windows环境下不得使用真实盘符作为变量开头")
-    
+
     # 命令名位置：数组首位，或紧跟 cmd /c（/k）之后
     at_command_position = idx == 0 or (
         prev is not None and (prev.lower() in ("/c", "/k") or _is_cmd_program(prev))
@@ -330,14 +410,16 @@ def _check_start_targets(real_command: list[str]) -> str | None:
     for i, seg in enumerate(real_command):
         if seg.lower() != "start":
             continue
-        for cand in real_command[i + 1:]:
+        for cand in real_command[i + 1 :]:
             # start 的开关（/wait、/min、/B 等）不是文件路径，跳过
             if cand.startswith("/") and not cand.startswith("//"):
                 continue
             if not _looks_like_local_file_arg(cand):
                 continue
             raw = cand.strip().strip("\"'")
-            target = os.path.normpath(raw if os.path.isabs(raw) else os.path.join(work_dir, raw))
+            target = os.path.normpath(
+                raw if os.path.isabs(raw) else os.path.join(work_dir, raw)
+            )
             if not os.path.exists(target):
                 return (
                     f"命令未执行：`start` 要打开的本地文件不存在 —— {raw}\n"
@@ -496,7 +578,9 @@ def run_command(command: list[str], timeout: int = 60):
     if not stdout and not stderr:
         output.append("（无任何输出）")
     if result.returncode == 0 and _is_start_command(real_command):
-        output.append("（start 已把目标交给系统打开：退出码 0 只表示启动请求成功，不代表目标程序已完成）")
+        output.append(
+            "（start 已把目标交给系统打开：退出码 0 只表示启动请求成功，不代表目标程序已完成）"
+        )
     return "\n".join(output)
 
 
@@ -558,7 +642,10 @@ TODO_ROOT = os.path.join(work_dir, "todo")
 _TODO_SESSION_SAFE_RE = re.compile(r"[^0-9A-Za-z._-]")
 # Windows 保留设备名不能直接当文件名
 _TODO_RESERVED_NAMES = {
-    "CON", "PRN", "AUX", "NUL",
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
     *(f"COM{i}" for i in range(1, 10)),
     *(f"LPT{i}" for i in range(1, 10)),
 }
@@ -637,6 +724,7 @@ def _list_session_todo_files(session_key: str) -> list[str]:
         full = os.path.join(TODO_ROOT, name)
         if name.startswith(prefix) and name.endswith(".md") and os.path.isfile(full):
             files.append(full)
+
     def _sort_key(p: str) -> tuple:
         try:
             mtime = os.path.getmtime(p)
@@ -676,7 +764,9 @@ def _todo_task_choices(session_key: str, limit: int = 8) -> str:
         meta, entries, _raw = _read_todo(path)
         items = _todo_items(entries)
         done = sum(1 for e in items if e["done"])
-        parts.append(f"「{meta.get('task') or os.path.basename(path)}」（{done}/{len(items)}）")
+        parts.append(
+            f"「{meta.get('task') or os.path.basename(path)}」（{done}/{len(items)}）"
+        )
     return "当前会话的清单：" + "；".join(parts)
 
 
@@ -691,7 +781,7 @@ def _split_todo_front_matter(text: str) -> tuple[dict, list[str]]:
                     key, _, value = line.partition(":")
                     if key.strip():
                         meta[key.strip()] = value.strip()
-                return meta, lines[i + 1:]
+                return meta, lines[i + 1 :]
     return {}, lines
 
 
@@ -703,12 +793,14 @@ def _parse_todo_body(body_lines: list[str]) -> list[dict]:
         if not m:
             entries.append({"type": "raw", "text": line})
             continue
-        entries.append({
-            "type": "item",
-            "id": m.group("id"),
-            "done": m.group("mark").lower() == "x",
-            "content": m.group("content").strip(),
-        })
+        entries.append(
+            {
+                "type": "item",
+                "id": m.group("id"),
+                "done": m.group("mark").lower() == "x",
+                "content": m.group("content").strip(),
+            }
+        )
     # 首尾空行由渲染逻辑统一生成，这里丢掉，避免每次写回都多堆一行
     while entries and entries[0]["type"] == "raw" and not entries[0]["text"].strip():
         entries.pop(0)
@@ -923,8 +1015,12 @@ def get_todo(runtime: ToolRuntime, task: str = "", status: str = "all") -> str:
     """
     status = (status or "all").strip().lower()
     status = {
-        "active": "pending", "todo": "pending", "未完成": "pending",
-        "已完成": "done", "全部": "all", "complete": "done",
+        "active": "pending",
+        "todo": "pending",
+        "未完成": "pending",
+        "已完成": "done",
+        "全部": "all",
+        "complete": "done",
     }.get(status, status)
     if status not in ("all", "pending", "done"):
         return f"错误：status 仅支持 all/pending/done，收到：{status}"
@@ -948,7 +1044,9 @@ def get_todo(runtime: ToolRuntime, task: str = "", status: str = "all") -> str:
 
     path = _find_todo_file(session_key, task)
     if path is None:
-        return f"错误：本会话找不到任务「{task}」的清单。{_todo_task_choices(session_key)}"
+        return (
+            f"错误：本会话找不到任务「{task}」的清单。{_todo_task_choices(session_key)}"
+        )
 
     with _TODO_LOCK:
         meta, entries, raw = _read_todo(path)
@@ -999,11 +1097,25 @@ def edit_todo(
     """
     action = (action or "").strip().lower()
     action = {
-        "complete": "done", "finish": "done", "完成": "done",
-        "undone": "undone", "undo": "undone", "取消完成": "undone", "未完成": "undone",
-        "add": "add", "append": "add", "追加": "add", "新增": "add",
-        "update": "update", "edit": "update", "改": "update", "编辑": "update", "修改": "update",
-        "delete": "delete", "remove": "delete", "删除": "delete",
+        "complete": "done",
+        "finish": "done",
+        "完成": "done",
+        "undone": "undone",
+        "undo": "undone",
+        "取消完成": "undone",
+        "未完成": "undone",
+        "add": "add",
+        "append": "add",
+        "追加": "add",
+        "新增": "add",
+        "update": "update",
+        "edit": "update",
+        "改": "update",
+        "编辑": "update",
+        "修改": "update",
+        "delete": "delete",
+        "remove": "delete",
+        "删除": "delete",
     }.get(action, action)
     if action not in ("done", "undone", "add", "update", "delete"):
         return f"错误：action 仅支持 done/undone/add/update/delete，收到：{action}"
@@ -1011,7 +1123,9 @@ def edit_todo(
     session_key = _todo_session_key(runtime)
     path = _find_todo_file(session_key, task)
     if path is None:
-        return f"错误：本会话找不到任务「{task}」的清单。{_todo_task_choices(session_key)}"
+        return (
+            f"错误：本会话找不到任务「{task}」的清单。{_todo_task_choices(session_key)}"
+        )
 
     with _TODO_LOCK:
         meta, entries, _raw = _read_todo(path)
@@ -1037,7 +1151,9 @@ def edit_todo(
             for text in texts:
                 tid = _new_todo_id(used)
                 used.add(tid)
-                entries.append({"type": "item", "id": tid, "done": False, "content": text})
+                entries.append(
+                    {"type": "item", "id": tid, "done": False, "content": text}
+                )
                 added.append(f"- {tid} {text}")
             err = _save_todo_file(path, entries, meta)
             if err:
@@ -1050,7 +1166,7 @@ def edit_todo(
 
         if not items:
             return (
-                f'任务「{title_task}」的清单还没有子任务'
+                f"任务「{title_task}」的清单还没有子任务"
                 '（可用 action="add" 追加，或 create_todo 重新拆解）。'
             )
 
@@ -1095,7 +1211,9 @@ def edit_todo(
             else:
                 found.append(target)
         if not found:
-            return f"错误：未找到这些子任务：{', '.join(missing)}。{_todo_id_hint(items)}"
+            return (
+                f"错误：未找到这些子任务：{', '.join(missing)}。{_todo_id_hint(items)}"
+            )
 
         if action == "delete":
             drop = {e["id"] for e in found}
@@ -1110,7 +1228,9 @@ def edit_todo(
         err = _save_todo_file(path, entries, meta)
         if err:
             return err
-        verb = {"done": "已勾选完成", "undone": "已取消完成", "delete": "已删除"}[action]
+        verb = {"done": "已勾选完成", "undone": "已取消完成", "delete": "已删除"}[
+            action
+        ]
         lines = [f"{verb} {len(found)} 步："]
         lines += [f"- {e['id']} {e['content']}" for e in found]
         if missing:
@@ -1302,7 +1422,9 @@ def create_skill(
             "TODO：补充详细工作流步骤与注意事项。\n"
         )
     if len(body) > MAX_SKILL_MD_SIZE:
-        return f"错误：instructions 过大（{len(body)} 字符，上限 {MAX_SKILL_MD_SIZE}）。"
+        return (
+            f"错误：instructions 过大（{len(body)} 字符，上限 {MAX_SKILL_MD_SIZE}）。"
+        )
     skill_md = (
         "---\n"
         f"name: {slug}\n"

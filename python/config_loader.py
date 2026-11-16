@@ -80,6 +80,7 @@ DEFAULTS = {
         "skillsEnabled": True,
         "maxToolRounds": 10,
         "tavilyApiKey": "",  # Tavily 网络搜索 API Key
+        "dsApiKey": "",  # DeepSeek 官方搜索/网页抓取 API Key（deepseek_web_search / deepseek_web_fetch）
         "enableOcr": True,  # agent对话上传文件是否启用OCR解析，默认开启；关闭时仅保存文件不做解析
         "ocrEngine": "markitdown",  # agent对话时的ocr引擎，默认markitdown(快速),可选docling(更精细可识图)
         # 高危工具人工确认策略：true=执行前打断等待用户确认，false=直接放行
@@ -188,6 +189,8 @@ def _env_overrides(cfg: dict) -> dict:
         profile["model"] = os.environ["LLM_MODEL_NAME"]
     if os.getenv("TAVILY_API_KEY"):
         cfg["agent"]["tavilyApiKey"] = os.environ["TAVILY_API_KEY"]
+    if os.getenv("DEEPSEEK_API_KEY"):
+        cfg["agent"]["dsApiKey"] = os.environ["DEEPSEEK_API_KEY"]
     return cfg
 
 

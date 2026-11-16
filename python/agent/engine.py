@@ -21,6 +21,8 @@ from agent.prompts import build_system_prompt
 from agent.tools.builtin_tools import (
     create_skill,
     create_todo,
+    deepseek_web_fetch,
+    deepseek_web_search,
     edit_todo,
     get_date_time,
     get_todo,
@@ -533,6 +535,8 @@ class AgentHolder:
         tools = [
             get_date_time,
             internet_search,
+            deepseek_web_search,
+            deepseek_web_fetch,
             save_user_info,
             create_todo,
             get_todo,

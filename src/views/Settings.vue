@@ -242,6 +242,14 @@
           <span class="hint">用于 internet_search 工具，留空则无法使用网络搜索功能</span>
         </div>
         <div class="field">
+          <label>DeepSeek API Key（搜索 / 网页抓取工具）</label>
+          <div class="key-row">
+            <input v-model="form.dsApiKey" :type="showDsKey ? 'text' : 'password'" placeholder="sk-..." />
+            <button class="mini" @click="showDsKey = !showDsKey">{{ showDsKey ? '隐藏' : '显示' }}</button>
+          </div>
+          <span class="hint">用于 deepseek_web_search / deepseek_web_fetch 工具（DeepSeek 官方搜索与网页解析），留空则这两个工具不可用</span>
+        </div>
+        <div class="field">
           <label class="check"><input type="checkbox" v-model="form.agentEnableOcr" /> 启用对话文档解析（OCR）</label>
           <span class="hint">开启后，Agent 对话中上传的文档会进行 OCR 解析并入库；关闭后仅保存文件到存储目录，不做解析</span>
         </div>
@@ -1014,6 +1022,7 @@ const form = reactive({
   quickAskShortcut: 'Alt+Shift+Q',
   reminderPoll: 5, reminderDuration: 8,
   tavilyApiKey: '',
+  dsApiKey: '',
   agentEnableOcr: true, agentOcrEngine: 'markitdown',
   interruptOn: defaultInterruptOn(),
   // 技能脚本免确认（execute 白名单，见 python/agent/command_policy.py）
@@ -1034,6 +1043,7 @@ const hotkeyError = ref('')
 const hotkeyStatus = ref(null)
 const showKey = ref(false)
 const showTavilyKey = ref(false)
+const showDsKey = ref(false)
 const showRagKey = ref(false)
 const showDshKey = ref(false)
 const dshKeyRevealed = ref(false)
@@ -1180,6 +1190,9 @@ async function loadConfig() {
   // Tavily API Key：掩码处理
   const tavilyKey = cfg.agent?.tavilyApiKey || ''
   form.tavilyApiKey = tavilyKey.length > 3 ? '***' + tavilyKey.slice(-3) : tavilyKey
+  // DeepSeek API Key：同样掩码处理
+  const dsKey = cfg.agent?.dsApiKey || ''
+  form.dsApiKey = dsKey.length > 3 ? '***' + dsKey.slice(-3) : dsKey
   // 对话 OCR 引擎（开关缺省视为开启，与后端默认一致）
   form.agentEnableOcr = cfg.agent?.enableOcr !== false
   form.agentOcrEngine = cfg.agent?.ocrEngine === 'docling' ? 'docling' : 'markitdown'
@@ -1539,6 +1552,10 @@ async function saveAll() {
   // Tavily API Key：仅在非掩码时写入
   if (!String(form.tavilyApiKey).startsWith('***')) {
     patches.push({ path: 'agent.tavilyApiKey', value: form.tavilyApiKey.trim() })
+  }
+  // DeepSeek API Key：仅在非掩码时写入
+  if (!String(form.dsApiKey).startsWith('***')) {
+    patches.push({ path: 'agent.dsApiKey', value: form.dsApiKey.trim() })
   }
   // dsh 独立 LLM 的 apiKey：同样仅在非掩码时写入
   if (!String(form.dshApiKey).startsWith('***')) {
