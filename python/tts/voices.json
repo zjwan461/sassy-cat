@@ -1,0 +1,316 @@
+{
+  "_README": [
+    "音色注册表 + 下载清单。",
+    "",
+    "路径规则：所有路径都相对于 vendor_dir（GPT-SoVITS 仓库根目录），不允许写本机绝对路径。",
+    "vendor_dir 为 null 时由引擎自动探测：环境变量 GSV_VENDOR_DIR > <项目根>/vendor/gpt-sovits > 同级目录的 GPT-SoVITS-v*。",
+    "",
+    "两段结构：",
+    "  voices  —— 引擎读，决定用哪套权重 + 哪条参考音频",
+    "  sources —— fetch_voices.py 读，决定从哪下载、怎么校验、授权是什么",
+    "",
+    "换机器 / 新同事拉代码后，执行：python python/tts/fetch_voices.py"
+  ],
+
+  "schema_version": 2,
+  "vendor_dir": null,
+  "default_voice": "tangyuge_calm",
+
+  "voices": {
+    "tangyuge_calm": {
+      "gpt": "GPT_weights_v2ProPlus/tangyuge_v2pp_dpo-e10.ckpt",
+      "sovits": "SoVITS_weights_v2ProPlus/tangyuge_v2pp_e4_s564.pth",
+      "ref_audio": "参考音频/TangYuGe/narration_calm_script1_L0869.wav",
+      "prompt_text": "",
+      "prompt_lang": "zh",
+      "text_lang": "zh",
+      "speed_factor": 1.0,
+      "_note": "解说腔，适合长句播报"
+    },
+    "tangyuge_polite": {
+      "gpt": "GPT_weights_v2ProPlus/tangyuge_v2pp_dpo-e10.ckpt",
+      "sovits": "SoVITS_weights_v2ProPlus/tangyuge_v2pp_e4_s564.pth",
+      "ref_audio": "参考音频/TangYuGe/neutral_polite_script1_L0824.wav",
+      "prompt_text": "",
+      "prompt_lang": "zh",
+      "text_lang": "zh",
+      "speed_factor": 1.0,
+      "_note": "中性客气，日常对话默认可用"
+    },
+    "tangyuge_apology": {
+      "gpt": "GPT_weights_v2ProPlus/tangyuge_v2pp_dpo-e10.ckpt",
+      "sovits": "SoVITS_weights_v2ProPlus/tangyuge_v2pp_e4_s564.pth",
+      "ref_audio": "参考音频/TangYuGe/apology_script32_L0085.wav",
+      "prompt_text": "",
+      "prompt_lang": "zh",
+      "text_lang": "zh",
+      "speed_factor": 0.95,
+      "_note": "道歉/安抚"
+    },
+    "tangyuge_exclaim": {
+      "gpt": "GPT_weights_v2ProPlus/tangyuge_v2pp_dpo-e10.ckpt",
+      "sovits": "SoVITS_weights_v2ProPlus/tangyuge_v2pp_e4_s564.pth",
+      "ref_audio": "参考音频/TangYuGe/exclaim_script32_L0066.wav",
+      "prompt_text": "",
+      "prompt_lang": "zh",
+      "text_lang": "zh",
+      "speed_factor": 1.05,
+      "_note": "惊讶/兴奋"
+    },
+    "tangyuge_question": {
+      "gpt": "GPT_weights_v2ProPlus/tangyuge_v2pp_dpo-e10.ckpt",
+      "sovits": "SoVITS_weights_v2ProPlus/tangyuge_v2pp_e4_s564.pth",
+      "ref_audio": "参考音频/TangYuGe/question_clear_script34_L0420.wav",
+      "prompt_text": "",
+      "prompt_lang": "zh",
+      "text_lang": "zh",
+      "speed_factor": 1.0,
+      "_note": "疑问句"
+    },
+    "tangyuge_soft": {
+      "gpt": "GPT_weights_v2ProPlus/tangyuge_v2pp_dpo-e10.ckpt",
+      "sovits": "SoVITS_weights_v2ProPlus/tangyuge_v2pp_e4_s564.pth",
+      "ref_audio": "参考音频/TangYuGe/romantic_soft_script34_L0448.wav",
+      "prompt_text": "",
+      "prompt_lang": "zh",
+      "text_lang": "zh",
+      "speed_factor": 0.9,
+      "_note": "温柔/低语"
+    },
+
+    "narrator": {
+      "gpt": "GPT_weights_v2Pro/AxcNarrator-Doc.ckpt",
+      "sovits": "SoVITS_weights_v2Pro/AxcNarrator-Doc.pth",
+      "ref_audio": "参考音频/AxcNarrator-Doc/ref.wav",
+      "prompt_text": "",
+      "prompt_lang": "zh",
+      "text_lang": "zh",
+      "speed_factor": 1.0,
+      "_note": "纪录片解说，合成音色，授权最干净（Apache-2.0）"
+    },
+    "bufeiyan": {
+      "gpt": "GPT_weights_v2Pro/bufeiyan-e15.ckpt",
+      "sovits": "SoVITS_weights_v2Pro/bufeiyan_e8_s992.pth",
+      "ref_audio": "参考音频/bufeiyan/bufeiyan_ref.wav",
+      "prompt_text": "",
+      "prompt_lang": "zh",
+      "text_lang": "zh",
+      "speed_factor": 1.0,
+      "_note": "真人女声，仅个人研究使用"
+    },
+    "zundamon": {
+      "gpt": "GPT_weights_v2/zudamon_style_1-e15.ckpt",
+      "sovits": "SoVITS_weights_v2/zudamon_style_1_e8_s96.pth",
+      "ref_audio": "",
+      "prompt_text": "",
+      "prompt_lang": "ja",
+      "text_lang": "ja",
+      "speed_factor": 1.0,
+      "_note": "缺少参考音频，需自备 3~10 秒干声后填 ref_audio"
+    },
+    "atri": {
+      "gpt": "GPT_weights/atri-e10.ckpt",
+      "sovits": "SoVITS_weights/atri_e25_s5250.pth",
+      "ref_audio": "参考音频/ATRI/01_それはもじもじ.wav",
+      "prompt_text": "",
+      "prompt_lang": "ja",
+      "text_lang": "ja",
+      "speed_factor": 1.0,
+      "_note": "v1 模型，效果弱于 v2ProPlus；非商用"
+    }
+  },
+
+  "sources": [
+    {
+      "id": "tangyuge-v2pp",
+      "title": "唐雨格 GPT-SoVITS v2ProPlus",
+      "repo": "shiqianyan/TangYuGe-GPT-SoVITS-v2ProPlus",
+      "homepage": "https://huggingface.co/shiqianyan/TangYuGe-GPT-SoVITS-v2ProPlus",
+      "license": "apache-2.0",
+      "commercial_ok": true,
+      "version": "v2ProPlus",
+      "files": [
+        {
+          "local": "GPT_weights_v2ProPlus/tangyuge_v2pp_dpo-e10.ckpt",
+          "remote": "weights/tangyuge_v2pp_dpo-e10.ckpt",
+          "size": 155312850,
+          "sha256": "44b77509b42338dc6bd85d6022fb5e0ec91e0ea484e3420a3a2451598aa1b145"
+        },
+        {
+          "local": "SoVITS_weights_v2ProPlus/tangyuge_v2pp_e4_s564.pth",
+          "remote": "weights/tangyuge_v2pp_e4_s564.pth",
+          "size": 172765158,
+          "sha256": "dcb6042184355144dc15d118e88802fd4bdb494bd105da7c72ac42454d322899"
+        },
+        {
+          "local": "参考音频/TangYuGe/narration_calm_script1_L0869.wav",
+          "remote": "references/narration_calm_script1_L0869.wav",
+          "size": 529730,
+          "sha256": "2f0d79edd1e13acbf390b34f672b53dffd501535e299ed915d62c8998797be37"
+        },
+        {
+          "local": "参考音频/TangYuGe/neutral_polite_script1_L0824.wav",
+          "remote": "references/neutral_polite_script1_L0824.wav",
+          "size": 476744,
+          "sha256": "7ff2353ae358311ab6032100502c25678d40cf2602683de04342921bbebee425"
+        },
+        {
+          "local": "参考音频/TangYuGe/apology_script32_L0085.wav",
+          "remote": "references/apology_script32_L0085.wav",
+          "size": 328500,
+          "sha256": "1f3769448cb0b7d050c1e6ef2c9237259e761cb7ceae3f44ce1ef54c2c5a427c"
+        },
+        {
+          "local": "参考音频/TangYuGe/exclaim_script32_L0066.wav",
+          "remote": "references/exclaim_script32_L0066.wav",
+          "size": 312628,
+          "sha256": "118c4532438106aaac5f897259e5289f7d4fcc7893467e24dad5193c5204b489"
+        },
+        {
+          "local": "参考音频/TangYuGe/question_clear_script34_L0420.wav",
+          "remote": "references/question_clear_script34_L0420.wav",
+          "size": 274712,
+          "sha256": "af91b24dfce44ca19953bb3f43141b13461dc035de34252bcde3287fc1f745e1"
+        },
+        {
+          "local": "参考音频/TangYuGe/romantic_soft_script34_L0448.wav",
+          "remote": "references/romantic_soft_script34_L0448.wav",
+          "size": 293038,
+          "sha256": "f820a73d5c905cd1a7a1fae26eb1aedfabe208a82602dc8d90c19e73482bdec5"
+        }
+      ]
+    },
+
+    {
+      "id": "narrator-v2pro",
+      "title": "纪录片解说（合成音色）",
+      "repo": "AxcLogo/GPT-SoVITS-v2Pro-zh-Documentary-Narrator",
+      "homepage": "https://huggingface.co/AxcLogo/GPT-SoVITS-v2Pro-zh-Documentary-Narrator",
+      "license": "apache-2.0",
+      "commercial_ok": true,
+      "version": "v2Pro",
+      "files": [
+        {
+          "local": "GPT_weights_v2Pro/AxcNarrator-Doc.ckpt",
+          "remote": "gpt.ckpt",
+          "size": 155313376,
+          "sha256": "f67d0082b09ed3f324d22a01a24a98ddaff8ff8cec5ffebf507585a005328b84"
+        },
+        {
+          "local": "SoVITS_weights_v2Pro/AxcNarrator-Doc.pth",
+          "remote": "sovits.pth",
+          "size": 134946419,
+          "sha256": "483a002471da1557af29ea80bf26bc525e49e23cbd394fc7dafd05af57906e0a"
+        },
+        {
+          "local": "参考音频/AxcNarrator-Doc/ref.wav",
+          "remote": "ref.wav",
+          "size": 422444,
+          "sha256": "6422cd628efb3b92d60b0d4f88125b79fa6c1aacab76cddf677722c4469324b1"
+        }
+      ]
+    },
+
+    {
+      "id": "bufeiyan-v2pro",
+      "title": "步非烟（真人女声）",
+      "repo": "AetherAllan/bufeiyan-gpt-sovits-v2pro",
+      "homepage": "https://huggingface.co/AetherAllan/bufeiyan-gpt-sovits-v2pro",
+      "license": "other",
+      "commercial_ok": false,
+      "version": "v2Pro",
+      "files": [
+        {
+          "local": "GPT_weights_v2Pro/bufeiyan-e15.ckpt",
+          "remote": "GPT_weights_v2Pro/bufeiyan-e15.ckpt",
+          "size": 155308915,
+          "sha256": "ce52fd5c3a4329aa37efa3c69565104b6024d9b8fdef4e0e3ecf8930d78a0db8"
+        },
+        {
+          "local": "SoVITS_weights_v2Pro/bufeiyan_e8_s992.pth",
+          "remote": "SoVITS_weights_v2Pro/bufeiyan_e8_s992.pth",
+          "size": 134936883,
+          "sha256": "a1de1220af41d0b7f68e371e8dd9290b950f9d310b54fef47102c84a54d29b29"
+        },
+        {
+          "local": "参考音频/bufeiyan/bufeiyan_ref.wav",
+          "remote": "参考音频/[步非烟]其他的福利啊。 加油哦。.wav",
+          "size": 291244,
+          "sha256": "0942a813a2b30389ff77114f939f194ba43b1b46971b07215609f86aebea40d8"
+        }
+      ]
+    },
+
+    {
+      "id": "zundamon-v2",
+      "title": "ずんだもん",
+      "repo": "zunzunpj/zundamon_GPT-SoVITS",
+      "homepage": "https://huggingface.co/zunzunpj/zundamon_GPT-SoVITS",
+      "license": "noassertion",
+      "commercial_ok": false,
+      "version": "v2",
+      "files": [
+        {
+          "local": "GPT_weights_v2/zudamon_style_1-e15.ckpt",
+          "remote": "GPT_weights_v2/zudamon_style_1-e15.ckpt",
+          "size": 155312957,
+          "sha256": "06857075c6ad5f2f1ad3a06861df80bcef7332b72e74ee1c85522618d90a17f7"
+        },
+        {
+          "local": "SoVITS_weights_v2/zudamon_style_1_e8_s96.pth",
+          "remote": "SoVITS_weights_v2/zudamon_style_1_e8_s96.pth",
+          "size": 85007943,
+          "sha256": "82565b0744e4c9cba897d921e7f58782dfe003c89f3b865ec543ef894d2aa7ab"
+        }
+      ]
+    },
+
+    {
+      "id": "atri-v1",
+      "title": "亚托莉 ATRI（v1）",
+      "repo": "2DIPW/ATRI_GPT-SoVITS",
+      "homepage": "https://huggingface.co/2DIPW/ATRI_GPT-SoVITS",
+      "license": "cc-by-nc-sa-4.0",
+      "commercial_ok": false,
+      "version": "v1",
+      "files": [
+        {
+          "local": "GPT_weights/atri-e10.ckpt",
+          "remote": "atri-e10.ckpt",
+          "size": 155087613,
+          "sha256": "def59c3ab387e2c184b051c944760c7a0ca5b4b18fcbf249ebcd7db52b37cf77"
+        },
+        {
+          "local": "SoVITS_weights/atri_e25_s5250.pth",
+          "remote": "atri_e25_s5250.pth",
+          "size": 84932551,
+          "sha256": "317642ed2f25fb6160def963af4360cea42bf93f6637c1b972cac62aee610fdc"
+        },
+        {
+          "local": "参考音频/ATRI/01_それはもじもじ.wav",
+          "remote": "それはもじもじ.wav",
+          "size": 386044,
+          "sha256": "1176117b971cc03cb36ac2ef7ab034fc856538c767f5d651501acced534afec4"
+        },
+        {
+          "local": "参考音频/ATRI/02_悲しまないでください.wav",
+          "remote": "悲しまないでください。わたしも、悲しくなってしまいます.wav",
+          "size": 448162,
+          "sha256": "96b1eb25a95b73b041bb62fb775e8d1aacdec8d837bd0e6b43c429869fe3b771"
+        },
+        {
+          "local": "参考音频/ATRI/03_音楽評.wav",
+          "remote": "間違いありません。知性の欠片も感じない、ジャカジャカとうるさいだけの音楽です.wav",
+          "size": 615176,
+          "sha256": "fdcee2c7ee00fdc6f5835c5fbf9212dbcf9064eaf0435d32d8cfb8295b779c78"
+        },
+        {
+          "local": "参考音频/ATRI/04_ポンコツ.wav",
+          "remote": "わたしはやはりポンコツです。本来、それはわたしの役目なのに.wav",
+          "size": 561258,
+          "sha256": "6863eaae491f11bbabf03270b761420dd31c0b247f0b1b7ac63c0643630f1315"
+        }
+      ]
+    }
+  ]
+}

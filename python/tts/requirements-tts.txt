@@ -1,0 +1,83 @@
+# GPT-SoVITS inference dependencies (in-process integration, Python 3.11)
+#
+# STEP 1 - install PyTorch first, from the cu128 index.
+#          PyPI wheels are CPU-only and will fail on RTX 50 series (sm_120).
+#
+#     pip install --index-url https://download.pytorch.org/whl/cu128 torch torchaudio
+#
+#     python -c "import torch;print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_arch_list())"
+#
+#          The arch list must contain sm_120.
+#
+# STEP 2 - install this file:
+#
+#     pip install -r python/tts/requirements-tts.txt
+#
+# This is the inference-only subset of the upstream GPT-SoVITS requirements.txt.
+# Training, WebUI, ASR and export tooling are intentionally omitted.
+# If upstream changes and something is missing, the repo's requirements.txt wins.
+
+# ---- core numeric / audio ----
+numpy<2.0
+scipy
+librosa==0.10.2
+numba
+soundfile
+resampy
+
+# ---- model + training framework (needed to load the GPT / s1 weights) ----
+pytorch-lightning>=2.4
+torchmetrics<=1.5
+transformers>=4.43,<=4.50
+peft<0.18.0
+safetensors
+huggingface-hub
+sentencepiece
+einops
+rotary_embedding_torch
+x_transformers
+
+# ---- ONNX runtime (required by text/g2pw for Chinese polyphone resolution) ----
+onnxruntime-gpu ; platform_system == "Windows" and (platform_machine == "AMD64" or platform_machine == "x86_64")
+onnxruntime     ; platform_system != "Windows" or (platform_machine != "AMD64" and platform_machine != "x86_64")
+
+# ---- text frontend: Chinese ----
+cn2an
+pypinyin
+jieba
+jieba_fast
+wordsegment
+g2p_en
+split-lang
+fast_langdetect>=0.3.1
+chardet
+budoux
+
+# Traditional/Simplified conversion.
+# If building opencc fails on Windows (needs MSVC), use the pure-python build:
+#     pip install opencc-python-reimplemented
+opencc
+
+# ---- text frontend: Japanese / Korean / Cantonese (delete if unused) ----
+pyopenjtalk>=0.4.1      # Japanese; needs cmake + MSVC on Windows
+ToJyutping              # Cantonese
+g2pk2                   # Korean
+ko_pron                 # Korean
+
+# ---- misc ----
+PyYAML
+psutil
+dill
+tqdm
+ffmpeg-python
+pydantic<=2.10.6
+
+# ---- optional (install only if an ImportError asks for it) ----
+# matplotlib          # used by stream_v2pro.py and a few standalone tools
+# tensorboard         # training only
+# gradio<5            # WebUI only
+# fastapi[standard]   # HTTP API mode only; not needed for in-process use
+# modelscope          # automatic model download only
+# funasr==1.0.27      # ASR labeling tool only
+# ctranslate2>=4.0,<5 # faster-whisper only
+# av>=11              # faster-whisper only
