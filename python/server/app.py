@@ -24,6 +24,10 @@ from server.stats_api import router as stats_router
 from server.skills_api import router as skills_router
 from server.mcp_api import router as mcp_router
 from server.backup_api import router as backup_router
+try:  # 本地 TTS 是可选能力：依赖缺失（没有 GPU / 没装模型）时不能拖垮整个服务
+    from server.tts_api import router as tts_router
+except Exception:  # noqa: BLE001
+    tts_router = None
 from server.db import init_db as init_message_db, close_db as close_message_db
 from server.db import get_messages_by_session, DEFAULT_KB_ID
 from server.db import kb_repository as kb_repo
@@ -54,12 +58,34 @@ async def lifespan(app: FastAPI):
     stop_event = asyncio.Event()
     proactive_task = asyncio.create_task(scheduler.run_forever(stop_event))
     reminder_task = asyncio.create_task(reminder_runner.run_forever(stop_event))
+
+    # 本地 TTS 预加载：只把加载丢到后台，绝不阻塞启动；
+    # 加载失败（没有显卡 / 权重缺失）只会让 /api/tts/* 返回 503，前端回落系统语音。
+    tts_task = None
+    tts_service = None
+    try:
+        from tts import service as tts_service  # noqa: F811
+
+        tts_task = asyncio.create_task(tts_service.preload())
+    except Exception:  # noqa: BLE001
+        logger.exception("本地 TTS 未能初始化（将使用系统语音）")
+
     logger.info("后台任务已启动：proactive_scheduler / reminder_runner")
     yield
     stop_event.set()
     proactive_task.cancel()
     reminder_task.cancel()
-    await asyncio.gather(proactive_task, reminder_task, return_exceptions=True)
+    if tts_task is not None:
+        tts_task.cancel()
+    await asyncio.gather(
+        proactive_task, reminder_task, *([tts_task] if tts_task else []), return_exceptions=True
+    )
+    # 释放 TTS 占用的显存（权重常驻约 1.2 GB）
+    if tts_service is not None:
+        try:
+            tts_service.shutdown()
+        except Exception:  # noqa: BLE001
+            logger.exception("关闭本地 TTS 失败")
     # 排空聊天侧的后台任务（消息落库等），避免退出瞬间丢失正在进行的那一轮
     await drain_background_tasks()
     await agent_engine.close_db()
@@ -225,6 +251,8 @@ def create_app() -> FastAPI:
     app.include_router(skills_router)
     app.include_router(mcp_router)
     app.include_router(backup_router)
+    if tts_router is not None:
+        app.include_router(tts_router)
 
     @app.websocket("/ws/agent")
     async def ws_agent(websocket: WebSocket):

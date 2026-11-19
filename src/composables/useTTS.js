@@ -11,6 +11,7 @@
  */
 import { reactive, ref } from 'vue'
 import { useAgentSocket } from './useAgentSocket'
+import * as ttsApi from '../api/tts'
 
 const api = typeof window !== 'undefined' ? window.electronAPI : null
 
@@ -27,11 +28,23 @@ export const ttsState = reactive({
   engine: 'web-speech',
   autoRead: false,
   voiceName: '',
+  gsvVoice: '',   // 本地引擎的音色名（voice.gsvVoice）
   rate: 1.0,
   pitch: 1.0,
   voices: [],     // 全部系统语音
   zhVoices: [],   // 中文语音
   ready: false,   // 是否至少检测到 1 个系统语音
+})
+
+// 本地引擎（GPT-SoVITS）状态，供设置页展示“准备中 / 可用 / 失败原因”
+export const localState = reactive({
+  available: false,
+  loading: false,
+  error: null,
+  device: null,
+  isCpu: false,
+  voice: null,
+  voices: [],     // [{ name, version, language, usable }]
 })
 
 // 当前正在朗读的消息 id（跨 tab 存活，供 UI 高亮播放按钮）
@@ -223,16 +236,134 @@ function speakUtterance(text, msgId) {
   return true
 }
 
+// ---------- 本地引擎（GPT-SoVITS）播放 ----------
+// 与 Web Speech 的关键差异：GPU 只能串行，必须一句播完再请求下一句。
+// 这里用「播放队列 + 提前一句预取」把合成的等待时间藏进上一句的播放时间里。
+
+function isLocalEngine() {
+  return ttsState.engine === 'local' || ttsState.engine === 'gpt-sovits'
+}
+
+let localQueue = []
+let localPlaying = false
+let localAudio = null
+let localAudioResolve = null
+const localAborters = new Set()
+let prefetchText = null
+let prefetchPromise = null
+
+function clearPrefetch() {
+  prefetchText = null
+  prefetchPromise = null
+}
+
+function requestAudio(text) {
+  const ctrl = new AbortController()
+  localAborters.add(ctrl)
+  return ttsApi
+    .say(text, { voice: ttsState.gsvVoice || undefined, signal: ctrl.signal })
+    .finally(() => localAborters.delete(ctrl))
+}
+
+function takeAudio(text) {
+  if (prefetchPromise && prefetchText === text) {
+    const p = prefetchPromise
+    clearPrefetch()
+    return p
+  }
+  return requestAudio(text)
+}
+
+function playBlobUrl(url) {
+  return new Promise((resolve) => {
+    const audio = new Audio(url)
+    const finish = () => {
+      try { URL.revokeObjectURL(url) } catch { /* ignore */ }
+      if (localAudio === audio) {
+        localAudio = null
+        localAudioResolve = null
+      }
+      resolve()
+    }
+    audio.onended = finish
+    audio.onerror = finish
+    localAudio = audio
+    localAudioResolve = finish
+    audio.play().catch(finish)
+  })
+}
+
+async function pumpLocal() {
+  if (localPlaying) return
+  localPlaying = true
+  try {
+    while (localQueue.length) {
+      const item = localQueue.shift()
+      let url
+      try {
+        url = await takeAudio(item.text)
+      } catch (err) {
+        if (err && err.name === 'AbortError') return   // stop() 主动取消
+        console.warn('[tts] 本地合成失败，跳过该句：', err && err.message)
+        continue
+      }
+      // 当前句播放期间，把下一句提前合成好
+      if (localQueue.length) {
+        prefetchText = localQueue[0].text
+        const p = requestAudio(prefetchText)
+        p.catch(() => {})   // 未被消费时避免 unhandledrejection
+        prefetchPromise = p
+      }
+      await playBlobUrl(url)
+      if (!localPlaying) return  // 播放期间被 stop 打断
+    }
+  } finally {
+    localPlaying = false
+    localQueue = []
+    clearPrefetch()
+    if (!localAudio) speaking.value = null
+  }
+}
+
+function enqueueLocal(text, msgId) {
+  if (!speaking.value) speaking.value = msgId || speaking.value
+  for (const c of splitIntoChunks(text || '')) localQueue.push({ text: c, msgId })
+  pumpLocal()
+}
+
+function stopLocal() {
+  localPlaying = false
+  localQueue = []
+  clearPrefetch()
+  for (const c of localAborters) {
+    try { c.abort() } catch { /* ignore */ }
+  }
+  localAborters.clear()
+  const audio = localAudio
+  const resolve = localAudioResolve
+  localAudio = null
+  localAudioResolve = null
+  if (audio) {
+    try { audio.pause() } catch { /* ignore */ }
+  }
+  if (resolve) resolve()
+}
+
 /** 按句/段入队朗读 */
 function enqueueSpeech(text, msgId) {
   const chunks = splitIntoChunks(text || '')
   if (!chunks.length) return
+  if (isLocalEngine()) {
+    enqueueLocal(text, msgId)
+    return
+  }
   if (!speaking.value) speaking.value = msgId || speaking.value
   for (const c of chunks) speakUtterance(c, msgId)
 }
 
 /** 停止所有朗读（手动停止/切换/新轮次打断） */
 export function stop() {
+  stopLocal()             // 本地引擎：清队列 + abort 在途请求 + 停当前音频
   cancelSpeech()
   clearSpeakTimers()
   pendingUtterances = 0
@@ -280,10 +411,35 @@ export async function loadConfig() {
     ttsState.engine = v.engine || 'web-speech'
     ttsState.autoRead = v.autoRead === true
     ttsState.voiceName = v.voiceName || ''
+    ttsState.gsvVoice = v.gsvVoice || ''
     ttsState.rate = clamp(v.rate, 0.1, 2, 1)
     ttsState.pitch = clamp(v.pitch, 0, 2, 1)
   } catch { /* ignore */ }
   refreshVoices()
+  if (isLocalEngine()) refreshLocalStatus()
+}
+
+/**
+ * 拉取本地引擎状态（是否就绪 / 正在加载 / 失败原因 / 可用音色）。
+ * 设置页在切到本地引擎、或在开启后轮询这里，用来显示“正在准备语音…”
+ */
+export async function refreshLocalStatus() {
+  try {
+    const st = await ttsApi.getStatus()
+    localState.available = !!st.available
+    localState.loading = !!st.loading
+    localState.error = st.error || null
+    localState.device = st.device || null
+    localState.isCpu = !!st.isCpu
+    localState.voice = st.voice || null
+    localState.voices = await ttsApi.listVoices()
+    if (!ttsState.gsvVoice && st.voice) ttsState.gsvVoice = st.voice
+  } catch (err) {
+    localState.available = false
+    localState.loading = false
+    localState.error = (err && err.message) || String(err)
+  }
+  return localState
 }
 
 /** 保存 voice.* 配置（部分更新） */
@@ -382,6 +538,7 @@ function onChatError(p) {
 }
 
 function speechCancelSilent() {
+  stopLocal()
   cancelSpeech()
   clearSpeakTimers()
   pendingUtterances = 0
@@ -409,6 +566,7 @@ export function useTTS() {
   ensureStarted()
   return {
     ttsState,
+    localState,
     speaking,
     loadConfig,
     saveConfig,
@@ -417,5 +575,7 @@ export function useTTS() {
     playMessage,
     stop,
     testVoice,
+    refreshLocalStatus,
+    isLocalEngine,
   }
 }

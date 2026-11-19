@@ -81,6 +81,9 @@
     "engine": "web-speech",
     "autoRead": false,
     "voiceName": "",
+    "gsvVoice": "",
+    "vendorDir": "",
+    "modelsDir": "",
     "rate": 1.0,
     "pitch": 1.0
   },

@@ -195,9 +195,54 @@
                 <label class="field-label" for="tts-engine">语音方案</label>
                 <select id="tts-engine" v-model="form.voiceEngine">
                   <option value="web-speech">Web Speech API（系统语音 · 无需 GPU）</option>
-                  <option value="local" disabled>本地 TTS（N 卡 ≥8GB，Phase 2 敬请期待）</option>
+                  <option value="local">本地 GPT-SoVITS（N 卡，音色更自然）</option>
                 </select>
-                <p class="field-hint">当前方案使用系统自带语音，无需显卡、零依赖；本地 TTS 将随 GPU 推理支持逐步开放。</p>
+                <p class="field-hint">系统语音零依赖但音色机械；本地引擎需要 NVIDIA 显卡，首次开启会先装依赖（约 300 MB）再下载模型（约 2 GB），之后常驻显存约 1.2 GB。</p>
+              </div>
+            </div>
+
+            <!-- 本地 GPT-SoVITS：模型按需下载（权重不进仓库，也不进安装包） -->
+            <div v-if="form.voiceEngine === 'local'" id="gsv-model" class="download-box">
+              <div class="download-text">
+                <div class="switch-title">本地音色模型</div>
+                <p class="field-hint">{{ gsvStatusText }}</p>
+              </div>
+              <div class="actions">
+                <template v-if="gsvDownload.state === 'running' || gsvDownload.state === 'cancelled'">
+                  <button class="btn" type="button" @click="gsvCancelDownload">取消下载</button>
+                  <span class="field-hint">
+                    {{ gsvDownload.percent }}%（{{ formatBytes(gsvDownload.doneBytes) }} / {{ formatBytes(gsvDownload.totalBytes) }}）
+                    <template v-if="gsvDownload.currentFile"> · {{ gsvDownload.currentFile }}</template>
+                  </span>
+                </template>
+                <template v-else-if="!gsvModelsReady">
+                  <button class="btn primary" type="button" @click="gsvStartDownload" :disabled="gsvLoading">
+                    <span v-if="gsvLoading" class="btn-spinner"></span>
+                    <span v-else class="btn-label"><AppIcon name="download" :size="14" />下载模型（约 2 GB）</span>
+                    <span v-if="gsvLoading">准备中…</span>
+                  </button>
+                  <span v-if="gsvDownload.state === 'failed'" class="bad-text field-hint">{{ gsvDownload.error }}</span>
+                </template>
+                <span v-else class="ok"><AppIcon name="check" :size="13" />模型已就绪</span>
+              </div>
+            </div>
+
+            <div v-if="form.voiceEngine === 'local'" class="sgroup">
+              <div class="field">
+                <label class="field-label" for="gsv-voice">本地音色</label>
+                <div class="inline-row">
+                  <select id="gsv-voice" v-model="form.voiceGsvVoice" class="voice-select">
+                    <option value="">跟随默认{{ gsvState.voice ? `（${gsvState.voice}）` : '' }}</option>
+                    <option v-for="v in gsvState.voices" :key="v.name" :value="v.name" :disabled="!v.usable">
+                      {{ v.name }}（{{ v.version || '?' }}{{ v.usable ? '' : ' · 缺参考音频' }}）
+                    </option>
+                  </select>
+                  <button class="btn" type="button" @click="gsvPreview" :disabled="!gsvState.available">
+                    <template v-if="speaking === 'voice-test'"><span class="eq"><i></i><i></i><i></i></span>试听中</template>
+                    <template v-else><AppIcon name="play" :size="13" />试听</template>
+                  </button>
+                </div>
+                <p class="field-hint">音色只是换参考音频，切换是毫秒级的，不会重新加载模型。</p>
               </div>
             </div>
 
@@ -1099,6 +1144,7 @@ import { useAgentSocket } from '../composables/useAgentSocket'
 import { useRestartState } from '../composables/useRestartState'
 import { useModelDownloadState } from '../composables/useModelDownloadState'
 import { useTTS } from '../composables/useTTS'
+import * as ttsApi from '../api/tts'
 import { useTheme } from '../composables/useTheme'
 import { downloadEmbeddingModel } from '../api/embeddingModelDownload'
 import { getRagHealth, getRebuildStatus, rebuildKbIndex } from '../api/kb'
@@ -1171,7 +1217,7 @@ function revealRagModel() {
 }
 
 // 语音朗读（TTS）：中文语音枚举、试听、配置刷新
-const { getZhVoices, testVoice, loadConfig: loadTtsConfig, ttsState, speaking } = useTTS()
+const { getZhVoices, testVoice, loadConfig: loadTtsConfig, ttsState, speaking, localState: gsvState, refreshLocalStatus, stop: ttsStop } = useTTS()
 
 // 模块级单例状态：切换 tab 导致组件卸载/重新挂载时，重启进度与提示不丢失
 const { restarting, restartDone, toast } = useRestartState()
@@ -1378,7 +1424,7 @@ const form = reactive({
   // dsh 子代理（顶层独立配置块 dsh.*）
   dshUseMainLlm: true, dshBaseUrl: '', dshApiKey: '', dshModel: '',
   dshSystemPrompt: '', dshMaxTokens: DSH_MAX_TOKENS_LIMIT, dshReasoningEffort: '',
-  voiceEnabled: false, voiceEngine: 'web-speech', voiceAutoRead: false,
+  voiceEnabled: false, voiceEngine: 'web-speech', voiceAutoRead: false, voiceGsvVoice: '',
   voiceVoiceName: '', voiceRate: 1, voicePitch: 1
 })
 
@@ -1484,6 +1530,110 @@ const voiceNoVoicesHint = computed(() => {
 // 试听是否进行中（useTTS 播放 voice-test 时置位，播完/停止后复位）
 const testingVoice = computed(() => speaking.value === 'voice-test')
 
+// ---- 本地 GPT-SoVITS：模型按需下载（权重不进仓库，也不进安装包） ----
+const gsvDownload = reactive({ state: 'idle', percent: 0, doneBytes: 0, totalBytes: 0, currentFile: '', error: null, installedDeps: false })
+const gsvModelsReady = ref(true)
+const gsvLoading = ref(false)
+let gsvTimer = null
+
+const gsvStatusText = computed(() => {
+  if (gsvLoading.value) return '正在检查并安装依赖（首次约 300 MB，请耐心等待）…'
+  if (gsvDownload.installedDeps) return '依赖已安装完成，但后端仍在使用旧环境——请点右上角「重启」后再试听。'
+  if (gsvDownload.state === 'running') return '正在下载模型，请保持网络畅通；完成后会自动准备语音引擎。'
+  if (gsvDownload.state === 'failed') return `下载失败：${gsvDownload.error || '未知错误'}`
+  if (!gsvModelsReady.value) return '首次使用需先安装依赖、再下载基础模型（约 2 GB），完成后才能启用本地音色。'
+  if (gsvState.loading) return '模型已就绪，语音引擎正在加载（首次约 30 秒）…'
+  if (gsvState.error) return `语音引擎不可用：${gsvState.error}`
+  if (gsvState.isCpu) return '未检测到可用显卡，已自动切换为 CPU 推理：能用，但速度约为显卡的 1/3，长句会有明显等待。'
+  if (gsvState.available) return `语音引擎已就绪（${gsvState.device || 'cuda'}），当前音色 ${gsvState.voice || '-'}。`
+  return '模型已就绪，语音引擎尚未加载（保存并重启后端后自动加载）。'
+})
+
+function stopGsvTimer() {
+  if (gsvTimer) {
+    clearInterval(gsvTimer)
+    gsvTimer = null
+  }
+}
+
+async function gsvPollStatus() {
+  try {
+    const st = await ttsApi.downloadStatus()
+    Object.assign(gsvDownload, {
+      state: st.state || 'idle',
+      percent: st.percent || 0,
+      doneBytes: st.doneBytes || 0,
+      totalBytes: st.totalBytes || 0,
+      currentFile: st.currentFile || '',
+      error: st.error || null,
+    })
+    gsvModelsReady.value = !(st.missingModels && st.missingModels.length)
+    if (['done', 'failed', 'cancelled'].includes(gsvDownload.state)) stopGsvTimer()
+  } catch {
+    /* 后端未就绪时静默 */
+  }
+}
+
+async function gsvRefresh() {
+  await gsvPollStatus()
+  if (gsvDownload.state === 'running' && !gsvTimer) gsvTimer = setInterval(gsvPollStatus, 1000)
+  await refreshLocalStatus()
+}
+
+async function gsvStartDownload() {
+  gsvLoading.value = true
+  gsvDownload.error = null
+  try {
+    // 第一步：确保 Python 依赖。TTS 依赖体积大、且带版本约束，
+    // 所以不在应用启动时装，只在用户真正启用本地语音时装一次。
+    const dep = await api.ensureTtsDeps?.()
+    if (dep && dep.success === false) {
+      gsvDownload.state = 'failed'
+      gsvDownload.error = `依赖安装失败：${dep.message || '未知错误'}`
+      return
+    }
+    if (dep && dep.installed) {
+      // pip 刚装完，当前后端进程用的还是旧环境，必须重启后才生效
+      gsvDownload.installedDeps = true
+    }
+    // 第二步：下载模型
+    await ttsApi.startDownload()
+    await gsvPollStatus()
+    if (gsvDownload.state === 'running' && !gsvTimer) gsvTimer = setInterval(gsvPollStatus, 1000)
+  } catch (e) {
+    gsvDownload.state = 'failed'
+    gsvDownload.error = (e && e.message) || String(e)
+  } finally {
+    gsvLoading.value = false
+  }
+}
+
+async function gsvCancelDownload() {
+  try {
+    await ttsApi.cancelDownload()
+  } catch {
+    /* ignore */
+  }
+  await gsvPollStatus()
+}
+
+function gsvPreview() {
+  if (speaking.value === 'voice-test') {
+    ttsStop()
+    return
+  }
+  // 试听走本地引擎：临时切换播放引擎，配置未保存也能试
+  ttsState.engine = 'local'
+  ttsState.gsvVoice = form.voiceGsvVoice || ''
+  testVoice('你好，我是本地语音引擎，现在用的是你自己的显卡。')
+}
+
+watch(() => form.voiceEngine, (v) => {
+  if (v === 'local') gsvRefresh()
+})
+
+onBeforeUnmount(() => stopGsvTimer())
+
 function voicePreview() {
   const ok = testVoice('喵～本喵就是这么可爱！', {
     voiceName: form.voiceVoiceName,
@@ -1527,6 +1677,7 @@ async function loadConfig() {
   // 语音朗读（TTS）
   form.voiceEnabled = cfg.voice?.enabled === true
   form.voiceEngine = cfg.voice?.engine || 'web-speech'
+  form.voiceGsvVoice = cfg.voice?.gsvVoice || ''
   form.voiceAutoRead = cfg.voice?.autoRead === true
   form.voiceVoiceName = cfg.voice?.voiceName || ''
   form.voiceRate = cfg.voice?.rate ?? 1
@@ -1852,6 +2003,7 @@ async function saveAll() {
     // 语音朗读（TTS）
     { path: 'voice.enabled', value: !!form.voiceEnabled },
     { path: 'voice.engine', value: form.voiceEngine || 'web-speech' },
+      { path: 'voice.gsvVoice', value: form.voiceGsvVoice || '' },
     { path: 'voice.autoRead', value: !!form.voiceAutoRead },
     { path: 'voice.voiceName', value: form.voiceVoiceName },
     { path: 'voice.rate', value: Number(form.voiceRate) || 1 },

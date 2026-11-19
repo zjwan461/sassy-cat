@@ -43,6 +43,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAgentInfo: () => ipcRenderer.invoke('get-agent-info'),
   restartAgent: () => ipcRenderer.invoke('agent:restart'),
 
+  // 本地语音依赖按需安装（启用本地 GPT-SoVITS 时调用，不阻塞启动）
+  ensureTtsDeps: () => ipcRenderer.invoke('tts:ensure-deps'),
+
   // 快速提问全局快捷键注册状态
   getShortcutStatus: () => ipcRenderer.invoke('shortcut:status'),
 

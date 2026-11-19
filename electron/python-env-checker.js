@@ -159,24 +159,29 @@ class PythonEnvChecker extends EventEmitter {
 
   /**
    * 检查依赖是否已安装
+   * @param {string} requirementsFile 相对 assets 根的 requirements 文件名（默认 requirements.txt）
    */
-  checkDependenciesInstalled() {
+  checkDependenciesInstalled(requirementsFile = 'requirements.txt') {
     return new Promise((resolve) => {
       const pythonPath = this.getPythonPath();
-      const requirementsPath = this.getAssetPath('requirements.txt');
+      const requirementsPath = this.getAssetPath(requirementsFile);
       
-      this.emit('log', '检查依赖安装状态...');
+      this.emit('log', `检查依赖安装状态(${requirementsFile})...`);
       
       if (!fs.existsSync(requirementsPath)) {
-        this.emit('log', '❌ requirements.txt 不存在');
+        this.emit('log', `❌ ${requirementsFile} 不存在`);
         resolve(false);
         return;
       }
 
+      // 只取包名部分：去掉环境标记（`;` 之后）与版本约束
       const requirements = fs.readFileSync(requirementsPath, 'utf-8')
         .split('\n')
         .map(line => line.trim())
-        .filter(line => line && !line.startsWith('#'));
+        .filter(line => line && !line.startsWith('#'))
+        .filter(line => !line.startsWith('-'))          // 跳过 --index-url / -r 之类
+        .map(line => line.split(';')[0].trim())          // 去掉 platform markers
+        .filter(Boolean);
 
       if (requirements.length === 0) {
         this.emit('log', '✅ requirements.txt 为空，无需安装依赖');
@@ -254,13 +259,14 @@ class PythonEnvChecker extends EventEmitter {
 
   /**
    * 安装依赖
+   * @param {string} requirementsFile 相对 assets 根的 requirements 文件名（默认 requirements.txt）
    */
-  installDependencies() {
+  installDependencies(requirementsFile = 'requirements.txt') {
     return new Promise((resolve, reject) => {
       const pythonPath = this.getPythonPath();
-      const requirementsPath = this.getAssetPath('requirements.txt');
+      const requirementsPath = this.getAssetPath(requirementsFile);
 
-      this.emit('log', '开始安装依赖...');
+      this.emit('log', `开始安装依赖(${requirementsFile})...`);
       this.emit('progress', '正在安装Python依赖...');
 
       const pipProcess = spawn(pythonPath, ['-m', 'pip', 'install', '-r', requirementsPath], {
@@ -298,6 +304,41 @@ class PythonEnvChecker extends EventEmitter {
         reject(err);
       });
     });
+  }
+
+  /**
+   * 按需安装某个可选依赖清单（例如启用本地语音时才装的 TTS 依赖）。
+   *
+   * 与启动流程的区别：这里不阻塞应用启动，由用户在设置页主动触发。
+   * 已安装则秒返回；缺失则跑一次 `pip install -r`。
+   *
+   * @param {string} requirementsFile 相对 assets 根的路径，如 'python/tts/requirements-tts.txt'
+   * @returns {Promise<{success:boolean, installed:boolean, message:string}>}
+   */
+  async ensureOptionalRequirements(requirementsFile) {
+    try {
+      const requirementsPath = this.getAssetPath(requirementsFile);
+      if (!fs.existsSync(requirementsPath)) {
+        return { success: false, installed: false, message: `找不到 ${requirementsFile}` };
+      }
+
+      const installed = await this.checkDependenciesInstalled(requirementsFile);
+      if (installed) {
+        this.emit('log', `✅ ${requirementsFile} 依赖已就绪`);
+        return { success: true, installed: false, message: '依赖已就绪' };
+      }
+
+      this.emit('log', `检测到缺失依赖，开始安装 ${requirementsFile}`);
+      await this.installDependencies(requirementsFile);
+      return {
+        success: true,
+        installed: true,
+        message: '依赖安装完成，建议重启后端后再启用语音',
+      };
+    } catch (err) {
+      this.emit('log', `❌ 安装可选依赖失败: ${err.message}`);
+      return { success: false, installed: false, message: err.message || String(err) };
+    }
   }
 
   /**

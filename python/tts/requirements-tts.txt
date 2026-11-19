@@ -1,5 +1,9 @@
 # GPT-SoVITS inference dependencies (in-process integration, Python 3.11)
 #
+# These are the *Python packages* the vendored inference code needs.
+# (Pruning vendor/gpt-sovits removed training/WebUI/export *source*, but the
+#  third-party packages below are still required.)
+#
 # STEP 1 - install PyTorch first, from the cu128 index.
 #          PyPI wheels are CPU-only and will fail on RTX 50 series (sm_120).
 #
@@ -13,9 +17,20 @@
 #
 #     pip install -r python/tts/requirements-tts.txt
 #
-# This is the inference-only subset of the upstream GPT-SoVITS requirements.txt.
-# Training, WebUI, ASR and export tooling are intentionally omitted.
-# If upstream changes and something is missing, the repo's requirements.txt wins.
+# STEP 3 - non-pip data resources (NOT installable via pip, see docs section 8.1):
+#          * pyopenjtalk >= 0.4 does NOT bundle its dictionary. Without it the
+#            Japanese frontend tries to download 102 MB at first use and HANGS
+#            on offline/proxied machines. Ship open_jtalk_dic_utf_8-1.11 or set
+#            OPEN_JTALK_DICT_DIR.
+#          * g2p_en needs nltk data: taggers/averaged_perceptron_tagger(_eng)
+#            and corpora/cmudict. Missing data makes nltk download silently.
+#          Both are pre-checked at runtime by the adapter; it skips the language
+#          with a warning instead of hanging.
+#
+# NOTE on version pins: numpy<2.0 and transformers<=4.50 are required by the
+# upstream inference code. If your app already uses sentence-transformers>=6
+# (which needs transformers>=5), the two cannot share one environment - verify
+# RAG before/after, or fall back to a separate process for TTS.
 
 # ---- core numeric / audio ----
 numpy<2.0
@@ -25,7 +40,7 @@ numba
 soundfile
 resampy
 
-# ---- model + training framework (needed to load the GPT / s1 weights) ----
+# ---- model framework (needed to load the GPT / s1 weights) ----
 pytorch-lightning>=2.4
 torchmetrics<=1.5
 transformers>=4.43,<=4.50
@@ -34,12 +49,14 @@ safetensors
 huggingface-hub
 sentencepiece
 einops
-rotary_embedding_torch
-x_transformers
 
 # ---- ONNX runtime (required by text/g2pw for Chinese polyphone resolution) ----
 onnxruntime-gpu ; platform_system == "Windows" and (platform_machine == "AMD64" or platform_machine == "x86_64")
 onnxruntime     ; platform_system != "Windows" or (platform_machine != "AMD64" and platform_machine != "x86_64")
+
+# ---- REQUIRED: imported by GPT_SoVITS/utils.py, AR/modules/lr_schedulers.py
+#      and BigVGAN/utils0.py, i.e. on the normal load path ----
+matplotlib
 
 # ---- text frontend: Chinese ----
 cn2an
@@ -48,6 +65,7 @@ jieba
 jieba_fast
 wordsegment
 g2p_en
+nltk                    # g2p_en's POS tagger / cmudict (data must be present, see STEP 3)
 split-lang
 fast_langdetect>=0.3.1
 chardet
@@ -72,8 +90,13 @@ tqdm
 ffmpeg-python
 pydantic<=2.10.6
 
+# ---- only needed when loading v3 / v4 checkpoints ----
+# rotary_embedding_torch
+# x_transformers
+# (v2 / v2Pro / v2ProPlus inference does not import them; verified by tracing
+#  sys.modules during a real synthesis run)
+
 # ---- optional (install only if an ImportError asks for it) ----
-# matplotlib          # used by stream_v2pro.py and a few standalone tools
 # tensorboard         # training only
 # gradio<5            # WebUI only
 # fastapi[standard]   # HTTP API mode only; not needed for in-process use

@@ -665,6 +665,13 @@ function updateTrayMenu() {
 }
 
 // IPC处理程序
+// 本地语音（GPT-SoVITS）依赖按需安装：只有用户在设置页启用本地语音时才调用，
+// 不阻塞应用启动。返回 { success, installed, message }。
+ipcMain.handle('tts:ensure-deps', async () => {
+  if (!envChecker) return { success: false, installed: false, message: 'Python 环境尚未就绪' };
+  return envChecker.ensureOptionalRequirements('python/tts/requirements-tts.txt');
+});
+
 ipcMain.handle('get-status', () => {
   return { running: isRunning };
 });

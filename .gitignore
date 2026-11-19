@@ -42,3 +42,22 @@ runtime/skills/jarvis*
 runtime/skills/comfyui*
 .cospec
 code-review_result
+
+# ---- 语音模型（GPT-SoVITS）----
+# 代码可以进仓库，权重一律不进。模型在用户开启本地语音时按需下载，
+# 落在用户数据目录（Electron userData），不放在仓库里。
+vendor/gpt-sovits/GPT_weights*/
+vendor/gpt-sovits/SoVITS_weights*/
+vendor/gpt-sovits/GPT_SoVITS/pretrained_models/
+vendor/gpt-sovits/GPT_SoVITS/text/G2PWModel/
+vendor/gpt-sovits/GPT_SoVITS/text/ja_userdic/
+vendor/gpt-sovits/参考音频/
+vendor/gpt-sovits/ref_audio/
+python/tts/models/
+*.pth
+*.ckpt
+*.safetensors
+# 单个 .bin/.pt 有可能是合法小文件，所以只按目录排除；如确需跟踪请用 ! 显式放行
+vendor/gpt-sovits/**/*.bin
+vendor/gpt-sovits/**/*.pt
+vendor/gpt-sovits/**/*.onnx

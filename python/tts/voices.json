@@ -14,6 +14,8 @@
 
   "schema_version": 2,
   "vendor_dir": null,
+  "models_dir": null,
+  "endpoint": "https://huggingface.co",
   "default_voice": "tangyuge_calm",
 
   "voices": {
@@ -119,6 +121,90 @@
       "_note": "v1 模型，效果弱于 v2ProPlus；非商用"
     }
   },
+
+  "base_models": [
+    {
+      "id": "base-models",
+      "title": "GPT-SoVITS 基础模型（推理必需：HuBERT + BERT + SV）",
+      "repo": "lj1995/GPT-SoVITS",
+      "homepage": "https://huggingface.co/lj1995/GPT-SoVITS",
+      "license": "mit",
+      "required": true,
+      "files": [
+        {
+          "local": "GPT_SoVITS/pretrained_models/chinese-hubert-base/config.json",
+          "remote": "chinese-hubert-base/config.json",
+          "size": 1449
+        },
+        {
+          "local": "GPT_SoVITS/pretrained_models/chinese-hubert-base/preprocessor_config.json",
+          "remote": "chinese-hubert-base/preprocessor_config.json",
+          "size": 212
+        },
+        {
+          "local": "GPT_SoVITS/pretrained_models/chinese-hubert-base/pytorch_model.bin",
+          "remote": "chinese-hubert-base/pytorch_model.bin",
+          "size": 188811417
+        },
+        {
+          "local": "GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large/config.json",
+          "remote": "chinese-roberta-wwm-ext-large/config.json",
+          "size": 963
+        },
+        {
+          "local": "GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large/pytorch_model.bin",
+          "remote": "chinese-roberta-wwm-ext-large/pytorch_model.bin",
+          "size": 651225145
+        },
+        {
+          "local": "GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large/tokenizer.json",
+          "remote": "chinese-roberta-wwm-ext-large/tokenizer.json",
+          "size": 268962
+        },
+        {
+          "local": "GPT_SoVITS/pretrained_models/sv/pretrained_eres2netv2w24s4ep4.ckpt",
+          "remote": "sv/pretrained_eres2netv2w24s4ep4.ckpt",
+          "size": 107528697
+        }
+      ]
+    },
+    {
+      "id": "g2pw",
+      "title": "中文多音字模型 G2PW（中文必需）",
+      "repo": "XXXXRT/GPT-SoVITS-Pretrained",
+      "homepage": "https://huggingface.co/XXXXRT/GPT-SoVITS-Pretrained",
+      "license": "unknown",
+      "required": true,
+      "files": [
+        {
+          "local": "GPT_SoVITS/text/G2PWModel",
+          "remote": "G2PWModel.zip",
+          "size": 588856634,
+          "unzip": true
+        }
+      ]
+    },
+    {
+      "id": "base-voice-v2proplus",
+      "title": "v2ProPlus 底模（可选：不训练直接零样本克隆用）",
+      "repo": "lj1995/GPT-SoVITS",
+      "homepage": "https://huggingface.co/lj1995/GPT-SoVITS",
+      "license": "mit",
+      "required": false,
+      "files": [
+        {
+          "local": "GPT_SoVITS/pretrained_models/s1v3.ckpt",
+          "remote": "s1v3.ckpt",
+          "size": 155284856
+        },
+        {
+          "local": "GPT_SoVITS/pretrained_models/v2Pro/s2Gv2ProPlus.pth",
+          "remote": "v2Pro/s2Gv2ProPlus.pth",
+          "size": 200125741
+        }
+      ]
+    }
+  ],
 
   "sources": [
     {

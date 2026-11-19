@@ -127,23 +127,18 @@ def _guess_project_root() -> Path:
 
 
 def _default_vendor_dir() -> Path:
-    """vendor 目录查找顺序。
+    """GPT-SoVITS **代码**目录的默认位置：``<项目根>/vendor/gpt-sovits``。
 
-    1. 环境变量 ``GSV_VENDOR_DIR``
-    2. 打包后的 ``<root>/vendor/gpt-sovits``
-    3. 开发机上的同级仓库 ``<root>/../GPT-SoVITS-v2pro-*``（按名字前缀匹配）
+    刻意**不做同级目录探测**——代码随仓库分发，路径必须可预期：
+
+    1. 显式传入（来自 config.json 的 ``voice.vendorDir``）
+    2. 环境变量 ``GSV_VENDOR_DIR``（仅用于临时调试）
+    3. ``<项目根>/vendor/gpt-sovits``
     """
     env = os.environ.get("GSV_VENDOR_DIR")
     if env:
         return Path(env)
-    root = _guess_project_root()
-    packaged = root / "vendor" / "gpt-sovits"
-    if packaged.is_dir():
-        return packaged
-    for cand in sorted(root.parent.glob("GPT-SoVITS-v*")):
-        if (cand / "GPT_SoVITS").is_dir():
-            return cand
-    return packaged  # 不存在，交给调用方报错
+    return _guess_project_root() / "vendor" / "gpt-sovits"
 
 
 # ---------------------------------------------------------------------------
@@ -186,14 +181,33 @@ class Voice:
         )
 
 
-def load_voice_config(config_path: str | os.PathLike[str]) -> Tuple[Path, Dict[str, Voice], str]:
-    """读取 voices.json，返回 (vendor_dir, {名字: Voice}, 默认音色名)。"""
+def load_voice_config(
+    config_path: str | os.PathLike[str],
+    vendor_dir: str | os.PathLike[str] | None = None,
+    models_dir: str | os.PathLike[str] | None = None,
+) -> Tuple[Path, Path, Dict[str, Voice], str]:
+    """读取 voices.json。
+
+    返回 ``(vendor_dir, models_dir, {名字: Voice}, 默认音色名)``。
+
+    - ``vendor_dir``：GPT-SoVITS **代码**目录（随仓库分发）
+    - ``models_dir``：**权重**目录（默认等于 vendor_dir；正式运行时由
+      ``config.json`` 的 ``voice.modelsDir`` 指向用户数据目录）
+
+    目录优先级：**显式参数（config.json）> voices.json 字段 > 环境变量 > 默认值**。
+    """
     cfg_path = Path(config_path)
     raw = json.loads(cfg_path.read_text(encoding="utf-8"))
-    vendor = Path(raw.get("vendor_dir") or _default_vendor_dir())
-    voices = {name: Voice.from_dict(name, d, vendor) for name, d in raw.get("voices", {}).items()}
+    vendor = Path(vendor_dir or raw.get("vendor_dir") or _default_vendor_dir())
+    models = Path(
+        models_dir
+        or raw.get("models_dir")
+        or os.environ.get("GSV_MODELS_DIR")
+        or vendor
+    )
+    voices = {name: Voice.from_dict(name, d, models) for name, d in raw.get("voices", {}).items()}
     default = raw.get("default_voice") or (next(iter(voices)) if voices else "")
-    return vendor, voices, default
+    return vendor, models, voices, default
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +258,254 @@ def check_runtime() -> Dict[str, Any]:
     return info
 
 
+def _merge_conflicting_utils(gpt_dir: Path) -> None:
+    """解决顶层模块名 ``utils`` 的冲突。
+
+    GPT-SoVITS 的权重里 pickle 存的是 ``utils.HParams``（``GPT_SoVITS/utils.py``），
+    而 sassy-cat 自己的后端也有一个顶层 ``utils.py``（``python/utils.py``）。
+    在完整后端进程里，应用先 import 了 ``utils``，于是 ``sys.modules["utils"]`` 指向
+    应用那份，``torch.load`` 反序列化时报：
+
+        AttributeError: Can't get attribute 'HParams' on <module 'utils' from 'python\\utils.py'>
+
+    处理办法：把 GPT 的 utils 提升为 ``sys.modules["utils"]``，同时把应用 utils 里
+    **不冲突**的符号并入，避免应用侧后续 ``import utils`` 拿到残缺模块。
+
+    注意：应用里已经 `import utils` 过的地方持有的是**旧模块对象的引用**，不受影响。
+    """
+    app_utils = sys.modules.get("utils")
+    gpt_utils_path = (gpt_dir / "utils.py").resolve()
+
+    current = getattr(app_utils, "__file__", None)
+    if current and Path(current).resolve() == gpt_utils_path:
+        return  # 已经是 GPT 的，无需处理
+
+    sys.modules.pop("utils", None)
+    if str(gpt_dir) not in sys.path:
+        sys.path.insert(0, str(gpt_dir))
+    try:
+        import importlib
+
+        gpt_utils = importlib.import_module("utils")
+    except Exception:  # noqa: BLE001 退回到原状，别把应用搞坏
+        if app_utils is not None:
+            sys.modules["utils"] = app_utils
+        logger.warning("无法加载 GPT-SoVITS 的 utils，权重反序列化可能失败", exc_info=True)
+        return
+
+    if app_utils is not None and app_utils is not gpt_utils:
+        for name in dir(app_utils):
+            if name.startswith("__"):
+                continue
+            if not hasattr(gpt_utils, name):
+                try:
+                    setattr(gpt_utils, name, getattr(app_utils, name))
+                except Exception:  # noqa: BLE001
+                    pass
+        logger.info(
+            "检测到顶层模块名冲突：应用与 GPT-SoVITS 各有一个 utils.py，"
+            "已把 GPT 的 utils 设为 sys.modules['utils'] 并合并应用侧符号"
+        )
+    # importlib 已把 gpt_utils 放进 sys.modules["utils"]
+
+
+def _patch_g2pw_model_dir(models_dir: Path) -> None:
+    """把 g2pw 的**相对** model_dir 重定向到 ``models_dir``。
+
+    ``text/chinese2.py`` 在 import 时构造：``G2PWPinyin(model_dir="GPT_SoVITS/text/G2PWModel")``，
+    这个相对路径按 cwd 解析。我们不想让代码目录承担可写职责（装到 Program Files 就不可写了），
+    所以在 g2pw 的加载函数入口把相对路径改写到 models_dir 下。
+
+    必须是**单点改写**：``G2PWOnnxConverter.__init__`` 通过模块全局名调用该函数，
+    改模块属性即可生效，且无需改上游源码。
+    """
+    try:
+        import text.g2pw.onnx_api as g2pw_api
+    except Exception:  # noqa: BLE001
+        logger.debug("未找到 text.g2pw.onnx_api，跳过 G2PW 路径改写", exc_info=True)
+        return
+
+    orig = getattr(g2pw_api, "download_and_decompress", None)
+    if orig is None or getattr(orig, "_gptsovits_redirected", False):
+        return
+
+    def _redirected(model_dir: str = "G2PWModel/") -> str:
+        path = Path(model_dir)
+        if not path.is_absolute():
+            path = models_dir / path
+        return orig(str(path))
+
+    _redirected._gptsovits_redirected = True  # type: ignore[attr-defined]
+    g2pw_api.download_and_decompress = _redirected  # type: ignore[assignment]
+    logger.debug("g2pw model_dir 相对路径将重定向到 %s", models_dir)
+
+
+def _patch_hardcoded_paths(models_dir: Path) -> None:
+    """修正上游写死的相对权重路径。
+
+    上游有几处把权重路径钉在**代码目录**下（而不是 cwd，也不是配置项）：
+    1. ``GPT_SoVITS/sv.py``：``sv_path = "GPT_SoVITS/pretrained_models/sv/..."``
+    2. ``GPT_SoVITS/text/LangSegmenter/langsegmenter.py``：用 ``__file__`` 反推 fast_langdetect 目录
+    3. ``GPT_SoVITS/text/chinese2.py``：g2pw 的 ``model_dir`` 是相对路径（按 cwd 解析）
+
+    我们把“代码”和“权重”拆成两个目录后，这些都会指错。这里在**不改上游源码、
+    不依赖软链接**的前提下把路径改指到 ``models_dir``。
+    """
+    pretrained = models_dir / "GPT_SoVITS" / "pretrained_models"
+
+    # 0) G2PW：必须最先做，因为下面 import LangSegmenter 可能间接触发中文前端初始化
+    _patch_g2pw_model_dir(models_dir)
+
+    # 1) SV 权重
+    target = pretrained / "sv" / "pretrained_eres2netv2w24s4ep4.ckpt"
+    try:
+        import sv as sv_module  # type: ignore
+
+        if hasattr(sv_module, "sv_path"):
+            sv_module.sv_path = str(target)
+            logger.debug("sv.sv_path -> %s", target)
+    except Exception:  # noqa: BLE001 没有这个模块也不该阻塞（v1 用不到 SV）
+        logger.debug("未能改写 sv.sv_path（可忽略）", exc_info=True)
+
+    # 2) fast_langdetect 缓存目录
+    try:
+        # 先显式 import 一次：它 import 时会把 _default_detector 覆盖成代码目录下的路径，
+        # 我们必须在这个副作用之后再改，否则等于没改。
+        import text.LangSegmenter.langsegmenter  # noqa: F401
+
+        import fast_langdetect.infer as fl_infer
+
+        cache = pretrained / "fast_langdetect"
+        if cache.is_dir():
+            fl_infer._default_detector = fl_infer.LangDetector(  # type: ignore[attr-defined]
+                fl_infer.LangDetectConfig(cache_dir=cache)
+            )
+            logger.debug("fast_langdetect cache_dir -> %s", cache)
+        else:
+            logger.warning("缺少 fast_langdetect 模型目录: %s（auto 语种检测将不可用）", cache)
+    except Exception:  # noqa: BLE001
+        logger.debug("未能改写 fast_langdetect 缓存目录（可忽略）", exc_info=True)
+
+
+def _patch_torchaudio_load() -> bool:
+    """让 ``torchaudio.load`` 在没有 torchcodec 的环境下也能用。
+
+    torchaudio >= 2.9 把 ``torchaudio.load`` 改成了 TorchCodec 实现，而 TorchCodec
+    在 Windows 上还需要额外的 FFmpeg 动态库，属于"能装但很脆"的依赖。
+
+    GPT-SoVITS 只用它来读参考音频（``TTS.py:773`` 一行），格式都是 wav。
+    这里用 soundfile 提供一个等价实现，避免引入 torchcodec。
+
+    返回 True 表示打了补丁。
+    """
+    try:
+        import torchaudio
+    except Exception:
+        return False
+    try:
+        import torchcodec  # noqa: F401
+
+        return False  # 有 torchcodec，用官方实现
+    except Exception:
+        pass
+    try:
+        import soundfile as sf
+        import torch
+    except Exception:
+        return False
+
+    def _load_with_soundfile(path, **kwargs):  # noqa: ANN001, ANN003
+        data, sr = sf.read(str(path), dtype="float32", always_2d=True)
+        return torch.from_numpy(data.T.copy()), sr
+
+    torchaudio.load = _load_with_soundfile  # type: ignore[assignment]
+    logger.debug("已用 soundfile 补齐 torchaudio.load（torchaudio>=2.9 需要 torchcodec）")
+    return True
+
+
+def _nltk_en_available() -> bool:
+    """判断英文前端依赖的 nltk 数据是否已在本地。
+
+    ``g2p_en`` 会调用 nltk 的 POS 标注器和 cmudict；缺失时 nltk 会**自动联网下载**
+    （在离线/代理受限环境下会卡住而不是报错）。所以预热前必须先确认。
+    新旧 nltk 的词性标注器名字不同，两个都认。
+    """
+    try:
+        import nltk
+    except Exception:
+        return False
+    have_tagger = False
+    for name in ("taggers/averaged_perceptron_tagger_eng", "taggers/averaged_perceptron_tagger"):
+        try:
+            nltk.data.find(name)
+            have_tagger = True
+            break
+        except Exception:
+            continue
+    if not have_tagger:
+        return False
+    try:
+        nltk.data.find("corpora/cmudict")
+    except Exception:
+        return False
+    return True
+
+
+def _tune_cpu_threads() -> int:
+    """CPU 推理时限制线程数，给 UI/主流程留一个核。
+
+    可用 ``GSV_CPU_THREADS`` 覆盖（例如用户机器核数很多、想让 TTS 用满）。
+    """
+    import torch
+
+    env = os.environ.get("GSV_CPU_THREADS", "").strip()
+    if env.isdigit() and int(env) > 0:
+        n = int(env)
+    else:
+        n = max(1, (os.cpu_count() or 4) - 1)
+    try:
+        torch.set_num_threads(n)
+    except Exception:  # pragma: no cover
+        pass
+    return n
+
+
+def _resolve_device(requested: str, cuda_ok: bool) -> str:
+    """把用户请求的设备解析成实际可用设备。
+
+    ``auto`` → 有 CUDA 用 cuda，否则 cpu；显式要 cuda 但环境没有 → **自动回落 cpu**
+    （这是给没有独显的用户兜底，而不是直接报错）。
+    """
+    req = (requested or "auto").strip().lower()
+    if req == "auto":
+        return "cuda" if cuda_ok else "cpu"
+    if req.startswith("cuda") and not cuda_ok:
+        logger.warning("请求了 CUDA 但当前环境不可用，自动回落到 CPU 推理（速度约为 GPU 的 1/3~1/4）")
+        return "cpu"
+    return req
+
+
+def _open_jtalk_dict_available() -> bool:
+    """判断 pyopenjtalk 的词典是否已在本地。
+
+    pyopenjtalk 0.4.x 起不再内置词典，第一次调用日文前端时会去 GitHub 下载
+    ``open_jtalk_dic_utf_8-1.11.tar.gz``（约 102 MB）。在离线或代理受限的环境下
+    这个下载会**阻塞而不抛异常**，表现为程序卡死。所以预热前必须先确认。
+    """
+    env = os.environ.get("OPEN_JTALK_DICT_DIR")
+    if env:
+        return Path(env).is_dir()
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("pyopenjtalk")
+        if spec is None or not spec.origin:
+            return False
+        return (Path(spec.origin).parent / "open_jtalk_dic_utf_8-1.11").is_dir()
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # 引擎
 # ---------------------------------------------------------------------------
@@ -256,14 +518,15 @@ class TTSEngine:
         self,
         vendor_dir: str | os.PathLike[str],
         voice: Voice,
-        device: str = "cuda",
+        models_dir: str | os.PathLike[str] | None = None,
+        device: str = "auto",
         is_half: Optional[bool] = None,
         warmup: bool = True,
         warmup_text: str = "准备完成。",
     ) -> None:
         self.vendor_dir = Path(vendor_dir)
+        self.models_dir = Path(models_dir) if models_dir else self.vendor_dir
         self.voice = voice
-        self.device = device
         self.warmup = warmup
         self.warmup_text = warmup_text
 
@@ -274,10 +537,18 @@ class TTSEngine:
         self._cwd_lock = threading.RLock()
 
         self.runtime_info = check_runtime()
+        cuda_ok = bool(self.runtime_info.get("cuda_available"))
+        # 没有 CUDA 时自动用 CPU（而不是抛错）；显式 device="cuda" 也走同一条回落路径
+        self.device = _resolve_device(device, cuda_ok)
         if is_half is None:
-            is_half = self.runtime_info["cuda_available"]
-        if device == "cpu":
-            is_half = False                    # CPU 不支持 half
+            is_half = cuda_ok and self.device.startswith("cuda")
+        if self.device.startswith("cpu"):
+            is_half = False                    # CPU 不支持 fp16
+            self.cpu_threads = _tune_cpu_threads()
+            self.runtime_info["cpu_threads"] = self.cpu_threads
+            logger.warning("本地 TTS 使用 CPU 推理（%d 线程），速度明显低于 GPU", self.cpu_threads)
+        else:
+            self.cpu_threads = 0
         self.is_half = bool(is_half)
 
         self.load(voice)
@@ -312,11 +583,30 @@ class TTSEngine:
         except Exception as e:  # pragma: no cover
             logger.warning("文本前端导入失败，中文合成可能受限: %s", e)
             return
-        for text, lang in (("预热。", "zh"), ("ウォームアップ。", "ja"), ("warm up.", "en")):
+        targets = [("预热。", "zh")]
+        # 英文：g2p_en 依赖 nltk 数据，缺失会触发联网下载并挂住
+        if _nltk_en_available():
+            targets.append(("warm up.", "en"))
+        else:
+            logger.warning(
+                "未找到 nltk 数据（averaged_perceptron_tagger / cmudict），跳过英文预热。"
+                "解决办法：把 nltk_data 放到包的 nltk_data 目录，或设置 NLTK_DATA 环境变量。"
+            )
+        # 日文要单独判断：pyopenjtalk >=0.4 不内置词典，缺失时会**联网下载 102MB**，
+        # 在离线/代理环境下会直接挂住（不抛异常），所以必须提前跳过。
+        if _open_jtalk_dict_available():
+            targets.append(("ウォームアップ。", "ja"))
+        else:
+            logger.warning(
+                "未找到 open_jtalk 词典，跳过日文预热（日文合成会不可用）。"
+                "解决办法：设置环境变量 OPEN_JTALK_DICT_DIR，"
+                "或把 open_jtalk_dic_utf_8-1.11 放进 pyopenjtalk 包目录。"
+            )
+        for text, lang in targets:
             try:
                 clean_text(text, lang, "v2ProPlus")
             except Exception as e:
-                # 缺日文依赖（pyopenjtalk）等情况不致命，只影响该语种
+                # 缺依赖（如 pyopenjtalk）不致命，只影响该语种
                 logger.debug("预热 %s 文本前端失败（可忽略）: %s", lang, e)
 
     # -- 加载 / 切换 -------------------------------------------------------
@@ -346,9 +636,18 @@ class TTSEngine:
                 if gsv not in sys.path:
                     sys.path.insert(0, gsv)
 
+                # 必须在 import TTS 之前处理：权重里的 pickle 需要 utils.HParams
+                _merge_conflicting_utils(Path(gsv))
+
                 # 顺手做一次环境约束：全部走本地模型，避免启动时偷偷联网
                 os.environ.setdefault("HF_HUB_OFFLINE", "1")
                 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+                # 上游有些模块从环境变量取权重目录（如 text/chinese2.py 的 bert_path），
+                # 默认值是**相对路径**。不覆盖的话，一旦 cwd 不在代码目录就会当成
+                # HuggingFace repo id 去联网。这里统一改成绝对路径。
+                _pretrained = self.models_dir / "GPT_SoVITS" / "pretrained_models"
+                os.environ["bert_path"] = str(_pretrained / "chinese-roberta-wwm-ext-large")
+                os.environ["cnhubert_base_path"] = str(_pretrained / "chinese-hubert-base")
 
                 try:
                     from TTS_infer_pack.TTS import TTS
@@ -357,9 +656,12 @@ class TTSEngine:
                         f"导入 TTS_infer_pack 失败（cwd={os.getcwd()}）: {type(e).__name__}: {e}"
                     ) from e
 
+                _patch_torchaudio_load()
+                _patch_hardcoded_paths(self.models_dir)
+
                 self._prewarm_text_frontends()
 
-                base = self.vendor_dir / "GPT_SoVITS" / "pretrained_models"
+                base = self.models_dir / "GPT_SoVITS" / "pretrained_models"
                 configs = {
                     "custom": {
                         "device": self.device,
@@ -464,7 +766,9 @@ class TTSEngine:
             raise TTSUnavailable("引擎尚未加载")
 
         inputs = self._build_inputs(text, **override)
-        with self._gpu_lock:
+        # 推理期间同样要待在代码目录：中文前端（G2PW）按相对路径找模型，
+        # 且这里已被 _gpu_lock 串行化，切 cwd 不会和其它 TTS 调用打架。
+        with self._gpu_lock, self._in_vendor():
             try:
                 for chunk_sr, chunk in self._tts.run(inputs):
                     yield int(chunk_sr), chunk
@@ -517,32 +821,37 @@ _ENGINE_LOCK = threading.Lock()
 def get_engine(
     config_path: str | os.PathLike[str] | None = None,
     voice_name: str | None = None,
+    vendor_dir: str | os.PathLike[str] | None = None,
+    models_dir: str | os.PathLike[str] | None = None,
     **kwargs: Any,
 ) -> TTSEngine:
     """获取全局单例。首次调用会加载模型（约 17 秒，建议放在启动阶段）。
 
     :param config_path: voices.json 路径，默认 ``<本目录>/voices.json``
     :param voice_name: 指定音色，默认用配置里的 ``default_voice``
+    :param vendor_dir / models_dir: 覆盖 voices.json 里的目录（来自 config.json）
     :param kwargs: 透传给 TTSEngine（device / is_half / warmup 等）
     """
     global _ENGINE
     with _ENGINE_LOCK:
         if _ENGINE is not None:
             if voice_name and voice_name != _ENGINE.voice.name:
-                _, voices, _ = load_voice_config(config_path or _default_config_path())
+                _, _, voices, _ = load_voice_config(
+                    config_path or _default_config_path(), vendor_dir, models_dir
+                )
                 if voice_name in voices:
                     _ENGINE.switch_voice(voices[voice_name])
             return _ENGINE
 
         path = Path(config_path) if config_path else _default_config_path()
-        vendor, voices, default_name = load_voice_config(path)
+        vendor, models, voices, default_name = load_voice_config(path, vendor_dir, models_dir)
         if not voices:
             raise TTSUnavailable(f"{path} 里没有配置任何音色")
         name = voice_name or default_name
         if name not in voices:
             raise TTSUnavailable(f"音色 {name!r} 不存在，可选: {sorted(voices)}")
 
-        _ENGINE = TTSEngine(vendor_dir=vendor, voice=voices[name], **kwargs)
+        _ENGINE = TTSEngine(vendor_dir=vendor, models_dir=models, voice=voices[name], **kwargs)
         return _ENGINE
 
 
@@ -576,8 +885,9 @@ def _selftest(args: argparse.Namespace) -> int:
         return 2
     print("运行时:", json.dumps(info, ensure_ascii=False, indent=2))
 
-    vendor, voices, default_name = load_voice_config(cfg)
+    vendor, models, voices, default_name = load_voice_config(cfg)
     print(f"vendor_dir = {vendor}")
+    print(f"models_dir = {models}")
     print(f"音色列表   = {sorted(voices)}  默认 = {default_name}")
 
     for name, v in voices.items():
